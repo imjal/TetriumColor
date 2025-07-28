@@ -4,10 +4,10 @@ from collections import defaultdict
 from itertools import chain
 from itertools import islice, combinations
 from itertools import product
-from typing import Tuple, List
-from typing import Union, Optional, Dict
+from typing import Tuple, List, Union, Optional, Dict
 
 import numpy as np
+import pandas as pd
 import numpy.typing as npt
 from scipy.spatial import ConvexHull
 from scipy.special import comb
@@ -602,14 +602,31 @@ class InkLibrary:
 
     def __init__(self, library: Dict[str, Spectra], paper: Spectra):
         self.names = list(library.keys())
-        spectras = list(library.values())
-        self.wavelengths = spectras[0].wavelengths
-        self.spectras = np.array([s.data for s in spectras])
+        self.spectra_objs = list(library.values())
+        self.wavelengths = self.spectra_objs[0].wavelengths
+        self.spectras = np.array([s.data for s in self.spectra_objs])
         self.K = len(self.names)
-        for s in spectras:
+        for s in self.spectra_objs:
             assert np.array_equal(s.wavelengths, self.wavelengths)
         assert np.array_equal(self.wavelengths, paper.wavelengths)
         self.paper = paper.data
+
+    def get_paper(self) -> Spectra:
+        """Get the paper spectra."""
+        return Spectra(data=self.paper, wavelengths=self.wavelengths, normalized=False)
+
+    @staticmethod
+    def load_ink_library(filepath: str):
+        """Load an ink library from a CSV file.
+
+        Args:
+            filepath (str): Path to the CSV file containing the ink library data.
+
+        Returns:
+            InkLibrary: An InkLibrary object containing the loaded inks and paper.
+        """
+        library, paper, _ = load_inkset(filepath)
+        return InkLibrary(library, paper)
 
     def distance_search(self, observe: Union[Observer, npt.NDArray],
                         illuminant: Union[Spectra, npt.NDArray], top=100, k=None, stepsize=0.1):
@@ -636,7 +653,16 @@ class InkLibrary:
         return sorted(top_scores, reverse=True)
 
     def convex_hull_search(self, observe: Union[Observer, npt.NDArray],
-                           illuminant: Union[Spectra, npt.NDArray], top=100, k=None):
+                           illuminant: Union[Spectra, npt.NDArray], top=100, k=None) -> List[Tuple[float, List[str]]]:
+        """Find the best k-ink subset of the ink library using a convex hull approach.
+        Args:
+            observe (Union[Observer, npt.NDArray]): The observer or sensor matrix.
+            illuminant (Union[Spectra, npt.NDArray]): The illuminant spectra
+            top (int): The number of top results to return.
+            k (Optional[int]): The number of inks to consider in the subset. If None, defaults to the number of observer channels.
+        Returns:
+            List[Tuple[float, List[str]]]: A list of tuples containing the volume and the names of the inks.
+        """
         # super efficient way to find best k-ink subset of large K ink library
         if isinstance(observe, Observer):
             observe = observe.get_sensor_matrix(self.wavelengths)
@@ -817,3 +843,41 @@ class FastNeugebauer:
         pca.fit(stimulus)
 
         return np.sqrt(pca.explained_variance_)[-1]
+
+
+def load_inkset(filepath) -> Tuple[Dict[str, Spectra], Spectra, npt.NDArray]:
+    """
+    Load an inkset from a CSV file. CSV file should have the following structure:
+    - First column: Index (e.g., 0, 1, 2, etc.)
+    - Second column: Ink names (e.g., "paper", "ink1", "ink2", etc.)
+    - Remaining columns: Reflectance data for each ink at the corresponding wavelengths. Must include numeric wavelengths
+
+    Parameters:
+    - filepath: str, path to the CSV file containing the inkset data.
+
+    Returns:
+    - inks: dict, a dictionary of ink names and their corresponding Spectra objects.
+    - paper: Spectra, the paper spectra.
+    - wavelengths: npt.NDArray, an array of wavelengths corresponding to the reflectance data.
+
+    Raises:
+    - ValueError: If the inkset does not contain a 'paper' ink.
+    """
+    df = pd.read_csv(filepath)
+    spectras = df.iloc[:, 2:].to_numpy()  # Extract reflectance data
+    # Extract wavelengths from column headers, keeping only numeric characters
+    wavelengths = df.columns[2:].str.replace(r'[^0-9.]', '', regex=True).astype(float).to_numpy()
+    # wavelengths = np.arange(400, 701, 10)  # Wavelengths from 400 to 700 nm in steps of 10 nm
+
+    # Create Spectra objects for each ink
+    inks = {}
+    for i in range(spectras.shape[0]):
+        name = df.iloc[i, 1]
+        inks[name] = Spectra(data=spectras[i], wavelengths=wavelengths)
+
+    if "paper" not in inks:
+        raise ValueError("The inkset must contain a 'paper' ink.")
+
+    paper = inks["paper"]
+    del inks["paper"]  # remove paper from inks dictionary
+    return inks, paper, wavelengths
