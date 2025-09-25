@@ -8,12 +8,18 @@ from typing import Tuple, List, Union, Optional, Dict
 
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
 import numpy.typing as npt
 from scipy.spatial import ConvexHull
 from scipy.special import comb
 from sklearn.decomposition import PCA, TruncatedSVD
 from tqdm import tqdm
+from colorsys import rgb_to_hsv
 
+import os
+import pickle
+import hashlib
+from importlib import resources
 from .Spectra import Spectra
 from .Observer import Observer
 from .MaxBasis import MaxBasis
@@ -601,6 +607,7 @@ class InkLibrary:
     """
 
     def __init__(self, library: Dict[str, Spectra], paper: Spectra):
+        self.library = library
         self.names = list(library.keys())
         self.spectra_objs = list(library.values())
         self.wavelengths = self.spectra_objs[0].wavelengths
@@ -616,16 +623,17 @@ class InkLibrary:
         return Spectra(data=self.paper, wavelengths=self.wavelengths, normalized=False)
 
     @staticmethod
-    def load_ink_library(filepath: str):
+    def load_ink_library(filepath: str, filter_clogged: bool = True):
         """Load an ink library from a CSV file.
 
         Args:
             filepath (str): Path to the CSV file containing the ink library data.
+            filter_clogged (bool): Whether to filter out clogged inks. Defaults to True.
 
         Returns:
             InkLibrary: An InkLibrary object containing the loaded inks and paper.
         """
-        library, paper, _ = load_inkset(filepath)
+        library, paper, _ = load_inkset(filepath, filter_clogged=filter_clogged)
         return InkLibrary(library, paper)
 
     def distance_search(self, observe: Union[Observer, npt.NDArray],
@@ -671,6 +679,14 @@ class InkLibrary:
         if k is None:
             k = observe.shape[0]
 
+        # Check cache first
+        cache_data = self._load_from_cache('convex_hull_search',
+                                           observe=observe.tolist() if isinstance(observe, np.ndarray) else str(observe),
+                                           illuminant=illuminant.tolist() if isinstance(illuminant, np.ndarray) else str(illuminant),
+                                           top=top, k=k)
+        if cache_data is not None:
+            return cache_data
+
         km_cache = {}
 
         total_iterations = sum(comb(self.K, i) for i in range(2, k + 1))
@@ -715,7 +731,13 @@ class InkLibrary:
                 if vol > top_scores[0][0]:
                     heapq.heapreplace(top_scores, (vol, names))
 
-        return sorted(top_scores, reverse=True)
+        # Save to cache
+        result = sorted(top_scores, reverse=True)
+        self._save_to_cache('convex_hull_search', result,
+                            observe=observe.tolist() if isinstance(observe, np.ndarray) else str(observe),
+                            illuminant=illuminant.tolist() if isinstance(illuminant, np.ndarray) else str(illuminant),
+                            top=top, k=k)
+        return result
 
     def cached_pca_search(self, observe: Union[Observer, npt.NDArray],
                           illuminant: Union[Spectra, npt.NDArray], top=50, k=None):
@@ -726,6 +748,14 @@ class InkLibrary:
             illuminant = illuminant.interpolate_values(self.wavelengths).data
         if k is None:
             k = observe.shape[0]
+
+        # Check cache first
+        cache_data = self._load_from_cache('cached_pca_search',
+                                           observe=observe.tolist() if isinstance(observe, np.ndarray) else str(observe),
+                                           illuminant=illuminant.tolist() if isinstance(illuminant, np.ndarray) else str(illuminant),
+                                           top=top, k=k)
+        if cache_data is not None:
+            return cache_data
 
         km_cache = {}
         # Populate cache
@@ -810,7 +840,73 @@ class InkLibrary:
 
                 return
 
-        return sorted(top_scores, reverse=True)
+        # Save to cache
+        result = sorted(top_scores, reverse=True)
+        self._save_to_cache('cached_pca_search', result,
+                            observe=observe.tolist() if isinstance(observe, np.ndarray) else str(observe),
+                            illuminant=illuminant.tolist() if isinstance(illuminant, np.ndarray) else str(illuminant),
+                            top=top, k=k)
+        return result
+
+    def _get_cache_filename(self, method_name: str, **kwargs) -> str:
+        """
+        Generate a unique filename for caching based on method parameters.
+
+        Args:
+            method_name (str): Name of the method being cached
+            **kwargs: Method parameters to include in hash
+
+        Returns:
+            str: Cache filename
+        """
+        # Create hash input from method name and parameters
+        hash_input = f"{method_name}|{str(self.K)}|{str(self.wavelengths.tolist())}|{str(sorted(self.names))}"
+
+        # Add method-specific parameters
+        for key, value in sorted(kwargs.items()):
+            if isinstance(value, np.ndarray):
+                hash_input += f"|{key}:{value.tolist()}"
+            else:
+                hash_input += f"|{key}:{str(value)}"
+
+        # Create MD5 hash
+        hash_obj = hashlib.md5(hash_input.encode())
+        hash_str = hash_obj.hexdigest()
+
+        return f"{method_name}_cache_{hash_str}.pkl"
+
+    def _save_to_cache(self, method_name: str, data: any, **kwargs) -> None:
+        """Save data to cache."""
+        cache_filename = self._get_cache_filename(method_name, **kwargs)
+
+        try:
+            with resources.path("TetriumColor.Assets.Cache", cache_filename) as path:
+                with open(path, "wb") as f:
+                    pickle.dump(data, f)
+                print(f"Saved {method_name} cache to {cache_filename}")
+        except Exception as e:
+            print(f"Failed to save {method_name} cache: {e}")
+
+    def _load_from_cache(self, method_name: str, **kwargs) -> any:
+        """
+        Load data from cache.
+
+        Returns:
+            any: Cached data if available, None otherwise
+        """
+        cache_filename = self._get_cache_filename(method_name, **kwargs)
+
+        try:
+            with resources.path("TetriumColor.Assets.Cache", cache_filename) as path:
+                if os.path.exists(path):
+                    with open(path, "rb") as f:
+                        cached_data = pickle.load(f)
+                    print(f"Loaded {method_name} from cache: {cache_filename}")
+                    return cached_data
+        except Exception as e:
+            print(f"Failed to load {method_name} from cache: {e}")
+
+        return None
 
 
 class FastNeugebauer:
@@ -845,15 +941,17 @@ class FastNeugebauer:
         return np.sqrt(pca.explained_variance_)[-1]
 
 
-def load_inkset(filepath) -> Tuple[Dict[str, Spectra], Spectra, npt.NDArray]:
+def load_inkset(filepath, filter_clogged: bool = True) -> Tuple[Dict[str, Spectra], Spectra, npt.NDArray]:
     """
     Load an inkset from a CSV file. CSV file should have the following structure:
     - First column: Index (e.g., 0, 1, 2, etc.)
     - Second column: Ink names (e.g., "paper", "ink1", "ink2", etc.)
     - Remaining columns: Reflectance data for each ink at the corresponding wavelengths. Must include numeric wavelengths
+    - Optional column (anywhere after the name column): 'clogged' indicating unusable inks (true/false or 1/0)
 
     Parameters:
     - filepath: str, path to the CSV file containing the inkset data.
+    - filter_clogged: bool, whether to filter out clogged inks. Defaults to True.
 
     Returns:
     - inks: dict, a dictionary of ink names and their corresponding Spectra objects.
@@ -864,20 +962,170 @@ def load_inkset(filepath) -> Tuple[Dict[str, Spectra], Spectra, npt.NDArray]:
     - ValueError: If the inkset does not contain a 'paper' ink.
     """
     df = pd.read_csv(filepath)
-    spectras = df.iloc[:, 2:].to_numpy()  # Extract reflectance data
-    # Extract wavelengths from column headers, keeping only numeric characters
-    wavelengths = df.columns[2:].str.replace(r'[^0-9.]', '', regex=True).astype(float).to_numpy()
-    # wavelengths = np.arange(400, 701, 10)  # Wavelengths from 400 to 700 nm in steps of 10 nm
 
-    # Create Spectra objects for each ink
-    inks = {}
-    for i in range(spectras.shape[0]):
+    # Identify optional 'clogged' column (case-insensitive match)
+    clogged_col = next((c for c in df.columns if str(c).strip().lower() == 'clogged'), None)
+
+    # Detect wavelength columns by extracting numeric parts of headers
+    wave_cols = []
+    wavelengths_list = []
+    for col in df.columns[2:]:
+        header = str(col)
+        cleaned = ''.join(ch for ch in header if (ch.isdigit() or ch == '.'))
+        if cleaned == '':
+            continue
+        try:
+            wl = float(cleaned)
+            wave_cols.append(col)
+            wavelengths_list.append(wl)
+        except ValueError:
+            # Non-wavelength auxiliary column (e.g., 'clogged')
+            continue
+
+    if len(wave_cols) == 0:
+        raise ValueError("No wavelength columns detected in inkset CSV.")
+
+    # Ensure wavelength columns are sorted by numeric wavelength
+    order = np.argsort(np.array(wavelengths_list))
+    wave_cols = [wave_cols[i] for i in order]
+    wavelengths = np.array([wavelengths_list[i] for i in order], dtype=float)
+
+    inks: Dict[str, Spectra] = {}
+    paper: Optional[Spectra] = None
+
+    def parse_bool(val) -> bool:
+        if isinstance(val, (int, float)):
+            return bool(int(val))
+        s = str(val).strip().lower()
+        return s in ("1", "true", "t", "yes", "y")
+
+    for i in range(len(df)):
         name = df.iloc[i, 1]
-        inks[name] = Spectra(data=spectras[i], wavelengths=wavelengths)
+        # Read spectral data for this row in the sorted wavelength order
+        data = df.loc[i, wave_cols].to_numpy(dtype=float)
 
-    if "paper" not in inks:
+        # Determine clogged status if column present
+        is_clogged = False
+        if clogged_col is not None and clogged_col in df.columns:
+            is_clogged = parse_bool(df.loc[i, clogged_col])
+
+        spectra_obj = Spectra(data=data, wavelengths=wavelengths)
+
+        if isinstance(name, str) and name.strip().lower() == 'paper':
+            paper = spectra_obj
+            continue
+
+        # Discard clogged inks at load time (if filter_clogged is True)
+        if filter_clogged and is_clogged:
+            continue
+
+        inks[name] = spectra_obj
+
+    if paper is None:
         raise ValueError("The inkset must contain a 'paper' ink.")
 
-    paper = inks["paper"]
-    del inks["paper"]  # remove paper from inks dictionary
     return inks, paper, wavelengths
+
+
+def save_top_inks_as_csv(top_volumes, filename):
+    import csv
+    import json
+
+    # Save top_volumes to a CSV file, serializing the inks list as a JSON string
+    with open(filename, "w", newline="") as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(["Volume", "Inks"])  # Header
+        for volume, inks in top_volumes:
+            writer.writerow([volume, json.dumps(inks)])
+
+
+def load_top_inks(filename):
+    import csv
+    import json
+
+    top_volumes = []
+    with open(filename, "r") as csvfile:
+        reader = csv.reader(csvfile)
+        next(reader)  # Skip header
+        for row in reader:
+            volume = float(row[0])
+            inks = json.loads(row[1])
+            top_volumes.append((volume, inks))
+    return top_volumes
+
+
+def plot_inks_by_hue(ink_dataset: Dict[str, Spectra], wavelengths: npt.NDArray, filename: Optional[str] = None):
+    """
+    Plots the inks in the dataset sorted by hue.
+
+    Parameters:
+    - ink_dataset: dict, a dictionary of ink names and their corresponding Spectra objects.
+    - wavelengths: numpy.ndarray, array of wavelengths corresponding to the spectra data.
+    - filename: optional filename to save the plot to
+    """
+    # Convert RGB to HSV and sort by hue
+    def get_hue(spectra):
+        r, g, b = spectra.to_rgb()
+        h, _, _ = rgb_to_hsv(r, g, b)
+        return h
+
+    # Sort inks by hue
+    sorted_inks = sorted(ink_dataset.items(), key=lambda item: get_hue(item[1]))
+
+    # Plot sorted inks row by row by hue
+    num_inks = len(sorted_inks)
+    cols = math.ceil(math.sqrt(num_inks))
+    rows = math.ceil(num_inks / cols)
+
+    plt.figure(figsize=(15, 15))
+
+    for idx, (name, spectra) in enumerate(sorted_inks):
+        plt.subplot(rows, cols, idx + 1)
+        plt.plot(wavelengths, spectra.data, c=spectra.to_rgb())
+        plt.title(name[:10], fontsize=8)  # Show only the first 10 characters of the name
+        plt.xlabel("Wavelength (nm)", fontsize=6)
+        plt.ylabel("Reflectance", fontsize=6)
+        plt.grid(True)
+        plt.xlim(wavelengths[0], wavelengths[-1])
+        plt.ylim(0, 1)
+        plt.tick_params(axis='both', which='major', labelsize=6)
+
+    plt.tight_layout()
+    if filename is not None:
+        plt.savefig(filename)
+    else:
+        plt.show()
+
+
+def show_top_k_combinations(top_volumes: List[Tuple[float, List[str]]], inkset: Dict[str, Spectra], k=10, filename: Optional[str] = None):
+    """
+    Displays the top k ink combinations with their volumes.
+
+    Parameters:
+    - top_volumes: list of tuples (volume, [ink names])
+    - k: number of top combinations to display
+    - filename: optional filename to save the plot to
+    """
+    # Plot the spectra of the top inks for the first k entries
+    plt.figure(figsize=(4 * 3, math.ceil(k / 4) * 3))
+
+    for idx, (volume, ink_names) in enumerate(top_volumes[:k]):
+        plt.subplot(math.ceil(k / 4), 4, idx + 1)  # Create a subplot for each entry
+        for ink_name in ink_names:  # Plot the spectra of the first 4 inks
+            spectra = inkset[ink_name]
+            # Show only the first 10 characters of the name
+            plt.plot(spectra.wavelengths, spectra.data, label=ink_name[:10], c=spectra.to_rgb())
+        plt.title(f"Volume: {volume:.2e}", fontsize=10)
+        plt.xlabel("Wavelength (nm)", fontsize=8)
+        plt.ylabel("Reflectance", fontsize=8)
+        plt.grid(True)
+        plt.xlim(spectra.wavelengths[0], spectra.wavelengths[-1])
+        plt.ylim(0, 1)
+        plt.legend(fontsize=6)
+        plt.tick_params(axis='both', which='major', labelsize=6)
+
+    plt.tight_layout()
+    if filename is not None:
+        plt.savefig(filename)
+    else:
+        plt.show()

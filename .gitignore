@@ -11,6 +11,7 @@ measurements/
 data/
 *.pkl
 scripts/paper-viz/theory-grid/display-grid/*.csv
+scripts/inkset/results_*
 
 # Mac
 *.DS_Store
