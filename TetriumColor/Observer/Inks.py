@@ -1027,6 +1027,13 @@ def load_inkset(filepath, filter_clogged: bool = True) -> Tuple[Dict[str, Spectr
     return inks, paper, wavelengths
 
 
+def load_all_ink_libraries(ink_libraries: Dict[str, str], filter_clogged: bool = True) -> Tuple[Dict[str, Spectra], Spectra, npt.NDArray]:
+    inksets = {}
+    for name, path in ink_libraries.items():
+        inksets[name] = InkLibrary.load_ink_library(path, filter_clogged=filter_clogged)
+    return inksets
+
+
 def save_top_inks_as_csv(top_volumes, filename):
     import csv
     import json

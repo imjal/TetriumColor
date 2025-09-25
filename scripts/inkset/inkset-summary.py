@@ -10,7 +10,7 @@ import tetrapolyscope as ps
 
 import TetriumColor.Visualization as viz
 from TetriumColor import ColorSpace, ColorSpaceType, PolyscopeDisplayType
-from TetriumColor.Observer import Observer, Spectra, InkGamut, Illuminant, InkLibrary, load_top_inks, show_top_k_combinations, InkLibrary, plot_inks_by_hue, save_top_inks_as_csv
+from TetriumColor.Observer import Observer, Spectra, InkGamut, Illuminant, InkLibrary, load_top_inks, show_top_k_combinations, InkLibrary, plot_inks_by_hue, save_top_inks_as_csv, load_all_ink_libraries
 
 
 # %load_ext autoreload
@@ -32,13 +32,6 @@ def save_ps_screenshot(results_dir):
     # display(HTML(f'<img src="screenshot_{screenshot_count}.png" style="width:50%;">'))
 
     screenshot_count += 1
-
-
-def load_all_ink_libraries(ink_libraries: Dict[str, str], filter_clogged: bool = True) -> Tuple[Dict[str, Spectra], Spectra, npt.NDArray]:
-    inksets = {}
-    for name, path in ink_libraries.items():
-        inksets[name] = InkLibrary.load_ink_library(path, filter_clogged=filter_clogged)
-    return inksets
 
 
 def get_top_n_inks(top_volumes, n=20):
@@ -65,6 +58,7 @@ if __name__ == "__main__":
     AddVideoOutputArgs(parser)
     AddAnimationArgs(parser)
     parser.add_argument('--k', type=int, default=4, help='Number of inks to show')
+    parser.add_argument('--top_d_inks', type=int, default=20, help='Number of inks to show')
     args = parser.parse_args()
 
     d65 = Illuminant.get("d65")
@@ -73,13 +67,14 @@ if __name__ == "__main__":
 
     inkset_dict = {
         # "Ansari": "../../data/inksets/ansari/ansari-inks.csv",
-        "FP": "../../data/inksets/fp_inks/all_inks.csv",
+        # "FP": "../../data/inksets/fp_inks/all_inks.csv",
+        "FP_Ansari": "../../data/inksets/combined/combined_inks_filtered.csv",
     }  # "../../data/inksets/fp_inks/all_inks.csv",
     inksets = load_all_ink_libraries(inkset_dict)
 
     for inkset_name, inkset_library in inksets.items():
         # Create results directory for this inkset
-        results_dir = f"results_{inkset_name}_k{args.k}"
+        results_dir = f"results/{inkset_name}_k{args.k}"
         os.makedirs(results_dir, exist_ok=True)
         print(f"Created results directory: {results_dir}")
 
@@ -100,20 +95,20 @@ if __name__ == "__main__":
 
         best4_inks = [inkset_library.library[ink_name] for ink_name in top_volumes_all_inks[0][1]]
 
-        top20_inks = get_top_n_inks(top_volumes_all_inks, n=20)
+        top_d_inks = get_top_n_inks(top_volumes_all_inks, n=args.top_d_inks)
 
         # Plot all top 20 inks by hue
         plot_inks_by_hue(
-            {ink_name: inkset_library.library[ink_name] for ink_name in top20_inks},
+            {ink_name: inkset_library.library[ink_name] for ink_name in top_d_inks},
             np.arange(400, 710, 10),
-            filename=os.path.join(results_dir, f"top20_ink_spectras_{inkset_name}.png")
+            filename=os.path.join(results_dir, f"top_{args.top_d_inks}_ink_spectras_{inkset_name}.png")
         )
 
         # Save top 20 inks list as text file
-        with open(os.path.join(results_dir, f"top20_inks_{inkset_name}.txt"), 'w') as f:
-            f.write(f"Top 20 inks for {inkset_name} inkset:\n")
+        with open(os.path.join(results_dir, f"top_{args.top_d_inks}_inks_{inkset_name}.txt"), 'w') as f:
+            f.write(f"Top {args.top_d_inks} inks for {inkset_name} inkset:\n")
             f.write("=" * 50 + "\n")
-            for i, ink_name in enumerate(top20_inks, 1):
+            for i, ink_name in enumerate(top_d_inks, 1):
                 f.write(f"{i:2d}. {ink_name}\n")
 
         gamut = InkGamut(best4_inks, inkset_library.get_paper(), d65)
@@ -176,7 +171,7 @@ if __name__ == "__main__":
                                      args.position, args.velocity, args.rotation_axis, args.rotation_speed)
 
         # Save polyscope screenshot to results directory
-        save_ps_screenshot(results_dir)
+        # save_ps_screenshot(results_dir)
 
         # Save video if requested
         if hasattr(args, 'total_frames') and args.total_frames > 0:
@@ -184,6 +179,6 @@ if __name__ == "__main__":
             viz.RenderVideo(fd, args.total_frames, args.fps)
             viz.CloseVideo(fd)
 
-        viz.ps.show()
+        # viz.ps.show()
 
         print(f"Analysis complete for {inkset_name}. Results saved in {results_dir}/")
