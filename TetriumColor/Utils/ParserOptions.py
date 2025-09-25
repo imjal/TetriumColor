@@ -33,3 +33,4 @@ def AddAnimationArgs(parser):
     parser.add_argument("--velocity", nargs='+', type=float, default=[0, 0, 0], help="Velocity of the object")
     parser.add_argument("--rotation_speed", type=float, default=60, help="Rotation speed of the object")
     parser.add_argument("--rotation_axis", nargs='+', type=float, default=[0, 0, 1], help="Rotation axis of the object")
+    parser.add_argument('--which_dir', type=str, default='q', choices=['q', 'saq', 'none'])
