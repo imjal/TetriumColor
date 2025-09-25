@@ -409,3 +409,17 @@ def inspect_hyperspectral_image(filename: str, output_wavelengths: Optional[npt.
         pass
 
     return collected
+
+
+def inspect_raw_data(filename: str):
+    """Inspect raw data from a Specim IQ file."""
+    cube = sp.open_image(filename)
+    wavelengths = _get_wavelengths(cube)
+    # Build RGB composite from chosen bands (approx 650/550/450 nm)
+    if wavelengths is not None and wavelengths.size == cube.shape[-1]:
+        r_idx, g_idx, b_idx = _closest_band_indices(wavelengths, [650.0, 550.0, 450.0])
+    else:
+        bands = cube.shape[-1]
+        r_idx, g_idx, b_idx = bands - 1, bands // 2, 0
+    sp.imshow(cube, bands=[r_idx, g_idx, b_idx])
+    plt.show(block=True)
