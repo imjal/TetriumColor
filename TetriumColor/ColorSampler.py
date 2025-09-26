@@ -12,7 +12,7 @@ from TetriumColor.ColorSpace import ColorSpace, ColorSpaceType
 from TetriumColor.PsychoPhys.IshiharaPlate import generate_ishihara_plate
 from TetriumColor.Utils.CustomTypes import TetraColor, PlateColor
 import TetriumColor.ColorMath.Geometry as Geometry
-from TetriumColor.ColorMath.SubSpaceIntersection import FindMaximalSaturation, FindMaximumIn1DimDirection, excitations_to_contrast, receptor_isolate_spectral
+from TetriumColor.ColorMath.SubSpaceIntersection import FindMaximalSaturation, FindMaximumIn1DimDirection, FindMaximumWidthAlongDirection, excitations_to_contrast, receptor_isolate_spectral
 from TetriumColor.ColorMath import GamutMath
 
 
@@ -643,7 +643,7 @@ class ColorSampler:
 
         return colors
 
-    def get_metameric_pairs(self, luminance: float, saturation: float, cube_idx: int, secrets: Optional[List[int]] = None) -> Tuple[npt.NDArray, npt.NDArray]:
+    def get_metameric_pairs(self, luminance: float, saturation: float, cube_idx: int) -> Tuple[npt.NDArray, npt.NDArray]:
         """ Get the metamer points for a given luminance and cube index
         Args:
             luminance (float): luminance value
@@ -657,8 +657,6 @@ class ColorSampler:
         """
         disp_points = self.output_cubemap_values(luminance, saturation, ColorSpaceType.DISP)[cube_idx]
         metamer_dir_in_disp = self.color_space.get_metameric_axis_in(ColorSpaceType.DISP)
-        if secrets is None:
-            secrets = np.random.randint(10, 100, size=len(disp_points)).tolist()
 
         vec = np.zeros(self.color_space.dim)
         vec[0] = luminance
@@ -669,6 +667,18 @@ class ColorSampler:
             metamers_in_disp[i] = np.array(FindMaximumIn1DimDirection(
                 disp_points[i], metamer_dir_in_disp, np.eye(self.color_space.dim)))
 
+        cones = self.color_space.convert(metamers_in_disp.reshape(-1, self.color_space.dim),
+                                         ColorSpaceType.DISP, ColorSpaceType.CONE)
+        return metamers_in_disp, cones.reshape(-1, 2, self.color_space.dim)
+
+    def get_maximal_metameric_pairs(self) -> Tuple[npt.NDArray, npt.NDArray]:
+        """Get Maximal Metameric Color Pairs
+
+        Returns:
+            Tuple[npt.NDArray, npt.NDArray]: metamers_in_disp, cones
+        """
+        metamer_dir_in_disp = self.color_space.get_metameric_axis_in(ColorSpaceType.DISP)
+        metamers_in_disp = np.array(FindMaximumWidthAlongDirection(metamer_dir_in_disp, np.eye(self.color_space.dim)))
         cones = self.color_space.convert(metamers_in_disp.reshape(-1, self.color_space.dim),
                                          ColorSpaceType.DISP, ColorSpaceType.CONE)
         return metamers_in_disp, cones.reshape(-1, 2, self.color_space.dim)

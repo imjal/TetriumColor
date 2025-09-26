@@ -4,7 +4,7 @@ from typing import Tuple, Optional
 import numpy as np
 import matplotlib.pyplot as plt
 
-from scipy.optimize import linprog, minimize
+from scipy.optimize import linprog, minimize, differential_evolution
 from scipy.spatial import ConvexHull
 from scipy.optimize import minimize
 
@@ -398,3 +398,61 @@ def receptor_isolate_spectral(
             raise ValueError("lowerPrimary out of gamut")
 
     return modulating_primary, upper_primary, lower_primary
+
+
+def FindMaximumWidthAlongDirection(metameric_direction: npt.NDArray, generating_vecs: npt.NDArray) -> Tuple[npt.NDArray, npt.NDArray]:
+    """
+    Find the pair of points in the gamut that have the maximum distance along a given metameric direction.
+
+    Parameters:
+    - metameric_direction: (d,) array representing the direction to find maximum width along
+    - generating_vecs: (n, d) array where each row is a generating vector of the zonotope/parallelepiped
+
+    Returns:
+    - point1: (d,) array, first point of maximum width along the direction
+    - point2: (d,) array, second point of maximum width along the direction
+    """
+    M = generating_vecs.shape[0]  # Number of vectors defining the parallelepiped
+    N = generating_vecs.shape[1]  # Dimension of parallelepiped
+
+    p0 = np.zeros(N)
+    if M > N:
+        A, b = ZonotopeToInequalities(generating_vecs)
+    else:
+        A, b = ParallelepipedToInequalities(p0, generating_vecs)
+
+    # Objective function: maximize distance along the metameric direction
+    def objective(center):
+        V = metameric_direction[np.newaxis, :].T
+        k = 0
+        # positive direction optimization
+        max_t1, optimal_t = MaximizeDimensionOnSubspace(A, b, center, V, k)
+        x_max = center + np.dot(V, optimal_t)
+
+        # negative direction optimization
+        max_t1, optimal_t = MaximizeDimensionOnSubspace(A, b, center, -1 * V, k)
+        x_min = center + np.dot(-1 * V, optimal_t)
+
+        return -np.linalg.norm(x_max - x_min)
+
+    # Use differential evolution to find the optimal center point
+    result = differential_evolution(objective, bounds=[(0, 1)] * N)
+
+    if not result.success:
+        raise RuntimeError("Optimization failed: " + result.message)
+
+    center = result.x
+    V = metameric_direction[np.newaxis, :].T
+    k = 0
+    # positive direction optimization
+    max_t1, optimal_t = MaximizeDimensionOnSubspace(A, b, center, V, k)
+    point1 = center + np.dot(V, optimal_t)
+
+    # negative direction optimization
+    max_t1, optimal_t = MaximizeDimensionOnSubspace(A, b, center, -1 * V, k)
+    point2 = center + np.dot(-1 * V, optimal_t)
+
+    max_dist = np.linalg.norm(point1 - point2)
+    print(f"Maximal Metameric Color Pair: {point1}, {point2}, Maximal Distance: {max_dist}")
+
+    return point1, point2

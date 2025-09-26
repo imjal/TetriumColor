@@ -4,7 +4,6 @@ from typing import List, Callable
 import numpy as np
 import numpy.typing as npt
 
-from TetriumColor.PsychoPhys.Quest import Quest
 from TetriumColor.Utils.CustomTypes import *
 from TetriumColor.ColorSpace import ColorSpace, ColorSpaceType
 
@@ -16,10 +15,6 @@ class NoiseGenerator(ABC):
 
 
 class ColorGenerator(ABC):
-    @staticmethod
-    def __generateQuestObject(t_guess, t_guess_sd) -> Quest:
-        # TODO: For now don't mess with quest, just sample at an interval to get idea of parameters
-        return Quest(t_guess, t_guess_sd, 0.8, beta=3.5, delta=0.01, gamma=0.05, grain=0.01, range=None)
 
     @abstractmethod
     def NewColor(self) -> PlateColor:

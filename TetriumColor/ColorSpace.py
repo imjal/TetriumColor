@@ -74,6 +74,14 @@ class ColorSpaceType(Enum):
     def __str__(self):
         return self.value
 
+    def num_channels(self) -> int:
+        if self == ColorSpaceType.DISP_6P:
+            return 6
+        elif self == ColorSpaceType.SRGB or self == ColorSpaceType.XYZ or self == ColorSpaceType.OKLAB or self == ColorSpaceType.OKLABM1 or self == ColorSpaceType.CIELAB:
+            return 3
+        else:
+            return 1
+
 
 class PolyscopeDisplayType(Enum):
     """To display in polyscope, we only allow a subset of the ColorSpaceType Enum to be displayed.
