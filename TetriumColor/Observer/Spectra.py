@@ -200,10 +200,10 @@ class Spectra:
             # name = self.__class__.__name__
         factor = np.max(self.data) if normalize else 1
         if not ax:
-            plt.scatter(self.wavelengths, self.data/factor, label=name, color=color, s=10)
+            plt.scatter(self.wavelengths, self.data/factor, color=color, s=10)
             plt.plot(self.wavelengths, self.data/factor, label=name, color=color, alpha=alpha)
         else:
-            ax.scatter(self.wavelengths, self.data/factor, label=name, color=color, s=10)
+            ax.scatter(self.wavelengths, self.data/factor, color=color, s=10)
             ax.plot(self.wavelengths, self.data/factor, label=name, color=color, alpha=alpha)
 
     def interpolate_values(self, wavelengths: Union[npt.NDArray, None]):

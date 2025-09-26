@@ -4,47 +4,69 @@ from typing import List
 from TetriumColor.Utils.CustomTypes import ColorTestResult
 from TetriumColor.Observer import *
 from TetriumColor import ColorSpace, ColorSpaceType, ColorSampler, TetraColor, PlateColor
-from TetriumColor.PsychoPhys.IshiharaPlate import generate_ishihara_plate
+from TetriumColor.PsychoPhys.IshiharaPlate import IshiharaPlateGenerator
+from TetriumColor.TetraColorPicker import ColorGenerator
 
 # Control Test
 
 
 class PseudoIsochromaticPlateGenerator:
 
-    def __init__(self, color_generator: ColorGenerator, num_tests: int, seed: int = 42):
+    def __init__(self, color_generator: ColorGenerator, color_space: ColorSpace, seed: int = 42):
         """
-        Initializes the PseudoIsochromaticPlateGenerator with the given number of tests and seed
+        Initializes the PseudoIsochromaticPlateGenerator with the given color generator, color space and seed
 
         Args:
-            numTests (int): The number of tests to generate in total (setting the color generator arguments)
+            color_generator (ColorGenerator): The color generator to use for plate colors
+            color_space (ColorSpace): The color space for color conversions
             seed (int): The seed for the plate pattern generation.
         """
         self.seed: int = seed
         self.color_generator: ColorGenerator = color_generator
-        self.current_plate: IshiharaPlateGenerator = IshiharaPlateGenerator(seed=self.seed)
+        self.color_space: ColorSpace = color_space
+        self.current_plate: IshiharaPlateGenerator = IshiharaPlateGenerator(color_space, seed=self.seed)
 
     # must be called before GetPlate
-    def NewPlate(self, filename_RGB: str, filename_OCV: str, hidden_number: int):
+    def NewPlate(self, inside_cone: npt.NDArray, outside_cone: npt.NDArray, 
+                filenames: List[str], hidden_number: int, 
+                output_space: ColorSpaceType, lum_noise: float = 0, s_cone_noise: float = 0):
         """
-        Generates a new plate with the given hidden number, and colored by the ScreenTestColorGenerator
+        Generates a new plate with the given hidden number and cone space colors
 
         Args:
+            inside_cone (npt.NDArray): Inside color in cone space
+            outside_cone (npt.NDArray): Outside color in cone space
+            filenames (List[str]): List of filenames to save the output images
             hidden_number (int): The hidden number to save to the plate
+            output_space (ColorSpaceType): Target color space for output
+            lum_noise (float): Luminance noise amount
+            s_cone_noise (float): S-cone noise amount
         """
-        plate_color = self.color_generator.NewColor()
-        self.current_plate.GeneratePlate(self.seed, hidden_number, plate_color)
-        self.current_plate.ExportPlate(filename_RGB, filename_OCV)
+        images = self.current_plate.GeneratePlate(
+            inside_cone, outside_cone, hidden_number, output_space,
+            lum_noise=lum_noise, s_cone_noise=s_cone_noise
+        )
+        self.current_plate.ExportPlate(images, filenames)
 
-    def GetPlate(self, previous_result: ColorTestResult, filename_RGB: str, filename_OCV: str, hidden_number: int):
+    def GetPlate(self, previous_result: ColorTestResult, inside_cone: npt.NDArray, outside_cone: npt.NDArray,
+                filenames: List[str], hidden_number: int, 
+                output_space: ColorSpaceType, lum_noise: float = 0, s_cone_noise: float = 0):
         """
-        Generates a new plate and saves it to a file with the given hidden number, and colored by the ScreenTestColorGenerator
+        Generates a new plate and saves it to files with the given hidden number and cone space colors
 
         Args:
-            previousResult (ColorTestResult): The result of the previous test (did they get it right or not)
-            filenameRGB (str): The filename to save the plate in RGB LEDs
-            filenameOCV (str): The filename to save the plate in OCV LEDs
-            hiddenNumber (int): The hidden number to save to the plate
+            previous_result (ColorTestResult): The result of the previous test (did they get it right or not)
+            inside_cone (npt.NDArray): Inside color in cone space
+            outside_cone (npt.NDArray): Outside color in cone space
+            filenames (List[str]): List of filenames to save the output images
+            hidden_number (int): The hidden number to save to the plate
+            output_space (ColorSpaceType): Target color space for output
+            lum_noise (float): Luminance noise amount
+            s_cone_noise (float): S-cone noise amount
         """
-        plate_color = self.color_generator.GetColor(previous_result)
-        self.current_plate.GeneratePlate(self.seed, hidden_number, plate_color)
-        self.current_plate.ExportPlate(filename_RGB, filename_OCV)
+        # Note: We're not using previous_result yet, but it could be used for adaptive algorithms
+        images = self.current_plate.GeneratePlate(
+            inside_cone, outside_cone, hidden_number, output_space,
+            lum_noise=lum_noise, s_cone_noise=s_cone_noise
+        )
+        self.current_plate.ExportPlate(images, filenames)

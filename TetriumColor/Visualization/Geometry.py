@@ -31,6 +31,49 @@ def GetCylinderTransform(endpoints: List | tuple | npt.NDArray) -> glm.mat4:
     return mat
 
 
+def RotateToZAxis(vector: npt.NDArray) -> npt.NDArray:
+    """
+    Returns a rotation matrix that rotates the given vector to align with the Z-axis.
+
+    Parameters:
+        vector (array-like): The input vector to align with the Z-axis.
+
+    Returns:
+        numpy.ndarray: A 3x3 rotation matrix.
+    """
+    # Normalize the input vector
+    v = np.array(vector, dtype=float)
+    v = v / np.linalg.norm(v)
+
+    # Z-axis unit vector
+    z_axis = np.array([0, 0, 1], dtype=float)
+
+    # Compute the axis of rotation (cross product)
+    axis = np.cross(v, z_axis)
+    axis_norm = np.linalg.norm(axis)
+
+    if axis_norm == 0:
+        # The vector is already aligned with the Z-axis
+        return np.eye(3)
+
+    axis = axis / axis_norm  # Normalize the axis
+
+    # Compute the angle of rotation (dot product)
+    angle = np.arccos(np.dot(v, z_axis))
+
+    # Compute the skew-symmetric cross-product matrix for the axis
+    K = np.array([
+        [0, -axis[2], axis[1]],
+        [axis[2], 0, -axis[0]],
+        [-axis[1], axis[0], 0]
+    ])
+
+    # Use the Rodrigues' rotation formula
+    R = np.eye(3) + np.sin(angle) * K + (1 - np.cos(angle)) * np.dot(K, K)
+
+    return R
+
+
 class GeometryPrimitives:
 
     def __init__(self) -> None:
