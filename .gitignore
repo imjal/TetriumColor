@@ -9,6 +9,7 @@ measurements/
 *.mp4
 *.ini
 data/
+scripts/tests/*
 
 scripts/paper-viz/theory-grid/display-grid/*.csv
 scripts/inkset/results_*

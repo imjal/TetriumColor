@@ -282,7 +282,8 @@ def generate_ishihara_plate(
     gradient: bool = False,
     corner_label: Optional[str] = None,
     corner_color: npt.ArrayLike = np.array([255/2, 255/2, 255/2, 255/2, 0, 0]).astype(int),
-    background_color: npt.NDArray = np.array([0, 0, 0])
+    background_color: npt.NDArray = np.array([0, 0, 0]),
+    blur_radius: float = 1.0
 ) -> List[Image.Image]:
     """
     Generate an Ishihara Plate with specified properties.
@@ -377,6 +378,13 @@ def generate_ishihara_plate(
             corner_color_array = (corner_color_array * 255).astype(int)
         for i in range(len(channels)):
             channel_draws[i].text((10, 10), corner_label, fill=tuple(corner_color_array[:3]), font=font)
+
+    # INSERT_YOUR_CODE
+    # Blur the image(s) in channels using PIL's GaussianBlur filter
+    from PIL import ImageFilter
+    if blur_radius > 0:
+        for i in range(len(channels)):
+            channels[i] = channels[i].filter(ImageFilter.GaussianBlur(radius=blur_radius))
 
     return channels
 
