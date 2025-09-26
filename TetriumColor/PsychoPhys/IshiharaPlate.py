@@ -255,13 +255,14 @@ def _draw_plate(
         circle_color = np.clip(circle_color + noise_vector, 0, None)
         circle_color = color_space.convert(np.array([circle_color]), ColorSpaceType.CONE, output_space)[0]
 
-        if output_space == ColorSpaceType.SRGB:
-            circle_color = np.append(circle_color, circle_color)  # double it lol
         # Draw the ellipse
         bounding_box = [x-r, y-r, x+r, y+r]
         ellipse_color = (circle_color * 255).astype(int)
-        for i in range(len(channel_draws)):
-            channel_draws[i].ellipse(bounding_box, fill=tuple(ellipse_color[:3]), width=0)
+        if len(ellipse_color) > 4:
+            for i in range(len(channel_draws)):
+                channel_draws[i].ellipse(bounding_box, fill=tuple(ellipse_color[3*i:3*i + 3]), width=0)
+        else:  # should match the rgb/cmyk length
+            channel_draws[0].ellipse(bounding_box, fill=tuple(ellipse_color), width=0)
 
 
 def generate_ishihara_plate(
