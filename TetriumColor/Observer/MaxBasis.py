@@ -181,6 +181,13 @@ class MaxBasis:
         return self.maximal_sensors, self.maximal_observer
 
     def __findMaxCutpoints(self, rng=None):
+        if self.dimension == 1:
+            # No cutpoints in 1D; choose either end of the visible wavelength range
+            # Compute volume with no cutpoints (transitions will be one endpoint)
+            vol = self.__computeVolume([])
+            self.listvol = []
+            self.cutpoints = [vol]
+            return self.cutpoints
         if self.dimension == 2:
             X = np.arange(self.observer.wavelengths[0] + self.step_size,
                           self.observer.wavelengths[-1] - self.step_size, self.step_size)
@@ -317,6 +324,10 @@ class MaxBasis:
         return self.maximal_sensors
 
     def GetCutpointTransitions(self, wavelengths):
+        if len(wavelengths) == 0:
+            # For 1D, no cutpoints; choose either end of the visible wavelength.
+            # Selecting the start of the observer's wavelength range.
+            return [[self.observer.wavelengths[0]]]
         transitions = [[wavelengths[0]], [wavelengths[len(wavelengths)-1]]]
         transitions += [[wavelengths[i], wavelengths[i+1]] for i in range(len(wavelengths)-1)]
         transitions.sort()

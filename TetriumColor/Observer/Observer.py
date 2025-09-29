@@ -19,6 +19,8 @@ def GetHeringMatrix(dim) -> npt.NDArray:
     """
     Get Hering Matrix for a given dimension
     """
+    if dim == 1:
+        return np.array([[1]])
     if dim == 2:
         return np.array([[1/np.sqrt(2), 1/np.sqrt(2)], [1/np.sqrt(2), -(1/np.sqrt(2))]])
     elif dim == 3:
@@ -528,6 +530,33 @@ class Observer:
             reflectances = bird_data.iloc[:, [0, i]].to_numpy()
             all_cones += [Cone(reflectances).interpolate_values(wavelengths)]
         return Observer(all_cones, illuminant=illuminant, verbose=verbose)
+
+    def from_peaks(peaks: List[float],
+                   wavelengths: Optional[npt.NDArray] = None,
+                   illuminant: Optional[Spectra] = None,
+                   template: str = "neitz",
+                   od: float = 0.5,
+                   macular: float = 1,
+                   lens: float = 1,
+                   verbose: bool = False):
+        """Create an observer from a list of peaks
+
+        Args:
+            peaks (List[float]): List of peaks
+            wavelengths (Optional[npt.NDArray], optional): Array of wavelengths. Defaults to None.
+
+        Returns:
+            Observer: Observer object
+        """
+        if wavelengths is None:
+            wavelengths = np.arange(390, 831, 1)
+
+        cones = []
+        for peak in sorted(peaks):
+            cone = Cone.cone(peak, wavelengths=wavelengths, template=template,
+                             od=od if peak > 450 else od * 0.8, macular=macular, lens=lens)
+            cones.append(cone)
+        return Observer(cones, illuminant=illuminant, verbose=verbose)
 
     @staticmethod
     def custom_observer(wavelengths: npt.NDArray,
