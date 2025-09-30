@@ -90,21 +90,14 @@ class ObserverGenotypes:
         (False, False, False): 559
     }
 
-    # Dimension filtering constants for color space generation
-    MIN_OBSERVER_DIMENSION = 3
-    MAX_OBSERVER_DIMENSION = 3
-
-    @staticmethod
-    def _is_valid_dimension(num_peaks: int) -> bool:
-        """Check if the number of peaks results in a valid observer dimension (2-3 / trichromat / tetrachromat)."""
-        return ObserverGenotypes.MIN_OBSERVER_DIMENSION <= num_peaks <= ObserverGenotypes.MAX_OBSERVER_DIMENSION
-
-    def __init__(self, wavelengths: Optional[np.ndarray] = None):
+    def __init__(self, wavelengths: Optional[np.ndarray] = None, dimensions: Optional[List[int]] = None):
         """
         Initialize ObserverGenotypes with a list of peak wavelengths.
 
         Args:
             wavelengths: Optional wavelength array, defaults to 360-830nm in 1nm steps
+            dimensions: Optional list of dimensions to filter (e.g., [2] for trichromats only).
+                       If None, includes all dimensions.
         """
         if wavelengths is None:
             self.wavelengths = np.arange(360, 831, 1)
@@ -124,6 +117,19 @@ class ObserverGenotypes:
         self.male_cdf = self._build_cdf(self.male_pdf)
         self.female_cdf = self._build_cdf(self.female_pdf)
         self.both_cdf = self._build_cdf(self.both_pdf_sorted)
+
+        # Store dimension filter
+        self.dimensions = dimensions
+
+        # Apply dimension filtering if specified
+        if dimensions is not None:
+            self.male_pdf_sorted = self._filter_pdf_by_dimension(self.male_pdf_sorted, dimensions)
+            self.female_pdf_sorted = self._filter_pdf_by_dimension(self.female_pdf_sorted, dimensions)
+            self.both_pdf_sorted = self._filter_pdf_by_dimension(self.both_pdf_sorted, dimensions)
+            # Rebuild CDFs with filtered PDFs
+            self.male_cdf = self._build_cdf(self.male_pdf_sorted)
+            self.female_cdf = self._build_cdf(self.female_pdf_sorted)
+            self.both_cdf = self._build_cdf(self.both_pdf_sorted)
 
     def _build_joint_pdf(self, measurements: Dict, alpha: float = 0.5) -> Dict:
         """Build a joint probability density function from measurements."""
@@ -183,6 +189,30 @@ class ObserverGenotypes:
         """
         sorted_pdf = sorted(pdf.items(), key=lambda x: x[1], reverse=True)
         return OrderedDict(sorted_pdf)
+
+    def _filter_pdf_by_dimension(self, pdf: OrderedDict, dimensions: List[int]) -> OrderedDict:
+        """
+        Filter PDF by dimensions and renormalize.
+
+        Args:
+            pdf: OrderedDict of genotype -> probability
+            dimensions: List of dimensions to include
+
+        Returns:
+            Filtered and renormalized OrderedDict
+        """
+        filtered_pdf = OrderedDict()
+        for genotype, prob in pdf.items():
+            if len(genotype) in dimensions:
+                filtered_pdf[genotype] = prob
+
+        # Renormalize probabilities
+        total = sum(filtered_pdf.values())
+        if total > 0:
+            for genotype in filtered_pdf:
+                filtered_pdf[genotype] /= total
+
+        return filtered_pdf
 
     def _build_cdf(self, pdf: Dict) -> OrderedDict:
         """
@@ -345,10 +375,6 @@ class ObserverGenotypes:
         pdf_to_use = self.get_pdf(sex)
 
         for genotype_peaks in pdf_to_use.keys():
-            # Skip genotypes with invalid dimensions (not 3-5)
-            if not self._is_valid_dimension(len(genotype_peaks)):
-                continue
-
             # Create cones for this genotype
             cones = []
             for peak in genotype_peaks:
@@ -431,7 +457,6 @@ class ObserverGenotypes:
                                               sex: str = 'male', **kwargs) -> List[ColorSpace]:
         """
         Get the list of color spaces that cover at least target_probability of the population.
-        Only returns color spaces with valid dimensions (3-5).
 
         Args:
             target_probability: Target cumulative probability (e.g., 0.9 for 90% coverage)
@@ -439,9 +464,7 @@ class ObserverGenotypes:
             **kwargs: Additional arguments to pass to get_color_space_for_peaks
         """
         genotypes = self.get_genotypes_covering_probability(target_probability, sex)
-        # Filter genotypes by valid dimensions (3-5)
-        valid_genotypes = [g for g in genotypes if self._is_valid_dimension(len(g))]
-        return [self.get_color_space_for_peaks(genotype, **kwargs) for genotype in tqdm(valid_genotypes)]
+        return [self.get_color_space_for_peaks(genotype, **kwargs) for genotype in tqdm(genotypes)]
 
     def plot_pdf(self, top_n: int = 20, figsize: Tuple[int, int] = (12, 8), sex: str = 'male') -> plt.Figure:
         """

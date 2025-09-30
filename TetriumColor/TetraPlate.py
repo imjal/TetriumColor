@@ -85,7 +85,7 @@ class PseudoIsochromaticPlateGenerator:
 
         primaries = load_primaries_from_csv("./measurements/2025-05-06/primaries")
         color_generator = GeneticCDFTestColorGenerator(
-            sex='female', percentage_screened=0.99, cst_display_type='led', display_primaries=primaries)
+            sex='female', percentage_screened=0.99, cst_display_type='led', display_primaries=primaries, dimensions=[2])
 
         print("Number of Genotypes: ", color_generator.get_num_samples())
         number_of_tests = color_generator.get_num_samples() * 4

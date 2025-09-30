@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Tuple
+from typing import Tuple, Optional, List
 
 import numpy as np
 import numpy.typing as npt
@@ -36,9 +36,17 @@ class TestColorGenerator(ColorGenerator):
 
 
 class GeneticCDFTestColorGenerator(ColorGenerator):
-    def __init__(self, sex: str, percentage_screened: float, **kwargs):
+    def __init__(self, sex: str, percentage_screened: float,  peak_to_test: float = 547, dimensions: Optional[List[int]] = [2], **kwargs):
+        """Color Generator that samples from the most common trichromatic phenotypes, and tests for the presence of a given peak.
+
+        Args:
+            sex (str): 'male' or 'female'
+            percentage_screened (float): Percentage of the population to screen
+            dimensions (Optional[List[int]], optional): Dimensions to screen. Defaults to [2], which corresponds to trichromats (S-cone already counted)
+            peak_to_test (float, optional): Peak to test for. Defaults to 547, the functional peak.
+        """
         self.percentage_screened = percentage_screened
-        self.observer_genotypes = ObserverGenotypes()
+        self.observer_genotypes = ObserverGenotypes(dimensions=dimensions)
         self.kwargs = kwargs  # Store kwargs for passing to color space creation
 
         self.genotypes = self.observer_genotypes.get_genotypes_covering_probability(
@@ -47,8 +55,9 @@ class GeneticCDFTestColorGenerator(ColorGenerator):
         fig = self.observer_genotypes.plot_cdf(sex=sex)
         fig.savefig(f"cdf_{sex}.png")
 
-        self.color_spaces = self.observer_genotypes.get_color_spaces_covering_probability(
-            target_probability=self.percentage_screened, sex=sex, **kwargs)
+        self.color_spaces = [self.observer_genotypes.get_color_space_for_peaks(
+            genotype + (peak_to_test,), **kwargs) for genotype in self.genotypes]
+
         self.current_idx = 0
         self.meta_idx = 0
 
