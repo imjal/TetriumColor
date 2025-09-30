@@ -22,7 +22,7 @@ class IshiharaPlateGenerator:
     Ishihara plate generator with geometry caching for improved performance.
     """
 
-    def __init__(self, color_space: ColorSpace, seed: int = 42):
+    def __init__(self, seed: int = 42):
         """
         Initialize the plate generator.
 
@@ -30,7 +30,6 @@ class IshiharaPlateGenerator:
             color_space: ColorSpace object for color conversions
             seed: Random seed for geometry generation
         """
-        self.color_space = color_space
         self.seed = seed
 
     def _get_geometry_cache_path(self, seed: int, dot_sizes: List[int], image_size: int) -> Path:
@@ -61,6 +60,7 @@ class IshiharaPlateGenerator:
             return geometry
 
     def GeneratePlate(self, inside_cone: npt.NDArray, outside_cone: npt.NDArray,
+                      color_space: ColorSpace,
                       hidden_number: int, output_space: ColorSpaceType,
                       lum_noise: float = 0, s_cone_noise: float = 0,
                       **kwargs) -> List[Image.Image]:
@@ -85,7 +85,7 @@ class IshiharaPlateGenerator:
 
         # Generate plate using cached geometry
         return generate_ishihara_plate(
-            inside_cone, outside_cone, self.color_space,
+            inside_cone, outside_cone, color_space,
             secret=hidden_number, circles=circles,  # Use cached geometry
             output_space=output_space,
             lum_noise=lum_noise, s_cone_noise=s_cone_noise,
@@ -98,26 +98,6 @@ class IshiharaPlateGenerator:
         exts = ["RGB", "OCV"]
         for i, img in enumerate(plate_imgs):
             img.save(f"{filename}_{exts[i]}.png")
-
-
-def _standardize_color(color: TetraColor) -> np.ndarray:
-    """
-    Ensure a TetraColor is a float in [0, 1].
-
-    :param color: TetraColor to standardize
-    :return: Standardized color as numpy array
-    """
-    if np.issubdtype(color.RGB.dtype, np.integer):
-        rgb = color.RGB.astype(float) / 255.0
-    else:
-        rgb = color.RGB
-
-    if np.issubdtype(color.OCV.dtype, np.integer):
-        ocv = color.OCV.astype(float) / 255.0
-    else:
-        ocv = color.OCV
-
-    return np.concatenate([rgb, ocv])
 
 
 def _generate_geometry(dot_sizes: List[int], image_size: int, seed: int) -> List[List[float]]:

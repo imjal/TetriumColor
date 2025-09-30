@@ -13,7 +13,6 @@ from TetriumColor.PsychoPhys.IshiharaPlate import generate_ishihara_plate
 from TetriumColor.Utils.CustomTypes import TetraColor, PlateColor
 import TetriumColor.ColorMath.Geometry as Geometry
 from TetriumColor.ColorMath.SubSpaceIntersection import FindMaximalSaturation, FindMaximumIn1DimDirection, FindMaximumWidthAlongDirection, excitations_to_contrast, receptor_isolate_spectral
-from TetriumColor.ColorMath import GamutMath
 
 
 class ColorSampler:

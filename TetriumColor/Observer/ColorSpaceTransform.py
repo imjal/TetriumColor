@@ -106,13 +106,13 @@ def GetColorSpaceTransform(observer: Observer, display_basis: CSTDisplayType,
 
     # Get all of the max_basis that we will use -> at most these many
     # print("Calculating MaxBasis")
-    max_basis = MaxBasisFactory.get_object(observer, denom=1, verbose=False)
+    max_basis = MaxBasisFactory.get_object(observer, denom=1, verbose=True)
     # max_basis = MaxBasis(observer, denom=1, verbose=True)
     # print("MaxBasis calculated w/denom=1")
     # print(max_basis.cutpoints)
-    max_basis_243 = MaxBasisFactory.get_object(observer, denom=2.43 if generate_max_basis else 1, verbose=False)
+    # max_basis_243 = MaxBasisFactory.get_object(observer, denom=2.43 if generate_max_basis else 1, verbose=False)
     # print("MaxBasis calculated w/denom=2.43")
-    max_basis_3 = MaxBasisFactory.get_object(observer, denom=3 if generate_max_basis else 1, verbose=False)
+    # max_basis_3 = MaxBasisFactory.get_object(observer, denom=3 if generate_max_basis else 1, verbose=False)
     # print("MaxBasis calculated w/denom=3")
 
     # print("MaxBasis calculated")
@@ -120,15 +120,15 @@ def GetColorSpaceTransform(observer: Observer, display_basis: CSTDisplayType,
     # Get all transforms from cone to maxbasis to hering
     M_PrimariesToCone = np.linalg.inv(M_Cone_To_Primaries)
     M_ConeToMaxBasis = max_basis.cone_to_maxbasis
-    M_ConeToMaxBasis243 = max_basis_243.cone_to_maxbasis
-    M_ConeToMaxBasis3 = max_basis_3.cone_to_maxbasis
+    # M_ConeToMaxBasis243 = max_basis_243.cone_to_maxbasis
+    # M_ConeToMaxBasis3 = max_basis_3.cone_to_maxbasis
     M_MaxBasisToHering = max_basis.HMatrix
 
     # transform the cone to the disp basis
     M_ConeToHering = M_MaxBasisToHering@M_ConeToMaxBasis
     M_PrimariesToMaxBasis = M_ConeToMaxBasis@M_PrimariesToCone
-    M_PrimariesToMaxBasis243 = M_ConeToMaxBasis243@M_PrimariesToCone
-    M_PrimariesToMaxBasis3 = M_ConeToMaxBasis3@M_PrimariesToCone
+    # M_PrimariesToMaxBasis243 = M_ConeToMaxBasis243@M_PrimariesToCone
+    # M_PrimariesToMaxBasis3 = M_ConeToMaxBasis3@M_PrimariesToCone
     M_PrimariesToHering = M_MaxBasisToHering@M_PrimariesToMaxBasis
 
     # Get the cone to XYZ matrix
@@ -138,8 +138,8 @@ def GetColorSpaceTransform(observer: Observer, display_basis: CSTDisplayType,
         observer.dimension,
         M_Cone_To_Primaries,
         np.linalg.inv(M_PrimariesToMaxBasis),
-        np.linalg.inv(M_PrimariesToMaxBasis243),
-        np.linalg.inv(M_PrimariesToMaxBasis3),
+        np.linalg.inv(M_PrimariesToMaxBasis),
+        np.linalg.inv(M_PrimariesToMaxBasis),
         np.linalg.inv(M_PrimariesToHering),
         np.linalg.inv(M_ConeToHering),
         metameric_axis,

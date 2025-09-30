@@ -453,6 +453,5 @@ def FindMaximumWidthAlongDirection(metameric_direction: npt.NDArray, generating_
     point2 = center + np.dot(-1 * V, optimal_t)
 
     max_dist = np.linalg.norm(point1 - point2)
-    print(f"Maximal Metameric Color Pair: {point1}, {point2}, Maximal Distance: {max_dist}")
 
     return point1, point2

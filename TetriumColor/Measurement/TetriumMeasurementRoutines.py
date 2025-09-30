@@ -31,7 +31,10 @@ def load_primaries_from_csv(primaries_dir: str) -> List[Spectra]:
         List[Spectra]: list of Spectra objects representing the Primaries measured
     """
 
-    return get_spectras_from_rgbo_list(primaries_dir, [(255, 0, 0, 0), (0, 255, 0, 0), (0, 0, 255, 0), (0, 0, 0, 255)])
+    try:
+        return get_spectras_from_rgbo_list(primaries_dir, [(255, 0, 0, 0), (0, 255, 0, 0), (0, 0, 255, 0), (0, 0, 0, 255)])
+    except Exception as e:
+        raise Exception(f"Error loading primaries from {primaries_dir}: {e}")
 
 
 def get_spectras_from_rgbo_list(

@@ -1,6 +1,6 @@
 import numpy as np
 import numpy.typing as npt
-from typing import List
+from typing import List, Optional, Tuple
 from enum import Enum
 from scipy.linalg import orth
 
@@ -13,6 +13,7 @@ from TetriumColor.Observer.ColorSpaceTransform import (
 
 from colour.models import RGB_COLOURSPACE_BT709
 from colour import XYZ_to_Lab
+from TetriumColor.ColorMath.SubSpaceIntersection import FindMaximumWidthAlongDirection
 import TetriumColor.ColorMath.Geometry as Geometry
 import TetriumColor.ColorMath.Conversion as Conversion
 import TetriumColor.Utils.BasisMath as BasisMath
@@ -160,15 +161,17 @@ class ColorSpace:
         self.max_L = (np.linalg.inv(self.transform.hering_to_disp) @
                       np.ones(self.transform.cone_to_disp.shape[0]))[0]
 
-    def get_metameric_axis_in(self, color_space_type: ColorSpaceType) -> npt.NDArray:
+    def get_metameric_axis_in(self, color_space_type: ColorSpaceType, metameric_axis_num: Optional[int] = None) -> npt.NDArray:
         """
         Get the metameric axis in display space.
 
         Returns:
             npt.NDArray: Normalized direction of the metameric axis
         """
+        if metameric_axis_num is None:
+            metameric_axis_num = self.transform.metameric_axis
         metameric_axis = np.zeros(self.dim)
-        metameric_axis[self.transform.metameric_axis] = 1
+        metameric_axis[metameric_axis_num] = 1
 
         direction = self.convert(metameric_axis, ColorSpaceType.CONE, color_space_type)
         if color_space_type == ColorSpaceType.VSH:
@@ -358,6 +361,20 @@ class ColorSpace:
             return sat_maxes[0]
         else:
             return sat_maxes
+
+    def get_maximal_metamer_pair_in_disp(self, metameric_axis: int) -> Tuple[npt.NDArray, npt.NDArray]:
+        """Get Maximal Metameric Color Pairs
+
+        Returns:
+            Tuple[npt.NDArray, npt.NDArray]: metamers_in_disp, cones
+        """
+        metamer_dir_in_disp = self.get_metameric_axis_in(ColorSpaceType.DISP, metameric_axis_num=metameric_axis)
+
+        metamers_in_disp = np.array(FindMaximumWidthAlongDirection(metamer_dir_in_disp, np.eye(self.dim)))
+
+        cones = self.convert(metamers_in_disp.reshape(-1, self.dim),
+                             ColorSpaceType.DISP, ColorSpaceType.CONE).reshape(-1, 2, self.dim)
+        return cones[0][0], cones[0][1]
 
     def is_in_gamut(self, points: npt.NDArray, color_space_type: ColorSpaceType) -> bool:
         """

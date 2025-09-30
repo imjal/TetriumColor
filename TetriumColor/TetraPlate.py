@@ -3,16 +3,14 @@ from typing import List
 
 from TetriumColor.Utils.CustomTypes import ColorTestResult
 from TetriumColor.Observer import *
-from TetriumColor import ColorSpace, ColorSpaceType, ColorSampler, TetraColor, PlateColor
+from TetriumColor import ColorSpaceType
 from TetriumColor.PsychoPhys.IshiharaPlate import IshiharaPlateGenerator
 from TetriumColor.TetraColorPicker import ColorGenerator
-
-# Control Test
 
 
 class PseudoIsochromaticPlateGenerator:
 
-    def __init__(self, color_generator: ColorGenerator, color_space: ColorSpace, seed: int = 42):
+    def __init__(self, color_generator: ColorGenerator, seed: int = 42):
         """
         Initializes the PseudoIsochromaticPlateGenerator with the given color generator, color space and seed
 
@@ -23,13 +21,11 @@ class PseudoIsochromaticPlateGenerator:
         """
         self.seed: int = seed
         self.color_generator: ColorGenerator = color_generator
-        self.color_space: ColorSpace = color_space
-        self.current_plate: IshiharaPlateGenerator = IshiharaPlateGenerator(color_space, seed=self.seed)
+        self.plate_generator: IshiharaPlateGenerator = IshiharaPlateGenerator(seed=self.seed)
 
     # must be called before GetPlate
-    def NewPlate(self, inside_cone: npt.NDArray, outside_cone: npt.NDArray, 
-                filenames: List[str], hidden_number: int, 
-                output_space: ColorSpaceType, lum_noise: float = 0, s_cone_noise: float = 0):
+    def NewPlate(self, filename: str, hidden_number: int,
+                 output_space: ColorSpaceType, lum_noise: float = 0, s_cone_noise: float = 0):
         """
         Generates a new plate with the given hidden number and cone space colors
 
@@ -42,15 +38,17 @@ class PseudoIsochromaticPlateGenerator:
             lum_noise (float): Luminance noise amount
             s_cone_noise (float): S-cone noise amount
         """
-        images = self.current_plate.GeneratePlate(
-            inside_cone, outside_cone, hidden_number, output_space,
+        inside_cone, outside_cone, color_space = self.color_generator.NewColor()
+        image = self.plate_generator.GeneratePlate(
+            inside_cone, outside_cone, color_space,
+            hidden_number, output_space,
             lum_noise=lum_noise, s_cone_noise=s_cone_noise
         )
-        self.current_plate.ExportPlate(images, filenames)
+        self.plate_generator.ExportPlateTo6P(image, filename)
 
-    def GetPlate(self, previous_result: ColorTestResult, inside_cone: npt.NDArray, outside_cone: npt.NDArray,
-                filenames: List[str], hidden_number: int, 
-                output_space: ColorSpaceType, lum_noise: float = 0, s_cone_noise: float = 0):
+    def GetPlate(self, previous_result: ColorTestResult,
+                 filename: str, hidden_number: int,
+                 output_space: ColorSpaceType, lum_noise: float = 0, s_cone_noise: float = 0):
         """
         Generates a new plate and saves it to files with the given hidden number and cone space colors
 
@@ -64,9 +62,35 @@ class PseudoIsochromaticPlateGenerator:
             lum_noise (float): Luminance noise amount
             s_cone_noise (float): S-cone noise amount
         """
-        # Note: We're not using previous_result yet, but it could be used for adaptive algorithms
-        images = self.current_plate.GeneratePlate(
-            inside_cone, outside_cone, hidden_number, output_space,
+        inside_cone, outside_cone, color_space = self.color_generator.GetColor(previous_result)
+        image = self.plate_generator.GeneratePlate(
+            inside_cone, outside_cone, color_space,
+            hidden_number, output_space,
             lum_noise=lum_noise, s_cone_noise=s_cone_noise
         )
-        self.current_plate.ExportPlate(images, filenames)
+        self.plate_generator.ExportPlateTo6P(image, filename)
+
+        image = self.plate_generator.GeneratePlate(
+            inside_cone, outside_cone, color_space,
+            hidden_number, ColorSpaceType.SRGB,
+            lum_noise=lum_noise, s_cone_noise=s_cone_noise
+        )
+        image[0].save(f"{filename}_srgb.png")
+
+    if __name__ == "__main__":
+
+        from TetriumColor.TetraColorPicker import GeneticCDFTestColorGenerator
+        from TetriumColor import PseudoIsochromaticPlateGenerator
+        from TetriumColor.Measurement import load_primaries_from_csv
+
+        primaries = load_primaries_from_csv("./measurements/2025-05-06/primaries")
+        color_generator = GeneticCDFTestColorGenerator(
+            sex='female', percentage_screened=0.99, cst_display_type='led', display_primaries=primaries)
+
+        print("Number of Genotypes: ", color_generator.get_num_samples())
+        number_of_tests = color_generator.get_num_samples() * 4
+        plate_generator = PseudoIsochromaticPlateGenerator(color_generator)
+
+        for i in range(number_of_tests):
+            print(f"Generating plate {i}")
+            plate_generator.GetPlate(None, f"test_outputs/test_{i}", 10, ColorSpaceType.DISP_6P)

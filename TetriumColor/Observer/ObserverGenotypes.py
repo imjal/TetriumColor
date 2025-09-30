@@ -4,6 +4,7 @@ import pandas as pd
 from collections import Counter, OrderedDict
 from typing import List, Dict, Tuple, Optional, Union
 import matplotlib.pyplot as plt
+from tqdm import tqdm
 
 from TetriumColor.Observer import Observer, Cone
 from TetriumColor.ColorSpace import ColorSpace, CSTDisplayType
@@ -88,6 +89,15 @@ class ObserverGenotypes:
         (False, False, True): 556,
         (False, False, False): 559
     }
+
+    # Dimension filtering constants for color space generation
+    MIN_OBSERVER_DIMENSION = 3
+    MAX_OBSERVER_DIMENSION = 3
+
+    @staticmethod
+    def _is_valid_dimension(num_peaks: int) -> bool:
+        """Check if the number of peaks results in a valid observer dimension (2-3 / trichromat / tetrachromat)."""
+        return ObserverGenotypes.MIN_OBSERVER_DIMENSION <= num_peaks <= ObserverGenotypes.MAX_OBSERVER_DIMENSION
 
     def __init__(self, wavelengths: Optional[np.ndarray] = None):
         """
@@ -335,19 +345,18 @@ class ObserverGenotypes:
         pdf_to_use = self.get_pdf(sex)
 
         for genotype_peaks in pdf_to_use.keys():
+            # Skip genotypes with invalid dimensions (not 3-5)
+            if not self._is_valid_dimension(len(genotype_peaks)):
+                continue
+
             # Create cones for this genotype
             cones = []
             for peak in genotype_peaks:
                 cone = Cone.cone(peak, wavelengths=self.wavelengths, template='neitz')
                 cones.append(cone)
 
-            if len(cones) <= 4 and len(cones) > 1:
-                observer = Observer(cones, illuminant=None)
-                color_space = ColorSpace(observer, cst_display_type=cst_display_type)
-            else:
-                color_space = None
-
-            # Create color space
+            observer = Observer(cones, illuminant=None)
+            color_space = ColorSpace(observer, cst_display_type=cst_display_type)
             color_spaces.append(color_space)
 
         return color_spaces
@@ -419,12 +428,20 @@ class ObserverGenotypes:
         return genotypes
 
     def get_color_spaces_covering_probability(self, target_probability: float,
-                                              sex: str = 'male') -> List[ColorSpace]:
+                                              sex: str = 'male', **kwargs) -> List[ColorSpace]:
         """
         Get the list of color spaces that cover at least target_probability of the population.
+        Only returns color spaces with valid dimensions (3-5).
+
+        Args:
+            target_probability: Target cumulative probability (e.g., 0.9 for 90% coverage)
+            sex: 'male' or 'female'
+            **kwargs: Additional arguments to pass to get_color_space_for_peaks
         """
         genotypes = self.get_genotypes_covering_probability(target_probability, sex)
-        return [self.get_color_space_for_peaks(genotype) for genotype in genotypes]
+        # Filter genotypes by valid dimensions (3-5)
+        valid_genotypes = [g for g in genotypes if self._is_valid_dimension(len(g))]
+        return [self.get_color_space_for_peaks(genotype, **kwargs) for genotype in tqdm(valid_genotypes)]
 
     def plot_pdf(self, top_n: int = 20, figsize: Tuple[int, int] = (12, 8), sex: str = 'male') -> plt.Figure:
         """
@@ -521,7 +538,7 @@ class ObserverGenotypes:
         """
         return self.get_genotypes_covering_probability(threshold_probability, sex)
 
-    def get_observer_for_peaks(self, peaks: List[float]) -> Observer:
+    def get_observer_for_peaks(self, peaks: Tuple[float, ...]) -> Observer:
         """
         Create an Observer object for specific peak wavelengths.
 
@@ -533,7 +550,7 @@ class ObserverGenotypes:
         """
         # Add S cone if not present
         if 420 not in peaks:
-            peaks = [420] + peaks
+            peaks = (420,) + peaks
 
         cones = []
         for peak in sorted(peaks):
@@ -542,20 +559,20 @@ class ObserverGenotypes:
 
         return Observer(cones, illuminant=None)
 
-    def get_color_space_for_peaks(self, peaks: List[float],
-                                  cst_display_type: CSTDisplayType = CSTDisplayType.NONE) -> ColorSpace:
+    def get_color_space_for_peaks(self, peaks: Tuple[float, ...], **kwargs) -> ColorSpace:
         """
         Create a ColorSpace object for specific peak wavelengths.
 
         Args:
             peaks: List of peak wavelengths
             cst_display_type: Display type for ColorSpace construction
+            **kwargs: Additional arguments to pass to ColorSpace constructor
 
         Returns:
             ColorSpace object
         """
         observer = self.get_observer_for_peaks(peaks)
-        return ColorSpace(observer, cst_display_type=cst_display_type)
+        return ColorSpace(observer, **kwargs)
 
     def get_observers_by_probability(self, sex: str = 'male') -> List[Observer]:
         """
@@ -843,12 +860,12 @@ def test_observer_genotypes():
     print("\n8. Testing Observer and ColorSpace creation")
 
     # Test observer creation for specific peaks
-    observer = og.get_observer_for_peaks([530, 559])
+    observer = og.get_observer_for_peaks((530, 559))
     print(f"Created observer with {observer.dimension} dimensions")
     print(f"Observer sensors: {[s.peak for s in observer.sensors]}")
 
     # Test color space creation
-    color_space = og.get_color_space_for_peaks([530, 559])
+    color_space = og.get_color_space_for_peaks((530, 559))
     print(f"Created ColorSpace with {color_space.dim} dimensions")
 
     # Test getting observers by probability
