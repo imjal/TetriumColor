@@ -52,20 +52,20 @@ class MaxBasis:
         self.step_size = self.observer.wavelengths[1] - self.observer.wavelengths[0]
         self.dim_sample_const = self.dim4SampleConst if self.dimension == 4 else self.dim3SampleConst
 
-        grid_axes = [np.linspace(0, 1, 50) for _ in range(self.dimension)]
-        self.hypercube_points = np.array(list(product(*grid_axes)))
+        # grid_axes = [np.linspace(0, 1, 50) for _ in range(self.dimension)]
+        # self.hypercube_points = np.array(list(product(*grid_axes)))
         self.HMatrix = GetHeringMatrix(observer.dimension)
 
         self.__getMaximalBasis()
 
     def __computeVolume(self, wavelengths):
-        if self.denom > 1:
-            vol = self.__computeVolumeViaPointCloudEstimation(wavelengths)
-        else:
-            transitions = self.GetCutpointTransitions(wavelengths)
-            cone_vals = np.array([np.dot(self.matrix, Spectra.from_transitions(
-                x, 1 if i == 0 else 0, self.wavelengths).data) for i, x in enumerate(transitions)])
-            vol = np.abs(np.linalg.det(cone_vals))
+        # if self.denom > 1:
+        #     vol = self.__computeVolumeViaPointCloudEstimation(wavelengths)
+        # else:
+        transitions = self.GetCutpointTransitions(wavelengths)
+        cone_vals = np.array([np.dot(self.matrix, Spectra.from_transitions(
+            x, 1 if i == 0 else 0, self.wavelengths).data) for i, x in enumerate(transitions)])
+        vol = np.abs(np.linalg.det(cone_vals))
         return vol
 
     # def __computeVolumeViaPointCloudEstimation(self, wavelengths):
@@ -116,41 +116,41 @@ class MaxBasis:
     #     print("volume is ", volume)
     #     return volume
 
-    def __computeVolumeViaPointCloudEstimation(self, wavelengths):
-        transitions = self.GetCutpointTransitions(wavelengths)
-        cone_vals = np.array([np.dot(self.matrix, Spectra.from_transitions(
-            x, 1 if i == 0 else 0, self.wavelengths).data) for i, x in enumerate(transitions)])
+    # def __computeVolumeViaPointCloudEstimation(self, wavelengths):
+    #     transitions = self.GetCutpointTransitions(wavelengths)
+    #     cone_vals = np.array([np.dot(self.matrix, Spectra.from_transitions(
+    #         x, 1 if i == 0 else 0, self.wavelengths).data) for i, x in enumerate(transitions)])
 
-        try:
-            cone_vals_inv = np.linalg.inv(cone_vals)
-        except np.linalg.LinAlgError:
-            return 0  # Singular matrix, volume is 0
+    #     try:
+    #         cone_vals_inv = np.linalg.inv(cone_vals)
+    #     except np.linalg.LinAlgError:
+    #         return 0  # Singular matrix, volume is 0
 
-        all_points = cone_vals @ self.hypercube_points.T
+    #     all_points = cone_vals @ self.hypercube_points.T
 
-        if np.isclose(self.denom, 3):
-            transformed_points = np.cbrt(all_points)
-        else:
-            transformed_points = np.power(all_points, self.exp)
+    #     if np.isclose(self.denom, 3):
+    #         transformed_points = np.cbrt(all_points)
+    #     else:
+    #         transformed_points = np.power(all_points, self.exp)
 
-        min_coords = np.min(transformed_points, axis=1)
-        max_coords = np.max(transformed_points, axis=1)
+    #     min_coords = np.min(transformed_points, axis=1)
+    #     max_coords = np.max(transformed_points, axis=1)
 
-        num_samples = 10000
-        random_points = np.random.uniform(
-            min_coords[:, np.newaxis],
-            max_coords[:, np.newaxis],
-            (self.dimension, num_samples)
-        )
+    #     num_samples = 10000
+    #     random_points = np.random.uniform(
+    #         min_coords[:, np.newaxis],
+    #         max_coords[:, np.newaxis],
+    #         (self.dimension, num_samples)
+    #     )
 
-        inv_points = np.power(random_points, self.denom)
-        coefficients = cone_vals_inv @ inv_points
-        inside_mask = np.all((0 <= coefficients) & (coefficients <= 1), axis=0)
-        points_inside = np.sum(inside_mask)
+    #     inv_points = np.power(random_points, self.denom)
+    #     coefficients = cone_vals_inv @ inv_points
+    #     inside_mask = np.all((0 <= coefficients) & (coefficients <= 1), axis=0)
+    #     points_inside = np.sum(inside_mask)
 
-        bounding_box_volume = np.prod(max_coords - min_coords)
-        volume = bounding_box_volume * (points_inside / num_samples)
-        return volume
+    #     bounding_box_volume = np.prod(max_coords - min_coords)
+    #     volume = bounding_box_volume * (points_inside / num_samples)
+    #     return volume
 
     def __findMaximalCMF(self, isReverse=True):
         sortedCutpoints = self.cutpoints[:self.dimension - 1]
