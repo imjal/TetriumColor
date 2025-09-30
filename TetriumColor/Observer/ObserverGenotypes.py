@@ -563,7 +563,7 @@ class ObserverGenotypes:
 
     def get_observer_for_peaks(self, peaks: Tuple[float, ...]) -> Observer:
         """
-        Create an Observer object for specific peak wavelengths.
+        Create an Observer object for specific peak wavelengths, with sorted peaks.
 
         Args:
             peaks: List of peak wavelengths
@@ -584,7 +584,7 @@ class ObserverGenotypes:
 
     def get_color_space_for_peaks(self, peaks: Tuple[float, ...], **kwargs) -> ColorSpace:
         """
-        Create a ColorSpace object for specific peak wavelengths.
+        Create a ColorSpace object for specific peak wavelengths, with sorted peaks.
 
         Args:
             peaks: List of peak wavelengths
