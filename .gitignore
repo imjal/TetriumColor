@@ -15,7 +15,7 @@ scripts/paper-viz/theory-grid/display-grid/*.csv
 scripts/inkset/results_*
 
 # cache stuff
-TetriumColor/Assets/Cache/geometry-ishihara/*
+TetriumColor/Assets/Cache/geometry-ishihara/geometry_*
 *.pkl
 
 # Mac
