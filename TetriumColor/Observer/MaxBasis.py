@@ -280,8 +280,10 @@ class MaxBasis:
             indices = [(i, j, k) for i in range(len(X)) for j in range(len(Y)) for k in range(len(W))]
 
             # Parallelize the computation
-            results = Parallel(n_jobs=-1)(delayed(compute_volume_for_indices)(i, j, k)
-                                          for i, j, k in tqdm(indices, desc="Max Basis Calculation"))
+
+            results = [compute_volume_for_indices(i, j, k) for i, j, k in tqdm(indices, desc="Max Basis Calculation")]
+            # results = Parallel(n_jobs=-1)(delayed(compute_volume_for_indices)(i, j, k)
+            #                               for i, j, k in tqdm(indices, desc="Max Basis Calculation"))
 
             # Populate Zidx with the results
             for i, j, k, volume in results:

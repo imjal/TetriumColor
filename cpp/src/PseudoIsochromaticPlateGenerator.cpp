@@ -1,29 +1,56 @@
-#include <vector>
-
 #include "TetriumColor/PseudoIsochromaticPlateGenerator.h"
+#include <vector>
 
 namespace TetriumColor
 {
+
+// Helper function to convert ColorSpaceType enum to Python enum
+static PyObject* ColorSpaceTypeToPython(ColorSpaceType space_type)
+{
+    // Import the ColorSpaceType enum from Python
+    PyObject* pColorSpaceModule = PyImport_ImportModule("TetriumColor");
+    if (!pColorSpaceModule) {
+        PyErr_Print();
+        return nullptr;
+    }
+
+    PyObject* pColorSpaceType = PyObject_GetAttrString(pColorSpaceModule, "ColorSpaceType");
+    Py_DECREF(pColorSpaceModule);
+
+    if (!pColorSpaceType) {
+        PyErr_Print();
+        return nullptr;
+    }
+
+    const char* type_name = nullptr;
+    switch (space_type) {
+    case ColorSpaceType::DISP_6P:
+        type_name = "DISP_6P";
+        break;
+    case ColorSpaceType::SRGB:
+        type_name = "SRGB";
+        break;
+    case ColorSpaceType::RGB:
+        type_name = "SRGB"; // Map RGB to SRGB
+        break;
+    case ColorSpaceType::OCV:
+        type_name = "DISP_6P"; // Map OCV to DISP_6P for compatibility
+        break;
+    default:
+        type_name = "DISP_6P";
+        break;
+    }
+
+    PyObject* pValue = PyObject_GetAttrString(pColorSpaceType, type_name);
+    Py_DECREF(pColorSpaceType);
+    return pValue;
+}
+
 PseudoIsochromaticPlateGenerator::PseudoIsochromaticPlateGenerator(
-    const std::vector<std::string>& transform_dirs,
-    const std::vector<std::string>& pregenerated_filenames,
-    int num_tests,
+    ColorGenerator& color_generator,
     int seed
 )
 {
-    // Convert vectors to Python lists
-    PyObject* py_transform_dirs = PyList_New(transform_dirs.size());
-    for (size_t i = 0; i < transform_dirs.size(); ++i) {
-        PyList_SetItem(py_transform_dirs, i, PyUnicode_FromString(transform_dirs[i].c_str()));
-    }
-
-    PyObject* py_pregenerated_filenames = PyList_New(pregenerated_filenames.size());
-    for (size_t i = 0; i < pregenerated_filenames.size(); ++i) {
-        PyList_SetItem(
-            py_pregenerated_filenames, i, PyUnicode_FromString(pregenerated_filenames[i].c_str())
-        );
-    }
-
     // Import the Python module
     PyObject* pName = PyUnicode_DecodeFSDefault("TetriumColor.TetraPlate");
     pModule = reinterpret_cast<PyObject*>(PyImport_Import(pName));
@@ -31,21 +58,26 @@ PseudoIsochromaticPlateGenerator::PseudoIsochromaticPlateGenerator(
 
     if (pModule != nullptr) {
         // Get the Python class
-        pClass = reinterpret_cast<PyObject*>(PyObject_GetAttrString(reinterpret_cast<PyObject*>(pModule), "PseudoIsochromaticPlateGenerator"));
+        pClass = reinterpret_cast<PyObject*>(PyObject_GetAttrString(
+            reinterpret_cast<PyObject*>(pModule), "PseudoIsochromaticPlateGenerator"
+        ));
 
         if (pClass && PyCallable_Check(reinterpret_cast<PyObject*>(pClass)) == 1) {
-            // Create an instance of the Python class
+            // Create an instance of the Python class with color_generator and seed
             PyObject* pArgs = PyTuple_Pack(
-                4,
-                py_transform_dirs,
-                py_pregenerated_filenames,
-                PyLong_FromLong(num_tests),
+                2,
+                color_generator.pInstance, // Pass the color generator instance
                 PyLong_FromLong(seed)
             );
-            pInstance = reinterpret_cast<PyObject*>(PyObject_CallObject(
-                reinterpret_cast<PyObject*>(pClass)
-                , pArgs));
+            pInstance = reinterpret_cast<PyObject*>(
+                PyObject_CallObject(reinterpret_cast<PyObject*>(pClass), pArgs)
+            );
             Py_DECREF(pArgs);
+
+            if (!pInstance) {
+                PyErr_Print();
+                exit(-1);
+            }
         } else {
             PyErr_Print();
             exit(-1);
@@ -54,9 +86,6 @@ PseudoIsochromaticPlateGenerator::PseudoIsochromaticPlateGenerator(
         PyErr_Print();
         exit(-1);
     }
-
-    Py_DECREF(py_transform_dirs);
-    Py_DECREF(py_pregenerated_filenames);
 }
 
 PseudoIsochromaticPlateGenerator::~PseudoIsochromaticPlateGenerator()
@@ -67,49 +96,86 @@ PseudoIsochromaticPlateGenerator::~PseudoIsochromaticPlateGenerator()
 }
 
 void PseudoIsochromaticPlateGenerator::NewPlate(
-    const std::string& filename_RGB,
-    const std::string& filename_OCV,
-    int hidden_number
+    const std::string& filename,
+    int hidden_number,
+    ColorSpaceType output_space,
+    float lum_noise,
+    float s_cone_noise
 )
 {
     if (pInstance != nullptr) {
+        PyObject* pOutputSpace = ColorSpaceTypeToPython(output_space);
+        if (!pOutputSpace) {
+            printf("Failed to convert ColorSpaceType to Python\n");
+            return;
+        }
+
         PyObject* pValue = PyObject_CallMethod(
-            reinterpret_cast<PyObject*>(pInstance), "NewPlate", "ssi", filename_RGB.c_str(), filename_OCV.c_str(), hidden_number
+            reinterpret_cast<PyObject*>(pInstance),
+            "NewPlate",
+            "siOff",
+            filename.c_str(),
+            hidden_number,
+            pOutputSpace,
+            lum_noise,
+            s_cone_noise
         );
+
+        Py_DECREF(pOutputSpace);
+
         if (pValue != nullptr) {
             Py_DECREF(pValue);
         } else {
             PyErr_Print();
         }
     } else {
-        printf("gg, exiting\n");
+        printf("PseudoIsochromaticPlateGenerator instance is null\n");
         exit(-1);
     }
 }
 
 void PseudoIsochromaticPlateGenerator::GetPlate(
-    ColorTestResult result,
-    const std::string& filename_RGB,
-    const std::string& filename_OCV,
-    int hidden_number
+    ColorTestResult previous_result,
+    const std::string& filename,
+    int hidden_number,
+    ColorSpaceType output_space,
+    float lum_noise,
+    float s_cone_noise
 )
 {
-    PyObject* pResult = PyLong_FromLong(static_cast<int>(result));
     if (pInstance != nullptr) {
+        PyObject* pOutputSpace = ColorSpaceTypeToPython(output_space);
+        if (!pOutputSpace) {
+            printf("Failed to convert ColorSpaceType to Python\n");
+            return;
+        }
+
+        // Convert ColorTestResult to Python
+        PyObject* pResult = PyLong_FromLong(static_cast<int>(previous_result));
+
         PyObject* pValue = PyObject_CallMethod(
             reinterpret_cast<PyObject*>(pInstance),
             "GetPlate",
-            "Ossi",
+            "OsiOff",
             pResult,
-            filename_RGB.c_str(),
-            filename_OCV.c_str(),
-            hidden_number
+            filename.c_str(),
+            hidden_number,
+            pOutputSpace,
+            lum_noise,
+            s_cone_noise
         );
+
+        Py_DECREF(pOutputSpace);
+        Py_DECREF(pResult);
+
         if (pValue != nullptr) {
             Py_DECREF(pValue);
         } else {
             PyErr_Print();
         }
+    } else {
+        printf("PseudoIsochromaticPlateGenerator instance is null\n");
+        exit(-1);
     }
 }
 

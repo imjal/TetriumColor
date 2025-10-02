@@ -2,6 +2,8 @@
 
 #include <string>
 #include "ColorTestResult.h"
+#include "ColorSpaceType.h"
+#include "ColorGenerator.h"
 
 namespace TetriumColor
 {
@@ -9,25 +11,27 @@ class PseudoIsochromaticPlateGenerator
 {
   public:
     PseudoIsochromaticPlateGenerator(
-        const std::vector<std::string>& transform_dirs,
-        const std::vector<std::string>& pregenerated_filenames,
-        int num_tests,
+        ColorGenerator& color_generator,
         int seed = 42
     );
 
     ~PseudoIsochromaticPlateGenerator();
 
     void NewPlate(
-        const std::string& filename_RGB,
-        const std::string& filename_OCV,
-        int hidden_number
+        const std::string& filename,
+        int hidden_number,
+        ColorSpaceType output_space = ColorSpaceType::DISP_6P,
+        float lum_noise = 0.0f,
+        float s_cone_noise = 0.0f
     );
 
     void GetPlate(
-        ColorTestResult result,
-        const std::string& filename_RGB,
-        const std::string& filename_OCV,
-        int hidden_number
+        ColorTestResult previous_result,
+        const std::string& filename,
+        int hidden_number,
+        ColorSpaceType output_space = ColorSpaceType::DISP_6P,
+        float lum_noise = 0.0f,
+        float s_cone_noise = 0.0f
     );
 
   private:
