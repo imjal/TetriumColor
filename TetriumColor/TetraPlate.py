@@ -16,7 +16,6 @@ class PseudoIsochromaticPlateGenerator:
 
         Args:
             color_generator (ColorGenerator): The color generator to use for plate colors
-            color_space (ColorSpace): The color space for color conversions
             seed (int): The seed for the plate pattern generation.
         """
         self.seed: int = seed
@@ -30,9 +29,6 @@ class PseudoIsochromaticPlateGenerator:
         Generates a new plate with the given hidden number and cone space colors
 
         Args:
-            inside_cone (npt.NDArray): Inside color in cone space
-            outside_cone (npt.NDArray): Outside color in cone space
-            filenames (List[str]): List of filenames to save the output images
             hidden_number (int): The hidden number to save to the plate
             output_space (ColorSpaceType): Target color space for output
             lum_noise (float): Luminance noise amount
@@ -54,9 +50,6 @@ class PseudoIsochromaticPlateGenerator:
 
         Args:
             previous_result (ColorTestResult): The result of the previous test (did they get it right or not)
-            inside_cone (npt.NDArray): Inside color in cone space
-            outside_cone (npt.NDArray): Outside color in cone space
-            filenames (List[str]): List of filenames to save the output images
             hidden_number (int): The hidden number to save to the plate
             output_space (ColorSpaceType): Target color space for output
             lum_noise (float): Luminance noise amount
@@ -85,12 +78,12 @@ class PseudoIsochromaticPlateGenerator:
 
         primaries = load_primaries_from_csv("./measurements/2025-05-06/primaries")
         color_generator = GeneticCDFTestColorGenerator(
-            sex='female', percentage_screened=0.99, cst_display_type='led', display_primaries=primaries, dimensions=[2])
+            sex='female', percentage_screened=0.9999, cst_display_type='led', display_primaries=primaries, dimensions=[2])
 
         print("Number of Genotypes: ", color_generator.get_num_samples())
-        number_of_tests = color_generator.get_num_samples() * 4
+        number_of_tests = color_generator.get_num_samples()
         plate_generator = PseudoIsochromaticPlateGenerator(color_generator)
 
         for i in range(number_of_tests):
             print(f"Generating plate {i}")
-            plate_generator.GetPlate(None, f"test_outputs/test_{i}", 10, ColorSpaceType.DISP_6P)
+            plate_generator.GetPlate(None, f"test_outputs/test_{i}", 10, ColorSpaceType.DISP_6P, lum_noise=0.005)

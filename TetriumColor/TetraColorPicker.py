@@ -36,7 +36,7 @@ class TestColorGenerator(ColorGenerator):
 
 
 class GeneticCDFTestColorGenerator(ColorGenerator):
-    def __init__(self, sex: str, percentage_screened: float,  peak_to_test: float = 547, dimensions: Optional[List[int]] = [2], **kwargs):
+    def __init__(self, sex: str, percentage_screened: float,  peak_to_test: float = 547, metameric_axis: int = 2, dimensions: Optional[List[int]] = [2], **kwargs):
         """Color Generator that samples from the most common trichromatic phenotypes, and tests for the presence of a given peak.
 
         Args:
@@ -47,40 +47,50 @@ class GeneticCDFTestColorGenerator(ColorGenerator):
         """
         self.percentage_screened = percentage_screened
         self.observer_genotypes = ObserverGenotypes(dimensions=dimensions)
-        self.kwargs = kwargs  # Store kwargs for passing to color space creation
+        self.metameric_axis = metameric_axis
 
         self.genotypes = self.observer_genotypes.get_genotypes_covering_probability(
             target_probability=self.percentage_screened, sex=sex)
 
-        fig = self.observer_genotypes.plot_cdf(sex=sex)
-        fig.savefig(f"cdf_{sex}.png")
-
         self.color_spaces = [self.observer_genotypes.get_color_space_for_peaks(
-            genotype + (peak_to_test,), **kwargs) for genotype in self.genotypes]
+            genotype + (peak_to_test,), **kwargs) for genotype in self.genotypes if peak_to_test not in genotype]
 
         self.current_idx = 0
-        self.meta_idx = 0
 
         self.num_samples = len(self.color_spaces)
 
     def get_num_samples(self) -> int:
+        """Get the number of samples in the color generator.
+
+        Returns:
+            int: The number of samples in the color generator.
+        """
         return self.num_samples
 
     def GetColor(self, previous_result: ColorTestResult) -> Tuple[npt.NDArray, npt.NDArray, ColorSpace] | None:
+        """Get a color from the color generator.
+
+        Args:
+            previous_result (ColorTestResult): The previous result of the color test.
+
+        Returns:
+            Tuple[npt.NDArray, npt.NDArray, ColorSpace]: return inside/outside cone colors, with the associated color space
+        """
         if self.current_idx >= self.num_samples:
             self.current_idx = 0
         return self.NewColor()
 
     def NewColor(self) -> Tuple[npt.NDArray, npt.NDArray, ColorSpace]:
+        """Currently, we just return a color in a list down (non-adaptively)
+        Raises:
+            StopIteration: If no more genotypes to sample
+
+        Returns:
+            Tuple[npt.NDArray, npt.NDArray, ColorSpace]: return inside/outside cone colors, with the associated color space
+        """
         if self.current_idx >= self.num_samples:
             raise StopIteration("No more genotypes to sample")
         color_space = self.color_spaces[self.current_idx]
-
-        inside_cone, outside_cone = color_space.get_maximal_metamer_pair_in_disp(metameric_axis=self.meta_idx)
-
-        self.meta_idx = (self.meta_idx + 1) % color_space.dim
-        if self.meta_idx == 0:
-            print(f"Meta axis {self.meta_idx} reached for genotype {self.current_idx}")
-            print("Moving onto Next Genotype")
-            self.current_idx += 1
+        inside_cone, outside_cone = color_space.get_maximal_metamer_pair_in_disp(metameric_axis=self.metameric_axis)
+        self.current_idx += 1
         return inside_cone, outside_cone, color_space
