@@ -16,8 +16,5 @@ void Init()
     }
 }
 
-void Cleanup() 
-{
-    Py_Finalize();
-}
+void Cleanup() { Py_Finalize(); }
 }; // namespace TetriumColor
