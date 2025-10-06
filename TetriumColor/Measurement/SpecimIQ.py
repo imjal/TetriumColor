@@ -287,7 +287,7 @@ def _closest_band_indices(wavelengths: np.ndarray, targets: List[float]) -> List
     return idxs
 
 
-def inspect_hyperspectral_image(filename: str, output_wavelengths: Optional[npt.NDArray] = np.arange(400, 700, 1)) -> List[Spectra]:
+def inspect_hyperspectral_image(filename: str, output_wavelengths: Optional[npt.NDArray] = np.arange(400, 700, 1), plot_spectra_color: Optional[npt.NDArray | Tuple] = None) -> List[Spectra]:
     """Interactive inspector using matplotlib.
 
     - Displays an RGB composite of the hyperspectral cube (no spectral.imshow used).
@@ -339,6 +339,8 @@ def inspect_hyperspectral_image(filename: str, output_wavelengths: Optional[npt.
             color = s.to_rgb()
         except Exception:
             pass
+        if plot_spectra_color is not None:
+            color = plot_spectra_color
         ax_spec.plot(s.wavelengths, s.data / (np.max(s.data) if np.max(s.data) > 0 else 1), label=label, color=color)
         ax_spec.legend(loc="best", fontsize=8)
         ax_spec.figure.canvas.draw_idle()

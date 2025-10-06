@@ -76,14 +76,25 @@ class PseudoIsochromaticPlateGenerator:
         from TetriumColor import PseudoIsochromaticPlateGenerator
         from TetriumColor.Measurement import load_primaries_from_csv
 
-        primaries = load_primaries_from_csv("./measurements/2025-05-06/primaries")
+        primaries = load_primaries_from_csv("./measurements/2025-10-01/primaries/")
+
+        # for p in primaries:
+        #     p.plot()
+        # plt.show()
+
         color_generator = GeneticCDFTestColorGenerator(
-            sex='female', percentage_screened=0.9999, cst_display_type='led', display_primaries=primaries, dimensions=[2])
+            sex='female', percentage_screened=0.999, cst_display_type='led', display_primaries=primaries, dimensions=[2])
 
         print("Number of Genotypes: ", color_generator.get_num_samples())
         number_of_tests = color_generator.get_num_samples()
         plate_generator = PseudoIsochromaticPlateGenerator(color_generator)
 
+        lum_noise = 0.001
+        s_cone_noise = 0.000
+
+        dirname = f"./measurements/2025-10-01/tests_noise_{lum_noise}_scone_noise_{s_cone_noise}"
+        os.makedirs(dirname, exist_ok=True)
         for i in range(number_of_tests):
             print(f"Generating plate {i}")
-            plate_generator.GetPlate(None, f"test_outputs/test_{i}", 10, ColorSpaceType.DISP_6P, lum_noise=0.005)
+            plate_generator.GetPlate(
+                None, os.path.join(dirname, f"test_{i}"), 10, ColorSpaceType.DISP_6P, lum_noise=lum_noise, s_cone_noise=s_cone_noise)

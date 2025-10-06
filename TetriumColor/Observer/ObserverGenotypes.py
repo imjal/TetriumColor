@@ -561,7 +561,7 @@ class ObserverGenotypes:
         """
         return self.get_genotypes_covering_probability(threshold_probability, sex)
 
-    def get_observer_for_peaks(self, peaks: Tuple[float, ...]) -> Observer:
+    def get_observer_for_peaks(self, peaks: Tuple[float, ...], od: float = 0.5) -> Observer:
         """
         Create an Observer object for specific peak wavelengths, with sorted peaks.
 
@@ -577,7 +577,9 @@ class ObserverGenotypes:
 
         cones = []
         for peak in sorted(peaks):
-            cone = Cone.cone(peak, wavelengths=self.wavelengths, template='neitz')
+            if peak == 420:
+                od = od * 0.8
+            cone = Cone.cone(peak, wavelengths=self.wavelengths, template='neitz', od=od)
             cones.append(cone)
 
         return Observer(cones, illuminant=None)

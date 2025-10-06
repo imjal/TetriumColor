@@ -52,6 +52,8 @@ class GeneticCDFTestColorGenerator(ColorGenerator):
         self.genotypes = self.observer_genotypes.get_genotypes_covering_probability(
             target_probability=self.percentage_screened, sex=sex)
 
+        print("Genotypes: ", self.genotypes)
+
         self.color_spaces = [self.observer_genotypes.get_color_space_for_peaks(
             genotype + (peak_to_test,), **kwargs) for genotype in self.genotypes if peak_to_test not in genotype]
 
