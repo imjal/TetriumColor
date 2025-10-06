@@ -7,7 +7,7 @@ import numpy.typing as npt
 import warnings
 import copy
 
-from colour import SDS_ILLUMINANTS, SDS_LIGHT_SOURCES, sd_to_XYZ, XYZ_to_xy, XYZ_to_sRGB, SpectralDistribution, notation, MultiSpectralDistributions
+from colour import SDS_ILLUMINANTS, SDS_LIGHT_SOURCES, sd_to_XYZ, XYZ_to_xy, XYZ_to_sRGB, XYZ_to_Lab, delta_E, SpectralDistribution, notation, MultiSpectralDistributions
 from scipy.interpolate import interp1d
 from scipy.signal import savgol_filter
 
@@ -181,6 +181,24 @@ class Spectra:
         chromaticity_coord = XYZ_to_xy(sd_to_XYZ(i, cmfs=cmfs) / 100)
 
         return np.clip(XYZ_to_sRGB(self.to_xyz(illuminant), illuminant=chromaticity_coord), 0, 1)
+
+    def to_lab(self, illuminant: Optional["Spectra"] = None, cmfs: Optional["MultiSpectralDistributions"] = None) -> npt.NDArray:
+        """Converts the spectra to the Lab color space value.
+        """
+        i = illuminant.to_colour() if illuminant is not None else Illuminant.get("D65").to_colour()
+        return XYZ_to_Lab(sd_to_XYZ(i, cmfs=cmfs) / 100)
+
+    @staticmethod
+    def delta_e(spectra1: "Spectra", spectra2: "Spectra") -> float:
+        """Calculates the delta E between two spectra.
+        """
+        return delta_E(spectra1.to_lab(), spectra2.to_lab())
+
+    @staticmethod
+    def spectral_rmse(spectra1: "Spectra", spectra2: "Spectra") -> float:
+        """Calculates the spectral RMSE between two spectra.
+        """
+        return np.sqrt(np.mean((spectra1.data - spectra2.data) ** 2))
 
     def to_hex(self, illuminant: Optional["Spectra"] = None):
         return notation.RGB_to_HEX(np.clip(self.to_rgb(illuminant), 0, 1))
