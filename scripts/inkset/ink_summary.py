@@ -64,8 +64,6 @@ def get_top_n_inks(top_volumes, top_d_inks=20):
     counter = Counter(all_ink_names)
     # Get the n most common ink names
     top_inks = [ink for ink, _ in counter.most_common(top_d_inks)]
-    import pdb
-    pdb.set_trace()
     return top_inks
 
 
@@ -99,7 +97,7 @@ def analyze_ink_library(library_name: str, args):
                          filename=os.path.join(results_dir, f"all_ink_spectras_{library_name}.png"))
 
         # Perform convex hull search
-        top_volumes_all_inks = inkset_library.convex_hull_search(tetrachromat, d65, k=args.k)
+        top_volumes_all_inks = inkset_library.convex_hull_search(tetrachromat, d65, top=args.top_volume_k, k=args.k)
 
         # Save top volumes as CSV
         save_top_inks_as_csv(top_volumes_all_inks, os.path.join(
@@ -110,9 +108,6 @@ def analyze_ink_library(library_name: str, args):
             results_dir, f"top_k_combinations_k{args.k}_{library_name}.png"))
 
         best4_inks = [inkset_library.library[ink_name] for ink_name in top_volumes_all_inks[0][1]]
-
-        import pdb
-        pdb.set_trace()
 
         top_d_inks = get_top_n_inks(top_volumes_all_inks, top_d_inks=args.top_d_inks)
 
@@ -217,6 +212,7 @@ def main():
     parser.add_argument('library_name', help='Name of the ink library to analyze')
     parser.add_argument('--k', type=int, default=4, help='Number of inks to show')
     parser.add_argument('--top_d_inks', type=int, default=20, help='Number of top inks to show')
+    parser.add_argument('--top_volume_k', type=int, default=1000, help='Number of top volume inks to search within')
     parser.add_argument('--output_dir', help='Output directory for results (default: results/{library_name}_k{k})')
 
     # Add observer and visualization arguments

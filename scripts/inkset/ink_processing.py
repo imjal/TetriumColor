@@ -143,6 +143,121 @@ def convert_nix_to_csv(input_path: str, library_name: str, output_dir: Optional[
     return output_path
 
 
+def _parse_names_file(names_file: str) -> List[str]:
+    """
+    Parse a text file containing ink names. Supports two common formats:
+    1) Simple one-name-per-line
+    2) Ranked lists like " 1. Ink Name" possibly with headers.
+
+    Returns a deduplicated list preserving first-seen order.
+    """
+    import re
+
+    names: List[str] = []
+    seen = set()
+
+    with open(names_file, 'r') as f:
+        for raw in f:
+            line = raw.strip()
+            if not line:
+                continue
+            # Skip obvious headers/underlines
+            lower = line.lower()
+            if lower.startswith('top ') or set(line) == {'='}:
+                continue
+
+            # Match numbered format: " 12. Name here"
+            m = re.match(r"^\s*\d+\.\s*(.+)$", line)
+            if m:
+                candidate = m.group(1).strip()
+            else:
+                candidate = line
+
+            if candidate and candidate not in seen:
+                seen.add(candidate)
+                names.append(candidate)
+
+    return names
+
+
+def filter_library_by_names(source_library: str, output_name: str, names_file: str,
+                            filter_clogged: bool = True) -> str:
+    """
+    Create a filtered ink library that contains only the inks listed in names_file.
+
+    Args:
+        source_library: Name of an existing library in the registry to filter.
+        output_name: Name for the new filtered library (e.g., fp_top40).
+        names_file: Path to a text file listing ink names to keep.
+        filter_clogged: Whether to filter clogged inks when loading source.
+
+    Returns:
+        Path to the created CSV file for the filtered library.
+    """
+    # Resolve and load the source library
+    if not registry.library_exists(source_library):
+        raise ValueError(f"Library '{source_library}' not found")
+
+    source_path = registry.resolve_library_path(source_library)
+    library, paper, wavelengths = load_inkset(source_path, filter_clogged=filter_clogged)
+
+    # Parse names to keep
+    names_to_keep = _parse_names_file(names_file)
+    if not names_to_keep:
+        raise ValueError(f"No ink names found in {names_file}")
+
+    # Build filtered library, preserving order from names_to_keep
+    filtered: Dict[str, Spectra] = {}
+    missing: List[str] = []
+    for name in names_to_keep:
+        if name in library:
+            filtered[name] = library[name]
+        else:
+            missing.append(name)
+
+    if not filtered:
+        raise ValueError("None of the requested names were found in the source library")
+
+    # Set up output
+    output_dir = f"data/inksets/{output_name}"
+    os.makedirs(output_dir, exist_ok=True)
+    output_path = os.path.join(output_dir, f"{output_name}-inks.csv")
+
+    # Create DataFrame in the standard format (including a paper row)
+    ink_names = list(filtered.keys())
+    reflectance_data = np.array([filtered[name].data for name in ink_names] + [paper.data])
+
+    df = pd.DataFrame(reflectance_data, index=ink_names + ["paper"], columns=wavelengths)
+    df.index.name = "Name"
+    df = df.reset_index()
+    df.insert(0, 'ID', range(1, len(df) + 1))
+    df['clogged'] = 0
+    df.to_csv(output_path, index=False)
+
+    # Register the new filtered library
+    registry.register_library(
+        output_name,
+        f"{output_name}/{output_name}-inks.csv",
+        {
+            "created": "filtered",
+            "source_library": source_library,
+            "names_file": os.path.abspath(names_file),
+            "filter_clogged": filter_clogged,
+            "requested": len(names_to_keep),
+            "kept": len(filtered),
+            "missing": missing,
+        }
+    )
+
+    print(f"Filtered {len(filtered)} inks (missing {len(missing)}) from '{source_library}' into {output_path}")
+    if missing:
+        print("Missing names not found in source:")
+        for n in missing:
+            print(f"  - {n}")
+
+    return output_path
+
+
 def combine_libraries(library_names: List[str], output_name: str,
                       prefixes: Optional[List[str]] = None, paper_source: str = "first",
                       filter_clogged: bool = True) -> str:
@@ -302,6 +417,8 @@ def create_library_from_files(library_name: str, input_files: List[str],
     wavelengths = paper_spectra.wavelengths
     reflectance_data = np.array([all_spectra[name].data for name in ink_names] + [paper_spectra.data])
 
+    # Remove trailing spaces from all ink_names
+    ink_names = [name.rstrip() for name in ink_names]
     # Create DataFrame
     df = pd.DataFrame(reflectance_data, index=ink_names + ["paper"], columns=wavelengths)
     df.index.name = "Name"
@@ -372,6 +489,15 @@ def main():
                                help='Filter out clogged inks (default: True)')
     create_parser.add_argument('--no-filter-clogged', action='store_true', help='Do not filter out clogged inks')
 
+    # Filter command
+    filter_parser = subparsers.add_parser('filter', help='Filter an ink library to a subset by names file')
+    filter_parser.add_argument('source_library', help='Existing library name in registry to filter')
+    filter_parser.add_argument('names_file', help='Path to a text file of ink names to keep')
+    filter_parser.add_argument('output_name', help='Name for the new filtered library')
+    filter_parser.add_argument('--filter-clogged', action='store_true', default=True,
+                               help='Filter out clogged inks when loading source (default: True)')
+    filter_parser.add_argument('--no-filter-clogged', action='store_true', help='Do not filter out clogged inks')
+
     # List command
     list_parser = subparsers.add_parser('list', help='List all available ink libraries')
 
@@ -433,6 +559,14 @@ def main():
                 input_files,
                 args.paper_file,
                 args.format,
+                filter_clogged
+            )
+
+        elif args.command == 'filter':
+            filter_library_by_names(
+                args.source_library,
+                args.output_name,
+                args.names_file,
                 filter_clogged
             )
 
