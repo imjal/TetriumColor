@@ -10,7 +10,7 @@ import tetrapolyscope as ps
 
 import TetriumColor.Visualization as viz
 from TetriumColor import ColorSpace, ColorSpaceType, PolyscopeDisplayType
-from TetriumColor.Observer import Observer, Spectra, InkGamut, Illuminant, InkLibrary, load_top_inks, show_top_k_combinations, InkLibrary, plot_inks_by_hue, save_top_inks_as_csv, load_all_ink_libraries
+from TetriumColor.Observer import Observer, Spectra, InkGamut, Illuminant, InkLibrary, load_top_inks, show_top_k_combinations, InkLibrary, plot_inks_by_hue, save_top_inks_as_csv, load_all_ink_libraries, combine_inksets
 
 
 # %load_ext autoreload
@@ -65,14 +65,31 @@ if __name__ == "__main__":
     tetrachromat = Observer.tetrachromat(wavelengths=np.arange(400, 710, 10))
     cs = ColorSpace(tetrachromat)
 
+    # Example 1: Load individual inksets
     inkset_dict = {
         # "Ansari": "../../data/inksets/ansari/ansari-inks.csv",
         # "FP": "../../data/inksets/fp_inks/all_inks.csv",
-        "FP_Ansari": "../../data/inksets/combined/combined_inks_filtered.csv",
-    }  # "../../data/inksets/fp_inks/all_inks.csv",
+        "FP_XP15000": "../../data/inksets/combined/combined_inks_filtered.csv",
+    }  # "../../data/inksets/fp_inks/all_inks.csv"
+
+    # Example 2: Combine multiple inksets into one
+    # Uncomment the following lines to combine inksets instead of loading individual ones:
+    combined_inkset_paths = [
+        "../../data/inksets/ansari/ansari-inks.csv",
+        "../../data/inksets/fp_inks/all_inks.csv",
+    ]
+    combined_inkset = combine_inksets(
+        inkset_paths=combined_inkset_paths,
+        output_path="../../data/inksets/combined/my_combined_inks.csv",
+        name_prefixes=["ansari", "fp"],  # Optional: add prefixes to avoid name conflicts
+        paper_source="first"  # Use paper from first inkset
+    )
+    inkset_dict = {"Combined": combined_inkset}
+
     inksets = load_all_ink_libraries(inkset_dict)
 
     for inkset_name, inkset_library in inksets.items():
+
         # Create results directory for this inkset
         results_dir = f"results/{inkset_name}_k{args.k}"
         os.makedirs(results_dir, exist_ok=True)
@@ -90,12 +107,12 @@ if __name__ == "__main__":
             results_dir, f"top_volumes_k{args.k}_{inkset_name}.csv"))
 
         # Show top k combinations (this creates plots)
-        show_top_k_combinations(top_volumes_all_inks, inkset_library.library, k=4, filename=os.path.join(
+        show_top_k_combinations(top_volumes_all_inks, inkset_library.library, k=16, filename=os.path.join(
             results_dir, f"top_k_combinations_k{args.k}_{inkset_name}.png"))
 
         best4_inks = [inkset_library.library[ink_name] for ink_name in top_volumes_all_inks[0][1]]
 
-        top_d_inks = get_top_n_inks(top_volumes_all_inks, n=args.top_d_inks)
+        top_d_inks = get_top_n_inks(top_volumes_all_inks, top_d_inks=args.top_d_inks)
 
         # Plot all top 20 inks by hue
         plot_inks_by_hue(

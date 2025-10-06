@@ -941,7 +941,7 @@ class FastNeugebauer:
         return np.sqrt(pca.explained_variance_)[-1]
 
 
-def load_inkset(filepath, filter_clogged: bool = True) -> Tuple[Dict[str, Spectra], Spectra, npt.NDArray]:
+def load_inkset(filepath: str, filter_clogged: bool = True) -> Tuple[Dict[str, Spectra], Spectra, npt.NDArray]:
     """
     Load an inkset from a CSV file. CSV file should have the following structure:
     - First column: Index (e.g., 0, 1, 2, etc.)
@@ -955,7 +955,7 @@ def load_inkset(filepath, filter_clogged: bool = True) -> Tuple[Dict[str, Spectr
 
     Returns:
     - inks: dict, a dictionary of ink names and their corresponding Spectra objects.
-    - paper: Spectra, the paper spectra.
+    - paper: Optional[Spectra], the paper spectra if present in the CSV; otherwise None.
     - wavelengths: npt.NDArray, an array of wavelengths corresponding to the reflectance data.
 
     Raises:
@@ -1022,16 +1022,123 @@ def load_inkset(filepath, filter_clogged: bool = True) -> Tuple[Dict[str, Spectr
         inks[name] = spectra_obj
 
     if paper is None:
-        raise ValueError("The inkset must contain a 'paper' ink.")
+        raise ValueError("No paper spectra found in inkset CSV.")
 
+    # Paper may be managed outside of this file (e.g., via registry). Do not error if missing.
     return inks, paper, wavelengths
 
 
-def load_all_ink_libraries(ink_libraries: Dict[str, str], filter_clogged: bool = True) -> Tuple[Dict[str, Spectra], Spectra, npt.NDArray]:
+def load_all_ink_libraries(ink_libraries: Dict[str, str], filter_clogged: bool = True) -> Dict[str, InkLibrary]:
     inksets = {}
     for name, path in ink_libraries.items():
         inksets[name] = InkLibrary.load_ink_library(path, filter_clogged=filter_clogged)
     return inksets
+
+
+def combine_inksets(inkset_paths: List[str], output_path: str = None, filter_clogged: bool = True,
+                    name_prefixes: List[str] = None, paper_source: str = "first") -> InkLibrary:
+    """
+    Combine multiple inkset CSV files into a single InkLibrary.
+
+    Args:
+        inkset_paths (List[str]): List of paths to inkset CSV files to combine
+        output_path (str, optional): Path to save the combined CSV file. If None, no file is saved.
+        filter_clogged (bool): Whether to filter out clogged inks. Defaults to True.
+        name_prefixes (List[str], optional): Prefixes to add to ink names to avoid conflicts.
+                                            If None, uses file basenames as prefixes.
+        paper_source (str): Which inkset to use for paper spectra. Options: "first", "last", or specific inkset name.
+
+    Returns:
+        InkLibrary: Combined ink library containing all inks from all inksets.
+
+    Raises:
+        ValueError: If inksets have incompatible wavelength ranges or if paper_source is invalid.
+    """
+    if not inkset_paths:
+        raise ValueError("At least one inkset path must be provided")
+
+    # Load all inksets
+    inksets = {}
+    for path in inkset_paths:
+        inkset_name = os.path.splitext(os.path.basename(path))[0]
+        inksets[inkset_name] = InkLibrary.load_ink_library(path, filter_clogged=filter_clogged)
+
+    # Determine which inkset to use for paper
+    if paper_source == "first":
+        paper_inkset = inksets[list(inksets.keys())[0]]
+    elif paper_source == "last":
+        paper_inkset = inksets[list(inksets.keys())[-1]]
+    elif paper_source in inksets:
+        paper_inkset = inksets[paper_source]
+    else:
+        raise ValueError(f"Invalid paper_source: {paper_source}. Must be 'first', 'last', or a valid inkset name.")
+
+    # Check wavelength compatibility
+    reference_wavelengths = paper_inkset.wavelengths
+    for name, inkset in inksets.items():
+        if not np.array_equal(inkset.wavelengths, reference_wavelengths):
+            raise ValueError(f"Inkset {name} has incompatible wavelengths with reference inkset")
+
+    # Combine all inks
+    combined_library = {}
+    name_prefixes = name_prefixes or list(inksets.keys())
+
+    if len(name_prefixes) != len(inkset_paths):
+        raise ValueError("Number of name_prefixes must match number of inkset_paths")
+
+    for i, (inkset_name, inkset) in enumerate(inksets.items()):
+        prefix = name_prefixes[i]
+        for ink_name, ink_spectra in inkset.library.items():
+            # Skip paper from non-reference inksets
+            if ink_name.lower() == "paper" and inkset != paper_inkset:
+                continue
+
+            # Add prefix to avoid name conflicts
+            prefixed_name = f"{prefix}_{ink_name}" if prefix else ink_name
+            combined_library[prefixed_name] = ink_spectra
+
+    # Create combined InkLibrary
+    combined_inkset = InkLibrary(combined_library, paper_inkset.get_paper())
+
+    # Save to CSV if output path is provided
+    if output_path:
+        save_combined_inkset_to_csv(combined_inkset, output_path)
+        print(f"Combined inkset saved to: {output_path}")
+
+    print(f"Combined {len(inksets)} inksets into {len(combined_library)} inks")
+    return combined_inkset
+
+
+def save_combined_inkset_to_csv(inkset: InkLibrary, output_path: str):
+    """
+    Save a combined inkset to a CSV file in the standard format.
+
+    Args:
+        inkset (InkLibrary): The inkset to save
+        output_path (str): Path where to save the CSV file
+    """
+    # Create DataFrame with ink names as rows and wavelengths as columns
+    ink_names = list(inkset.library.keys())
+    wavelengths = inkset.wavelengths
+
+    # Prepare data matrix
+    reflectance_data = np.array([inkset.library[name].data for name in ink_names])
+
+    # Create DataFrame
+    df = pd.DataFrame(reflectance_data, index=ink_names, columns=wavelengths)
+    df.index.name = "Name"
+
+    # Reset index to make Name a column
+    df = df.reset_index()
+
+    # Add Index column
+    df.insert(0, 'Index', range(len(df)))
+
+    # Add clogged column (all False/0 for combined inksets)
+    df['clogged'] = 0
+
+    # Save to CSV
+    df.to_csv(output_path, index=False)
 
 
 def save_top_inks_as_csv(top_volumes, filename):
@@ -1079,12 +1186,22 @@ def plot_inks_by_hue(ink_dataset: Dict[str, Spectra], wavelengths: npt.NDArray, 
     # Sort inks by hue
     sorted_inks = sorted(ink_dataset.items(), key=lambda item: get_hue(item[1]))
 
-    # Plot sorted inks row by row by hue
     num_inks = len(sorted_inks)
-    cols = math.ceil(math.sqrt(num_inks))
-    rows = math.ceil(num_inks / cols)
 
-    plt.figure(figsize=(15, 15))
+    # Dynamically determine grid size to fit all spectra
+    # Try to make the grid as square as possible, but always enough to fit all
+    if num_inks <= 4:
+        cols = num_inks
+        rows = 1
+    else:
+        cols = math.ceil(math.sqrt(num_inks))
+        rows = math.ceil(num_inks / cols)
+        # If the grid is too wide, limit columns to 8 and adjust rows accordingly
+        if cols > 8:
+            cols = 8
+            rows = math.ceil(num_inks / cols)
+
+    plt.figure(figsize=(cols * 3, rows * 2.5))
 
     for idx, (name, spectra) in enumerate(sorted_inks):
         plt.subplot(rows, cols, idx + 1)
