@@ -332,10 +332,17 @@ class CellNeugebauer:
 
 
 class Neugebauer:
-    def __init__(self, primaries_dict: Optional[Dict[Union[Tuple, str], Spectra]], n=2):
+    def __init__(self, primaries_dict: Optional[Dict[Union[Tuple, str], Spectra]], n=2,
+                 trc_gammas: Optional[npt.NDArray] = None, residual_scale: Optional[npt.NDArray] = None):
         """
         primaries_dict is (key, value) pairs where the key is either a
         string of binary digits or a tuple of binary values, and value is a Spectra.
+
+        Args:
+            primaries_dict: Dictionary mapping binary keys to Spectra objects
+            n: Yule-Nielsen n parameter (scalar or array)
+            trc_gammas: Per-ink TRC gamma values for tone->area conversion
+            residual_scale: Per-wavelength residual scaling factors
         """
         weights = []
         spectras = []
@@ -353,6 +360,34 @@ class Neugebauer:
             assert len(n) == len(self.wavelengths)
 
         self.n = n
+        self.trc_gammas = trc_gammas
+        self.residual_scale = residual_scale
+
+    def _apply_trc_gamma(self, levels_0_255: npt.NDArray) -> npt.NDArray:
+        """Apply TRC gamma correction to ink levels."""
+        if self.trc_gammas is None:
+            return levels_0_255 / 255.0
+
+        t = np.clip(levels_0_255 / 255.0, 0.0, 1.0)
+        g = np.clip(self.trc_gammas, 0.1, 5.0)
+        return np.power(t, g)
+
+    def mix_from_levels(self, levels_0_255: npt.NDArray) -> npt.NDArray:
+        """Mix using ink levels (0-255) with TRC gamma correction."""
+        if levels_0_255.shape[0] != self.num_inks:
+            raise ValueError("Levels vector length does not match number of inks")
+
+        # Apply TRC gamma to convert levels to area coverages
+        percentages = self._apply_trc_gamma(levels_0_255)
+
+        # Use standard mixing
+        result = self.mix(percentages)
+
+        # Apply residual scaling if available
+        if self.residual_scale is not None:
+            result = np.clip(result * self.residual_scale, 0.0, 1.0)
+
+        return result
 
     def batch_mix(self, percentages: npt.NDArray) -> npt.NDArray:
         w_p = ((self.weights_array * percentages[:, np.newaxis, :]) +
@@ -396,7 +431,9 @@ class InkGamut:
                  paper: Optional[Spectra] = None,
                  illuminant: Optional[Union[Spectra, npt.NDArray]] = None,
                  trc_gammas: Optional[npt.NDArray] = None,
-                 n_param: Optional[float] = None):
+                 n_param: Optional[float] = None,
+                 residual_scale: Optional[npt.NDArray] = None,
+                 calibration_json: Optional[str] = None):
         if isinstance(inks, Dict):
             inks = Neugebauer(inks)
         if isinstance(inks, Neugebauer) or isinstance(inks, CellNeugebauer):
@@ -423,20 +460,52 @@ class InkGamut:
         for ink in inks:
             assert np.array_equal(ink.wavelengths, self.wavelengths)
 
-        self.neugebauer = load_neugebauer(inks, paper)  # KM interpolation
+        # Load calibration parameters from JSON if provided
+        if calibration_json is not None:
+            import json
+            with open(calibration_json, 'r') as f:
+                calibration = json.load(f)
 
-        # Printer-specific parameters
-        self.trc_gammas = trc_gammas
-        self.n_param = n_param
+            # Override parameters with calibration values
+            n_param = calibration.get('n', n_param)
+            if calibration.get('gammas_by_ch'):
+                trc_gammas = np.array(list(calibration['gammas_by_ch'].values()))
+            if calibration.get('residual_scale'):
+                residual_scale = np.array(calibration['residual_scale'])
+
+        # Create Neugebauer with calibration parameters
+        primaries_dict = {'0' * len(inks): paper}
+        for i, ink in enumerate(inks):
+            key = '0' * i + '1' + '0' * (len(inks) - i - 1)
+            primaries_dict[key] = ink
+
+        self.neugebauer = Neugebauer(primaries_dict, n=n_param or 2.0,
+                                     trc_gammas=trc_gammas,
+                                     residual_scale=residual_scale)
 
         # Inverse mapping cache
         self._inverse_mapping_cache = {}
         self._interpolator = None
 
-    def get_spectra(self, percentages: Union[List, npt.NDArray], clip=False):
+    def get_spectra(self, percentages: Union[List, npt.NDArray], clip=False, use_levels=True):
+        """
+        Get spectra from ink percentages or levels.
+
+        Args:
+            percentages: Ink percentages (0-1) or levels (0-255) if use_levels=True
+            clip: Whether to clip output to [0,1]
+            use_levels: If True, treat input as levels (0-255) and apply TRC gamma
+        """
         if not isinstance(percentages, np.ndarray):
             percentages = np.array(percentages)
-        data = self.neugebauer.mix(percentages).T
+
+        if use_levels:
+            # Use calibrated mixing with TRC gamma
+            data = self.neugebauer.mix_from_levels(percentages).T
+        else:
+            # Use standard mixing
+            data = self.neugebauer.mix(percentages).T
+
         if clip:
             data = np.clip(data, 0, 1)
         return Spectra(data=data, wavelengths=self.wavelengths, normalized=clip)
@@ -608,15 +677,6 @@ class InkGamut:
             print(f"maximum distance is {dst} with percentages {pi} and {pj}")
 
         return dst
-
-    def _apply_trc_gamma(self, levels_0_255: npt.NDArray) -> npt.NDArray:
-        """Apply TRC gamma correction to ink levels."""
-        if self.trc_gammas is None:
-            return levels_0_255 / 255.0
-
-        t = np.clip(levels_0_255 / 255.0, 0.0, 1.0)
-        g = np.clip(self.trc_gammas, 0.1, 5.0)
-        return np.power(t, g)
 
     def _get_cache_key(self, observer: Union[Observer, npt.NDArray],
                        grid_resolution: float) -> str:
@@ -794,12 +854,12 @@ class InkGamut:
         grid_combinations = np.array(list(product(values, repeat=self.neugebauer.num_inks)))
 
         # Compute LMS responses for grid points
-        if self.trc_gammas is not None:
-            grid_gamma = self._apply_trc_gamma(grid_combinations * 255.0)
+        if hasattr(self.neugebauer, 'trc_gammas') and self.neugebauer.trc_gammas is not None:
+            # Use calibrated Neugebauer with TRC gamma
+            grid_lms = self.neugebauer.observe(grid_combinations * 255.0, sensor_matrix, self.illuminant)
         else:
-            grid_gamma = grid_combinations
-
-        grid_lms = self.neugebauer.observe(grid_gamma, sensor_matrix, self.illuminant)
+            # Use standard mixing
+            grid_lms = self.neugebauer.observe(grid_combinations, sensor_matrix, self.illuminant)
 
         # Build KDTree for fast nearest neighbor search
         kdtree = cKDTree(grid_lms)
@@ -821,14 +881,13 @@ class InkGamut:
                 def objective(primaries_vec):
                     primaries_vec = np.clip(primaries_vec, 0, 1)
 
-                    # Apply TRC gamma if available
-                    if self.trc_gammas is not None:
-                        primaries_gamma = self._apply_trc_gamma(primaries_vec * 255.0)
+                    # Use calibrated Neugebauer if available
+                    if hasattr(self.neugebauer, 'trc_gammas') and self.neugebauer.trc_gammas is not None:
+                        # Use calibrated mixing with TRC gamma
+                        predicted_lms = self.neugebauer.observe(primaries_vec * 255.0, sensor_matrix, self.illuminant)
                     else:
-                        primaries_gamma = primaries_vec
-
-                    # Get LMS response
-                    predicted_lms = self.neugebauer.observe(primaries_gamma, sensor_matrix, self.illuminant)
+                        # Use standard mixing
+                        predicted_lms = self.neugebauer.observe(primaries_vec, sensor_matrix, self.illuminant)
 
                     # Return MSE between target and predicted LMS
                     return np.sum((target_lms - predicted_lms)**2)
@@ -875,12 +934,12 @@ class InkGamut:
         grid_combinations = np.array(list(product(values, repeat=self.neugebauer.num_inks)))
 
         # Compute LMS responses for grid points
-        if self.trc_gammas is not None:
-            grid_gamma = self._apply_trc_gamma(grid_combinations * 255.0)
+        if hasattr(self.neugebauer, 'trc_gammas') and self.neugebauer.trc_gammas is not None:
+            # Use calibrated Neugebauer with TRC gamma
+            grid_lms = self.neugebauer.observe(grid_combinations * 255.0, sensor_matrix, self.illuminant)
         else:
-            grid_gamma = grid_combinations
-
-        grid_lms = self.neugebauer.observe(grid_gamma, sensor_matrix, self.illuminant)
+            # Use standard mixing
+            grid_lms = self.neugebauer.observe(grid_combinations, sensor_matrix, self.illuminant)
 
         # Build KDTree for fast nearest neighbor search
         kdtree = cKDTree(grid_lms)

@@ -11,7 +11,8 @@ Notes:
 - Prediction/export functionality is intentionally omitted for now.
 """
 
-from TetriumColor.Observer.Inks import InkGamut, Neugebauer
+from TetriumColor.Observer import Observer, Illuminant
+from TetriumColor.Observer.Inks import InkGamut, Neugebauer, km_mix, k_s_from_data, data_from_k_s
 from TetriumColor.Observer.Inks import load_inkset as load_inkset_csv
 from TetriumColor.Observer.Spectra import Spectra
 from TetriumColor.Measurement.Nix import read_nix_csv
@@ -75,7 +76,321 @@ def parse_combo_name(name: str, channels: List[str]) -> np.ndarray:
     return np.array([levels[ch] for ch in channels], dtype=float)
 
 
+# -------- Helpers for new calibration pipeline --------
+
+def is_single_channel_name(name: str, channels: List[str]) -> bool:
+    try:
+        v = parse_combo_name(name, channels)
+    except Exception:
+        return False
+    nonzero = np.count_nonzero(v)
+    return nonzero > 0 and np.count_nonzero(v > 0) == 1
+
+
+def is_binary_solid(name: str, channels: List[str]) -> bool:
+    try:
+        v = parse_combo_name(name, channels)
+    except Exception:
+        return False
+    # All channels either 0 or 255, and not all zeros
+    if np.any((v != 0) & (v != 255)):
+        return False
+    return np.any(v == 255)
+
+
+def combo_to_binary_key(levels_vec_0_255: np.ndarray) -> str:
+    return ''.join('1' if x >= 255 else '0' for x in levels_vec_0_255.astype(int))
+
+
+def estimate_area_from_murray_davies(R_meas: np.ndarray, R_paper: np.ndarray, R_solid: np.ndarray, n: float) -> float:
+    # Work in Yule–Nielsen domain; average across wavelengths
+    Rp = np.power(np.clip(R_paper, 1e-6, 1.0), 1.0 / n)
+    Rs = np.power(np.clip(R_solid, 1e-6, 1.0), 1.0 / n)
+    Rm = np.power(np.clip(R_meas, 1e-6, 1.0), 1.0 / n)
+    denom = (Rs - Rp)
+    denom = np.where(np.abs(denom) < 1e-9, 1e-9, denom)
+    a_wl = (Rm - Rp) / denom
+    a = float(np.clip(np.nanmedian(a_wl), 0.0, 1.0))
+    return a
+
+
+def fit_tone_to_area_gammas(channels: List[str], combos: Dict[str, Spectra], paper: Spectra,
+                            n_assumed: float = 2.0) -> Dict[str, float]:
+    """Fit per-ink gamma for tone->area using single-ink ramps.
+
+    For each ink channel, use single-channel patches (varying that ink only) to
+    estimate dot area via Murray–Davies with an assumed n, then fit a gamma a=t^g.
+    """
+    gammas: Dict[str, float] = {}
+    # Find solid spectra per channel (255)
+    solid_by_ch: Dict[str, Spectra] = {}
+    for ch in channels:
+        best = None
+        best_lvl = -1
+        for name, sp in combos.items():
+            m = PRIMARY_RE.match(name.strip())
+            if m and m.group(1) == ch:
+                lvl = int(m.group(2))
+                if lvl > best_lvl:
+                    best_lvl = lvl
+                    best = sp
+        if best is None or best_lvl <= 0:
+            raise ValueError(f"Missing solid for channel {ch}")
+        solid_by_ch[ch] = best
+
+    wavelengths = paper.wavelengths
+    Rp = paper.interpolate_values(wavelengths).data
+
+    from scipy.optimize import minimize_scalar
+
+    for ch in channels:
+        # Collect (t, a_est)
+        samples_t: List[float] = []
+        samples_a: List[float] = []
+        Rs = solid_by_ch[ch].interpolate_values(wavelengths).data
+
+        for name, sp in combos.items():
+            if not is_single_channel_name(name, channels):
+                continue
+            levels = parse_combo_name(name, channels)
+            # Only this channel nonzero
+            idx = channels.index(ch)
+            if np.count_nonzero(levels) == 0 or np.count_nonzero(levels > 0) != 1 or levels[idx] == 0:
+                continue
+            t = float(np.clip(levels[idx] / 255.0, 0.0, 1.0))
+            Rm = sp.interpolate_values(wavelengths).data
+            a_hat = estimate_area_from_murray_davies(Rm, Rp, Rs, n_assumed)
+            samples_t.append(t)
+            samples_a.append(a_hat)
+
+        if len(samples_t) < 3:
+            # fallback gamma 1.0
+            gammas[ch] = 1.0
+            continue
+
+        t_arr = np.array(samples_t)
+        a_arr = np.array(samples_a)
+
+        def loss(g):
+            g = np.clip(g, 0.1, 5.0)
+            pred = np.power(t_arr, g)
+            return float(np.mean((pred - a_arr) ** 2))
+
+        res = minimize_scalar(loss, bounds=(0.1, 5.0), method='bounded')
+        gammas[ch] = float(np.clip(res.x if res.success else 1.0, 0.1, 5.0))
+
+    return gammas
+
+
+def build_neugebauer_from_measurements(channels: List[str], combos: Dict[str, Spectra], paper: Spectra,
+                                       prefer_overprints: bool = True) -> Tuple[Neugebauer, np.ndarray]:
+    """Construct a Neugebauer from measured paper/single solids and any measured overprint solids.
+
+    Returns the Neugebauer and the wavelengths used.
+    """
+    wavelengths = paper.wavelengths
+
+    # Start with paper and single solids
+    primaries_dict: Dict[str, Spectra] = {}
+    primaries_dict['0' * len(channels)] = paper
+
+    # Singles
+    for ch in channels:
+        # Choose max available level for this channel as solid
+        best = None
+        best_lvl = -1
+        for name, sp in combos.items():
+            m = PRIMARY_RE.match(name.strip())
+            if m and m.group(1) == ch:
+                lvl = int(m.group(2))
+                if lvl > best_lvl:
+                    best_lvl = lvl
+                    best = sp
+        if best is None or best_lvl <= 0:
+            raise ValueError(f"Missing solid for channel {ch}")
+        key_vec = np.zeros(len(channels), dtype=int)
+        key_vec[channels.index(ch)] = 1
+        primaries_dict[''.join(map(str, key_vec.tolist()))] = best.interpolate_values(wavelengths)
+
+    # Overprint solids (exact 0/255 per channel)
+    if prefer_overprints:
+        for name, sp in combos.items():
+            try:
+                levels = parse_combo_name(name, channels)
+            except Exception:
+                continue
+            if not np.all((levels == 0) | (levels == 255)):
+                continue
+            if not np.any(levels == 255):
+                continue
+            key = combo_to_binary_key(levels)
+            # Skip singles and paper (already present)
+            if key in primaries_dict and key.count('1') <= 1:
+                continue
+            primaries_dict[key] = sp.interpolate_values(wavelengths)
+
+    neug = Neugebauer(primaries_dict, n=2.0)
+    return neug, wavelengths
+
+
+def predict_with_model(neug: Neugebauer, levels_vec_0_255: np.ndarray,
+                       channels: List[str], gammas_by_ch: Dict[str, float],
+                       residual_scale: Optional[np.ndarray] = None) -> np.ndarray:
+    # tone->area per ink using fitted gamma
+    a = []
+    for i, ch in enumerate(channels):
+        t = np.clip(levels_vec_0_255[i] / 255.0, 0.0, 1.0)
+        g = float(gammas_by_ch.get(ch, 1.0))
+        a.append(np.power(t, np.clip(g, 0.1, 5.0)))
+    a = np.array(a)
+    pred = neug.mix(a).reshape(-1)
+    if residual_scale is not None:
+        pred = np.clip(pred * residual_scale, 0.0, 1.0)
+    return pred
+
+
+def fit_global_n(neug: Neugebauer, train_X: np.ndarray, train_Y: np.ndarray, channels: List[str],
+                 gammas_by_ch: Dict[str, float], wavelengths: np.ndarray,
+                 n_bounds: Tuple[float, float] = (1.0, 3.0), n_reg: float = 0.0, n_init: float = 2.0) -> float:
+    from scipy.optimize import minimize_scalar
+
+    def objective(n):
+        old_n = neug.n
+        neug.n = float(n)
+        errs = []
+        for i in range(train_X.shape[0]):
+            pred = predict_with_model(neug, train_X[i], channels, gammas_by_ch)
+            errs.append(np.mean((pred - train_Y[i]) ** 2))
+        neug.n = old_n
+        base = float(np.mean(errs))
+        if n_reg > 0:
+            base += float(n_reg) * (float(n) - 2.0) ** 2
+        return base
+
+    res = minimize_scalar(objective, bounds=n_bounds, method='bounded', options={'xatol': 1e-3})
+    n_opt = float(np.clip(res.x if res.success else n_init, n_bounds[0], n_bounds[1]))
+    neug.n = n_opt
+    return n_opt
+
+
+def fit_residual_scale(neug: Neugebauer, train_X: np.ndarray, train_Y: np.ndarray, channels: List[str],
+                       gammas_by_ch: Dict[str, float], wavelengths: np.ndarray,
+                       ridge: float = 1e-3) -> np.ndarray:
+    # Solve per-wavelength multiplicative scale s minimizing sum ||s*pred - y||^2 + ridge||s-1||^2
+    P = []
+    for i in range(train_X.shape[0]):
+        P.append(predict_with_model(neug, train_X[i], channels, gammas_by_ch))
+    P = np.vstack(P)  # N x W
+    Y = train_Y  # N x W
+    num_w = P.shape[1]
+    s = np.ones(num_w)
+    for w in range(num_w):
+        p = P[:, w]
+        y = Y[:, w]
+        num = np.dot(p, y) + ridge * 1.0
+        den = np.dot(p, p) + ridge
+        if den <= 1e-9:
+            s[w] = 1.0
+        else:
+            s[w] = float(np.clip(num / den, 0.8, 1.2))
+    return s
+
+
+def split_train_holdout(indices: List[int], holdout_frac: float, seed: int) -> Tuple[List[int], List[int]]:
+    rng = np.random.default_rng(seed)
+    idx = np.array(indices)
+    rng.shuffle(idx)
+    n_hold = int(round(len(idx) * holdout_frac))
+    hold_idx = idx[:n_hold].tolist()
+    train_idx = idx[n_hold:].tolist()
+    if len(train_idx) == 0:  # ensure non-empty
+        train_idx, hold_idx = hold_idx, []
+    return train_idx, hold_idx
+
+
+def calibrate_from_measurements(measured: Dict[str, Spectra], paper: Spectra,
+                                holdout_frac: float = 0.2, seed: int = 42,
+                                n_min: float = 1.0, n_max: float = 3.0, n_reg: float = 0.0,
+                                enable_residual: bool = True) -> Tuple[Neugebauer, Dict[str, any]]:
+    # Determine channels
+    channels = discover_channels_from_names(list(measured.keys()))
+    if not channels:
+        raise ValueError("Could not infer channels from measurement names")
+
+    # 1) Tone->area: fit per-ink gamma from single-ink ramps
+    gammas_by_ch = fit_tone_to_area_gammas(channels, measured, paper, n_assumed=2.0)
+
+    # 2) Fix primaries from measured W/singles/overprints
+    neug, wavelengths = build_neugebauer_from_measurements(channels, measured, paper, prefer_overprints=True)
+
+    # 3) Prepare datasets: mixed halftones only for fitting n/residual
+    X_list: List[np.ndarray] = []
+    Y_list: List[np.ndarray] = []
+    names: List[str] = []
+    for name, sp in measured.items():
+        try:
+            lv = parse_combo_name(name, channels)
+        except Exception:
+            continue
+        # skip pure paper and pure solids (used as primaries), and single-channel-only
+        if np.all(lv == 0):
+            continue
+        if np.all((lv == 0) | (lv == 255)):
+            continue
+        if np.count_nonzero(lv > 0) == 1:
+            continue
+        X_list.append(lv)
+        Y_list.append(sp.interpolate_values(wavelengths).data)
+        names.append(name)
+    if not X_list:
+        raise ValueError("No mixed halftone samples found for fitting")
+    X = np.stack(X_list, axis=0)
+    Y = np.stack(Y_list, axis=0)
+
+    # Train/holdout split
+    train_idx, hold_idx = split_train_holdout(list(range(X.shape[0])), holdout_frac, seed)
+    Xtr, Ytr = X[train_idx], Y[train_idx]
+    Xho, Yho = (X[hold_idx], Y[hold_idx]) if len(hold_idx) else (None, None)
+
+    # 4) Fit n
+    n_opt = fit_global_n(neug, Xtr, Ytr, channels, gammas_by_ch, wavelengths, (n_min, n_max), n_reg, n_init=2.0)
+
+    # 5) Optional residual model
+    residual_scale = fit_residual_scale(neug, Xtr, Ytr, channels, gammas_by_ch,
+                                        wavelengths) if enable_residual else None
+
+    # Metrics
+    def rmse(pred, gt):
+        return float(np.sqrt(np.mean((pred - gt) ** 2)))
+
+    train_errs = []
+    for i in range(Xtr.shape[0]):
+        pr = predict_with_model(neug, Xtr[i], channels, gammas_by_ch, residual_scale)
+        train_errs.append(rmse(pr, Ytr[i]))
+    hold_errs = []
+    if Xho is not None:
+        for i in range(Xho.shape[0]):
+            pr = predict_with_model(neug, Xho[i], channels, gammas_by_ch, residual_scale)
+            hold_errs.append(rmse(pr, Yho[i]))
+
+    model = {
+        "channels": channels,
+        "gammas_by_ch": gammas_by_ch,
+        "n": float(neug.n),
+        "residual_scale": residual_scale.tolist() if residual_scale is not None else None,
+        "wavelengths": wavelengths.tolist(),
+        "train_mean_rmse": float(np.mean(train_errs)) if train_errs else None,
+        "holdout_mean_rmse": float(np.mean(hold_errs)) if hold_errs else None,
+        "num_train": len(train_idx),
+        "num_holdout": len(hold_idx),
+        "names_train": [names[i] for i in train_idx],
+        "names_holdout": [names[i] for i in hold_idx]
+    }
+
+    return neug, model
+
 # -------- Neugebauer wrapper using full-tone primaries --------
+
 
 def select_fulltone_inks(ink_library: Dict[str, Spectra], channels: List[str]) -> List[Spectra]:
     """Pick the highest measured level (prefer 255) per channel to act as Neugebauer inks."""
@@ -177,7 +492,7 @@ def generate_calibration_report(library_name: str, original_params: dict, calibr
             <h1>Calibration Report: {library_name}</h1>
             <p>Generated on {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
         </div>
-        
+
         <div class="section">
             <h2>Summary Metrics</h2>
             <table class="metrics-table">
@@ -202,7 +517,7 @@ def generate_calibration_report(library_name: str, original_params: dict, calibr
                 </tr>
             </table>
         </div>
-        
+
         <div class="section">
             <h2>Parameter Comparison</h2>
             <div class="parameter-comparison">
@@ -218,19 +533,19 @@ def generate_calibration_report(library_name: str, original_params: dict, calibr
                 </div>
             </div>
         </div>
-        
+
         <div class="section">
             <h2>Spectral Comparison Plots</h2>
             <p>Blue: Measured, Red: Original Prediction, Green: Calibrated Prediction</p>
             {spectral_plots}
         </div>
-        
+
         <div class="section">
             <h2>Gamut Visualization</h2>
             <p>Lab color space projections showing measured vs predicted points</p>
             {gamut_plots}
         </div>
-        
+
         <div class="section">
             <h2>Error Analysis</h2>
             {error_plots}
@@ -304,9 +619,8 @@ def generate_gamut_visualization(measured_combos: dict, gamut: InkGamut, channel
                                  wavelengths: np.ndarray, original_params: dict, calibrated_params: dict,
                                  combo_names: List[str]) -> str:
     """Generate gamut visualization plots for HTML report."""
-    from TetriumColor.Observer import Observer, Illuminant
 
-    # Set up observer and illuminant
+ # Set up observer and illuminant
     d65 = Illuminant.get("d65")
     tetrachromat = Observer.tetrachromat(wavelengths=np.arange(400, 710, 10))
 
@@ -776,6 +1090,324 @@ def cmd_calibrate(args):
         )
 
 
+def generate_holdout_visualization(neug: Neugebauer, model: Dict[str, any], combos: Dict[str, Spectra],
+                                   paper: Spectra, output_dir: str = None) -> str:
+    """Generate visualization plots for holdout validation performance."""
+
+    if output_dir is None:
+        output_dir = "results/holdout_validation"
+    os.makedirs(output_dir, exist_ok=True)
+
+    channels = model['channels']
+    gammas_by_ch = model['gammas_by_ch']
+    residual_scale = model.get('residual_scale')
+    wavelengths = np.array(model['wavelengths'])
+    holdout_names = model.get('names_holdout', [])
+
+    if not holdout_names:
+        print("No holdout samples to visualize")
+        return output_dir
+
+    # Calculate errors for all samples (both train and holdout)
+    train_names = model.get('names_train', [])
+    all_train_errors = []
+    all_train_delta_e = []
+    all_holdout_errors = []
+    all_holdout_delta_e = []
+
+    # Training samples
+    for name in train_names:
+        sp_meas = combos[name]
+        levels = parse_combo_name(name, channels)
+        pred = predict_with_model(neug, levels, channels, gammas_by_ch, residual_scale)
+
+        # Interpolate measured to match wavelengths if needed
+        if not np.array_equal(sp_meas.wavelengths, wavelengths):
+            sp_meas = sp_meas.interpolate_values(wavelengths)
+
+        # Calculate errors
+        rmse = float(np.sqrt(np.mean((pred - sp_meas.data) ** 2)))
+        all_train_errors.append(rmse)
+
+        # Calculate delta E
+        sp_pred = Spectra(wavelengths=wavelengths, data=pred)
+        de = Spectra.delta_e(sp_pred, sp_meas)
+        all_train_delta_e.append(de)
+
+    # Holdout samples
+    for name in holdout_names:
+        sp_meas = combos[name]
+        levels = parse_combo_name(name, channels)
+        pred = predict_with_model(neug, levels, channels, gammas_by_ch, residual_scale)
+
+        # Interpolate measured to match wavelengths if needed
+        if not np.array_equal(sp_meas.wavelengths, wavelengths):
+            sp_meas = sp_meas.interpolate_values(wavelengths)
+
+        # Calculate errors
+        rmse = float(np.sqrt(np.mean((pred - sp_meas.data) ** 2)))
+        all_holdout_errors.append(rmse)
+
+        # Calculate delta E
+        sp_pred = Spectra(wavelengths=wavelengths, data=pred)
+        de = Spectra.delta_e(sp_pred, sp_meas)
+        all_holdout_delta_e.append(de)
+
+    # Generate plots
+    fig, axes = plt.subplots(2, 2, figsize=(15, 12))
+
+    # 1. Spectral comparison plots (top-left) - show both train and holdout
+    ax1 = axes[0, 0]
+
+    # Plot training samples (first 3)
+    for i, name in enumerate(train_names[:3]):
+        sp_meas = combos[name]
+        levels = parse_combo_name(name, channels)
+        pred = predict_with_model(neug, levels, channels, gammas_by_ch, residual_scale)
+
+        # Interpolate measured to match wavelengths if needed
+        if not np.array_equal(sp_meas.wavelengths, wavelengths):
+            sp_meas = sp_meas.interpolate_values(wavelengths)
+
+        ax1.plot(wavelengths, sp_meas.data, color=sp_meas.to_rgb(),
+                 alpha=0.7, linewidth=1.5, linestyle='-', label=f'{name} (train meas)')
+        ax1.plot(wavelengths, pred, color=Spectra(wavelengths=wavelengths, data=pred).to_rgb(),
+                 alpha=0.7, linewidth=1.5, linestyle='--', label=f'{name} (train pred)')
+
+    # Plot holdout samples (first 3)
+    for i, name in enumerate(holdout_names[:3]):
+        sp_meas = combos[name]
+        levels = parse_combo_name(name, channels)
+        pred = predict_with_model(neug, levels, channels, gammas_by_ch, residual_scale)
+
+        # Interpolate measured to match wavelengths if needed
+        if not np.array_equal(sp_meas.wavelengths, wavelengths):
+            sp_meas = sp_meas.interpolate_values(wavelengths)
+
+        ax1.plot(wavelengths, sp_meas.data, color=sp_meas.to_rgb(),
+                 alpha=0.5, linewidth=2.0, linestyle='-', label=f'{name} (holdout meas)')
+        ax1.plot(wavelengths, pred, color=Spectra(wavelengths=wavelengths, data=pred).to_rgb(),
+                 alpha=0.5, linewidth=2.0, linestyle=':', label=f'{name} (holdout pred)')
+
+    ax1.set_xlabel('Wavelength (nm)')
+    ax1.set_ylabel('Reflectance')
+    ax1.set_title('Training vs Holdout: Measured vs Predicted Spectra')
+    ax1.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    ax1.grid(True, alpha=0.3)
+    ax1.set_ylim(0, 1)
+
+    # 2. Error distribution (top-right) - show both train and holdout
+    ax2 = axes[0, 1]
+    if (all_train_errors and all_train_delta_e) or (all_holdout_errors and all_holdout_delta_e):
+        # Create dual y-axis plot
+        ax2_twin = ax2.twinx()
+
+        # Plot RMSE histograms for both train and holdout
+        if all_train_errors:
+            ax2.hist(all_train_errors, bins=10, alpha=0.6, color='blue', edgecolor='black',
+                     label=f'Train RMSE (n={len(all_train_errors)})')
+            ax2.axvline(np.mean(all_train_errors), color='darkblue', linestyle='--', linewidth=2,
+                        label=f'Train RMSE Mean: {np.mean(all_train_errors):.4f}')
+
+        if all_holdout_errors:
+            ax2.hist(all_holdout_errors, bins=10, alpha=0.8, color='red', edgecolor='black',
+                     label=f'Holdout RMSE (n={len(all_holdout_errors)})')
+            ax2.axvline(np.mean(all_holdout_errors), color='darkred', linestyle='--', linewidth=2,
+                        label=f'Holdout RMSE Mean: {np.mean(all_holdout_errors):.4f}')
+
+        # Plot Delta E histograms on secondary axis
+        if all_train_delta_e:
+            ax2_twin.hist(all_train_delta_e, bins=10, alpha=0.4, color='lightblue', edgecolor='black',
+                          label=f'Train ΔE (n={len(all_train_delta_e)})')
+            ax2_twin.axvline(np.mean(all_train_delta_e), color='blue', linestyle=':', linewidth=2,
+                             label=f'Train ΔE Mean: {np.mean(all_train_delta_e):.2f}')
+
+        if all_holdout_delta_e:
+            ax2_twin.hist(all_holdout_delta_e, bins=10, alpha=0.6, color='lightgreen', edgecolor='black',
+                          label=f'Holdout ΔE (n={len(all_holdout_delta_e)})')
+            ax2_twin.axvline(np.mean(all_holdout_delta_e), color='green', linestyle=':', linewidth=2,
+                             label=f'Holdout ΔE Mean: {np.mean(all_holdout_delta_e):.2f}')
+
+        ax2.set_xlabel('Error Value')
+        ax2.set_ylabel('Count (RMSE)', color='black')
+        ax2_twin.set_ylabel('Count (ΔE)', color='gray')
+        ax2.set_title('Train vs Holdout Error Distributions')
+
+        # Combine legends
+        lines1, labels1 = ax2.get_legend_handles_labels()
+        lines2, labels2 = ax2_twin.get_legend_handles_labels()
+        ax2.legend(lines1 + lines2, labels1 + labels2, loc='upper right', fontsize=8)
+
+        ax2.grid(True, alpha=0.3)
+
+    # 3. Error vs combination complexity (bottom-left) - show both train and holdout
+    ax3 = axes[1, 0]
+
+    # Calculate complexity for all samples
+    train_complexity = []
+    holdout_complexity = []
+
+    for name in train_names:
+        levels = parse_combo_name(name, channels)
+        active_inks = np.count_nonzero(levels > 0)
+        normalized_sum = np.sum(levels) / 255.0
+        complexity = active_inks + normalized_sum
+        train_complexity.append(complexity)
+
+    for name in holdout_names:
+        levels = parse_combo_name(name, channels)
+        active_inks = np.count_nonzero(levels > 0)
+        normalized_sum = np.sum(levels) / 255.0
+        complexity = active_inks + normalized_sum
+        holdout_complexity.append(complexity)
+
+    if all_train_errors and train_complexity:
+        ax3.scatter(train_complexity, all_train_errors, alpha=0.6, color='blue', s=30, label='Train')
+    if all_holdout_errors and holdout_complexity:
+        ax3.scatter(holdout_complexity, all_holdout_errors, alpha=0.8, color='red', s=50, label='Holdout')
+
+    ax3.set_xlabel('Combination Complexity (active inks + normalized sum)')
+    ax3.set_ylabel('Spectral RMSE')
+    ax3.set_title('Error vs Combination Complexity')
+    ax3.legend()
+    ax3.grid(True, alpha=0.3)
+
+    # 4. Summary metrics table (bottom-right)
+    ax4 = axes[1, 1]
+    ax4.axis('off')
+
+    # Create summary table
+    train_rmse = model.get('train_mean_rmse', 'N/A')
+    holdout_rmse = model.get('holdout_mean_rmse', 'N/A')
+
+    summary_data = [
+        ['Metric', 'Value'],
+        ['Fitted n', f"{model['n']:.4f}"],
+        ['Train RMSE', f"{train_rmse:.5f}" if isinstance(train_rmse, float) else str(train_rmse)],
+        ['Holdout RMSE', f"{holdout_rmse:.5f}" if isinstance(holdout_rmse, float) else str(holdout_rmse)],
+        ['Train samples', str(model.get('num_train', 'N/A'))],
+        ['Holdout samples', str(model.get('num_holdout', 'N/A'))],
+        ['Residual scale', 'Enabled' if residual_scale is not None else 'Disabled']
+    ]
+
+    if all_train_errors:
+        summary_data.extend([
+            ['Train RMSE mean', f"{np.mean(all_train_errors):.5f}"],
+            ['Train RMSE median', f"{np.median(all_train_errors):.5f}"],
+            ['Train RMSE std', f"{np.std(all_train_errors):.5f}"]
+        ])
+
+    if all_holdout_errors:
+        summary_data.extend([
+            ['Holdout RMSE mean', f"{np.mean(all_holdout_errors):.5f}"],
+            ['Holdout RMSE median', f"{np.median(all_holdout_errors):.5f}"],
+            ['Holdout RMSE std', f"{np.std(all_holdout_errors):.5f}"]
+        ])
+
+    if all_train_delta_e:
+        summary_data.extend([
+            ['Train ΔE mean', f"{np.mean(all_train_delta_e):.2f}"],
+            ['Train ΔE median', f"{np.median(all_train_delta_e):.2f}"],
+            ['Train ΔE std', f"{np.std(all_train_delta_e):.2f}"]
+        ])
+
+    if all_holdout_delta_e:
+        summary_data.extend([
+            ['Holdout ΔE mean', f"{np.mean(all_holdout_delta_e):.2f}"],
+            ['Holdout ΔE median', f"{np.median(all_holdout_delta_e):.2f}"],
+            ['Holdout ΔE std', f"{np.std(all_holdout_delta_e):.2f}"],
+            ['Holdout ΔE 95th %ile', f"{np.percentile(all_holdout_delta_e, 95):.2f}"]
+        ])
+
+    table = ax4.table(cellText=summary_data[1:], colLabels=summary_data[0],
+                      cellLoc='center', loc='center')
+    table.auto_set_font_size(False)
+    table.set_fontsize(10)
+    table.scale(1.2, 1.5)
+    ax4.set_title('Calibration Summary', pad=20)
+
+    plt.tight_layout()
+
+    # Save plot
+    plot_path = os.path.join(output_dir, "holdout_validation.png")
+    plt.savefig(plot_path, dpi=150, bbox_inches='tight')
+    plt.close()
+
+    print(f"Holdout validation plots saved to: {plot_path}")
+    return output_dir
+
+
+def cmd_calibrate_proc(args):
+    # New procedure based on provided measurements file (dict-like names->Spectra)
+
+    combos, paper = read_nix_csv(os.path.abspath(args.combos_file))
+
+    neug, model = calibrate_from_measurements(
+        measured=combos,
+        paper=paper,
+        holdout_frac=args.holdout,
+        seed=args.seed,
+        n_min=args.n_min,
+        n_max=args.n_max,
+        n_reg=args.n_reg,
+        enable_residual=(not args.no_residual)
+    )
+
+    # Report
+    print(f"Fitted n = {model['n']:.4f}")
+    print(f"Per-ink gammas: {model['gammas_by_ch']}")
+    if model['residual_scale'] is not None:
+        print("Residual scale enabled (per-wavelength)")
+    if model['train_mean_rmse'] is not None:
+        print(f"Train mean RMSE: {model['train_mean_rmse']:.5f}")
+    if model['holdout_mean_rmse'] is not None:
+        print(f"Holdout mean RMSE: {model['holdout_mean_rmse']:.5f}")
+
+    # Calculate and report Delta E statistics for holdout set
+    if model.get('num_holdout', 0) > 0:
+        channels = model['channels']
+        gammas_by_ch = model['gammas_by_ch']
+        residual_scale = model.get('residual_scale')
+        wavelengths = np.array(model['wavelengths'])
+        holdout_names = model.get('names_holdout', [])
+
+        holdout_delta_e = []
+        for name in holdout_names:
+            sp_meas = combos[name]
+            levels = parse_combo_name(name, channels)
+            pred = predict_with_model(neug, levels, channels, gammas_by_ch, residual_scale)
+
+            # Interpolate measured to match wavelengths if needed
+            if not np.array_equal(sp_meas.wavelengths, wavelengths):
+                sp_meas = sp_meas.interpolate_values(wavelengths)
+
+            # Calculate delta E
+            sp_pred = Spectra(wavelengths=wavelengths, data=pred)
+            de = Spectra.delta_e(sp_pred, sp_meas)
+            holdout_delta_e.append(de)
+
+        if holdout_delta_e:
+            print(
+                f"Holdout ΔE - Mean: {np.mean(holdout_delta_e):.2f}, Median: {np.median(holdout_delta_e):.2f}, 95th %ile: {np.percentile(holdout_delta_e, 95):.2f}")
+
+    # Generate holdout visualization if we have holdout samples
+    if model.get('num_holdout', 0) > 0:
+        viz_dir = generate_holdout_visualization(neug, model, combos, paper)
+        print(f"Holdout validation plots saved to: {viz_dir}")
+
+    # Optional export
+    if args.model_out:
+        outp = os.path.abspath(args.model_out)
+        os.makedirs(os.path.dirname(outp), exist_ok=True)
+        with open(outp, 'w') as f:
+            json.dump(model, f, indent=2)
+        print(f"Saved model to {outp}")
+
+    # Return Neugebauer in-process by storing in a module-global for interactive use
+    globals()["_last_calibrated_neugebauer"] = neug
+    print("Neugebauer object available as _last_calibrated_neugebauer for programmatic use.")
+
+
 def main():
     parser = argparse.ArgumentParser(description='Inkset checking and calibration CLI')
     sub = parser.add_subparsers(dest='command', help='Commands')
@@ -805,6 +1437,18 @@ def main():
     p_cal.add_argument('--model-out', help='Path to save fitted model JSON')
     p_cal.add_argument('--visualize', action='store_true', help='Generate HTML report with visualizations')
 
+    # New: procedure-3 calibrate that builds Neugebauer from measurements and returns it
+    p_cproc = sub.add_parser(
+        'calibrate-proc', help='New procedure: tone->area, fixed primaries, fit n, optional residual')
+    p_cproc.add_argument('combos_file', help='Measurements file (names->Spectra), e.g. Nix CSV')
+    p_cproc.add_argument('--holdout', type=float, default=0.2, help='Holdout fraction for validation')
+    p_cproc.add_argument('--seed', type=int, default=42, help='Random seed for split')
+    p_cproc.add_argument('--n-min', type=float, default=1.0, help='Lower bound for n')
+    p_cproc.add_argument('--n-max', type=float, default=3.0, help='Upper bound for n')
+    p_cproc.add_argument('--n-reg', type=float, default=0.0, help='L2 regularization strength on n about 2.0')
+    p_cproc.add_argument('--no-residual', action='store_true', help='Disable residual per-wavelength scaling')
+    p_cproc.add_argument('--model-out', help='Path to save fitted model JSON')
+
     args = parser.parse_args()
     if args.command is None:
         parser.print_help()
@@ -816,6 +1460,8 @@ def main():
         cmd_evaluate(args)
     elif args.command == 'calibrate':
         cmd_calibrate(args)
+    elif args.command == 'calibrate-proc':
+        cmd_calibrate_proc(args)
     else:
         parser.print_help()
 
