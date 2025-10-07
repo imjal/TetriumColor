@@ -394,7 +394,9 @@ class Neugebauer:
 class InkGamut:
     def __init__(self, inks: Union[List[Spectra], Neugebauer, CellNeugebauer, Dict[Union[Tuple, str], Spectra]],
                  paper: Optional[Spectra] = None,
-                 illuminant: Optional[Union[Spectra, npt.NDArray]] = None):
+                 illuminant: Optional[Union[Spectra, npt.NDArray]] = None,
+                 trc_gammas: Optional[npt.NDArray] = None,
+                 n_param: Optional[float] = None):
         if isinstance(inks, Dict):
             inks = Neugebauer(inks)
         if isinstance(inks, Neugebauer) or isinstance(inks, CellNeugebauer):
@@ -422,6 +424,14 @@ class InkGamut:
             assert np.array_equal(ink.wavelengths, self.wavelengths)
 
         self.neugebauer = load_neugebauer(inks, paper)  # KM interpolation
+
+        # Printer-specific parameters
+        self.trc_gammas = trc_gammas
+        self.n_param = n_param
+
+        # Inverse mapping cache
+        self._inverse_mapping_cache = {}
+        self._interpolator = None
 
     def get_spectra(self, percentages: Union[List, npt.NDArray], clip=False):
         if not isinstance(percentages, np.ndarray):
@@ -598,6 +608,347 @@ class InkGamut:
             print(f"maximum distance is {dst} with percentages {pi} and {pj}")
 
         return dst
+
+    def _apply_trc_gamma(self, levels_0_255: npt.NDArray) -> npt.NDArray:
+        """Apply TRC gamma correction to ink levels."""
+        if self.trc_gammas is None:
+            return levels_0_255 / 255.0
+
+        t = np.clip(levels_0_255 / 255.0, 0.0, 1.0)
+        g = np.clip(self.trc_gammas, 0.1, 5.0)
+        return np.power(t, g)
+
+    def _get_cache_key(self, observer: Union[Observer, npt.NDArray],
+                       grid_resolution: float) -> str:
+        """Generate a unique cache key for the inverse mapping."""
+        if isinstance(observer, Observer):
+            observer_str = str(observer)
+        else:
+            observer_str = str(observer.tolist())
+
+        # Include all relevant parameters in the cache key
+        params = [
+            f"observer:{hash(observer_str)}",
+            f"resolution:{grid_resolution}",
+            f"n:{self.n_param}",
+            f"trc:{hash(str(self.trc_gammas)) if self.trc_gammas is not None else 'none'}",
+            f"illuminant:{hash(str(self.illuminant))}"
+        ]
+        return "|".join(params)
+
+    def setup_inverse_mapping(self, observer: Union[Observer, npt.NDArray],
+                              grid_resolution: float = 0.1,
+                              interpolator_type: str = 'rbf',
+                              verbose: bool = True) -> None:
+        """
+        Set up inverse mapping from cone responses to primary percentages using grid-based interpolation.
+
+        Args:
+            observer: Observer model for cone response calculation
+            grid_resolution: Resolution of the grid (smaller = more accurate but more memory)
+            interpolator_type: Type of interpolation ('rbf', 'linear', 'nearest')
+            verbose: Whether to print progress information
+        """
+        cache_key = self._get_cache_key(observer, grid_resolution)
+
+        if cache_key in self._inverse_mapping_cache:
+            if verbose:
+                print(f"Using cached inverse mapping for resolution {grid_resolution}")
+            self._interpolator = self._inverse_mapping_cache[cache_key]
+            return
+
+        if verbose:
+            print(f"Setting up inverse mapping with resolution {grid_resolution}")
+
+        # Convert observer to sensor matrix if needed
+        if isinstance(observer, Observer):
+            sensor_matrix = observer.get_sensor_matrix(wavelengths=self.wavelengths)
+        else:
+            sensor_matrix = observer
+
+        # Generate grid of primary combinations
+        values = np.arange(0, 1 + grid_resolution, grid_resolution)
+        grid_combinations = np.array(list(product(values, repeat=self.neugebauer.num_inks)))
+
+        if verbose:
+            print(f"Generated {len(grid_combinations)} grid points")
+
+        # Compute cone responses for each grid point
+        cone_responses = []
+        valid_combinations = []
+
+        # Process in batches to avoid memory issues
+        batch_size = min(10000, len(grid_combinations))
+
+        for i in tqdm(range(0, len(grid_combinations), batch_size),
+                      desc="Computing cone responses", disable=not verbose):
+            batch = grid_combinations[i:i + batch_size]
+
+            # Apply TRC gamma if available
+            if self.trc_gammas is not None:
+                batch_gamma = self._apply_trc_gamma(batch * 255.0)
+            else:
+                batch_gamma = batch
+
+            # Compute cone responses using Neugebauer model
+            batch_cones = self.neugebauer.observe(batch_gamma, sensor_matrix, self.illuminant)
+
+            cone_responses.append(batch_cones)
+            valid_combinations.append(batch)
+
+        # Concatenate results
+        cone_responses = np.concatenate(cone_responses, axis=0)
+        valid_combinations = np.concatenate(valid_combinations, axis=0)
+
+        if verbose:
+            print(f"Computed {len(cone_responses)} cone responses")
+
+        # Set up interpolator
+        if interpolator_type == 'rbf':
+            from scipy.interpolate import RBFInterpolator
+            self._interpolator = RBFInterpolator(
+                cone_responses,
+                valid_combinations,
+                kernel='thin_plate_spline',
+                epsilon=1e-6
+            )
+        elif interpolator_type == 'linear':
+            from scipy.interpolate import LinearNDInterpolator
+            self._interpolator = LinearNDInterpolator(
+                cone_responses,
+                valid_combinations,
+                fill_value=0.0
+            )
+        else:
+            raise ValueError(f"Unknown interpolator type: {interpolator_type}")
+
+        # Cache the interpolator
+        self._inverse_mapping_cache[cache_key] = self._interpolator
+
+        if verbose:
+            print(f"Inverse mapping setup complete with {interpolator_type} interpolation")
+
+    def cone_to_primaries(self, cone_points: npt.NDArray,
+                          observer: Union[Observer, npt.NDArray],
+                          grid_resolution: float = 0.1,
+                          method: str = 'optimization',
+                          clip: bool = True,
+                          verbose: bool = False) -> npt.NDArray:
+        """
+        Convert cone responses to primary percentages using direct optimization.
+
+        Args:
+            cone_points: Array of cone responses (N x num_cones)
+            observer: Observer model for cone response calculation
+            grid_resolution: Resolution of the coarse grid for starting points
+            method: Method to use ('optimization', 'nearest')
+            clip: Whether to clip results to [0, 1] range
+            verbose: Whether to print progress information
+
+        Returns:
+            Array of primary percentages (N x num_inks)
+        """
+        # Convert observer to sensor matrix if needed
+        if isinstance(observer, Observer):
+            sensor_matrix = observer.get_sensor_matrix(wavelengths=self.wavelengths)
+        else:
+            sensor_matrix = observer
+
+        # Handle single point input
+        if cone_points.ndim == 1:
+            cone_points = cone_points.reshape(1, -1)
+            single_point = True
+        else:
+            single_point = False
+
+        if method == 'optimization':
+            primaries = self._optimization_inverse_mapping(cone_points, sensor_matrix, grid_resolution, verbose)
+        elif method == 'nearest':
+            primaries = self._nearest_neighbor_inverse_mapping(cone_points, sensor_matrix, grid_resolution, verbose)
+        else:
+            raise ValueError(f"Unknown method: {method}")
+
+        # Clip to valid range if requested
+        if clip:
+            primaries = np.clip(primaries, 0, 1)
+
+        # Return single point if input was single point
+        if single_point:
+            return primaries[0]
+
+        return primaries
+
+    def _optimization_inverse_mapping(self, cone_points: npt.NDArray, sensor_matrix: npt.NDArray,
+                                      grid_resolution: float, verbose: bool) -> npt.NDArray:
+        """
+        Convert cone responses to primary percentages using direct optimization.
+
+        This method uses scipy.optimize.minimize to find primaries that minimize
+        the LMS error. It uses a coarse grid to generate good starting points.
+        """
+        from scipy.optimize import minimize
+        from scipy.spatial import cKDTree
+
+        # Generate coarse grid for starting points
+        values = np.arange(0, 1 + grid_resolution, grid_resolution)
+        grid_combinations = np.array(list(product(values, repeat=self.neugebauer.num_inks)))
+
+        # Compute LMS responses for grid points
+        if self.trc_gammas is not None:
+            grid_gamma = self._apply_trc_gamma(grid_combinations * 255.0)
+        else:
+            grid_gamma = grid_combinations
+
+        grid_lms = self.neugebauer.observe(grid_gamma, sensor_matrix, self.illuminant)
+
+        # Build KDTree for fast nearest neighbor search
+        kdtree = cKDTree(grid_lms)
+
+        results = []
+
+        for target_lms in cone_points:
+            # Find closest grid point as starting point
+            distances, indices = kdtree.query(target_lms, k=min(4, len(grid_combinations)))
+
+            # Try multiple starting points
+            best_result = None
+            best_error = float('inf')
+
+            for start_idx in indices:
+                start_point = grid_combinations[start_idx]
+
+                # Define objective function
+                def objective(primaries_vec):
+                    primaries_vec = np.clip(primaries_vec, 0, 1)
+
+                    # Apply TRC gamma if available
+                    if self.trc_gammas is not None:
+                        primaries_gamma = self._apply_trc_gamma(primaries_vec * 255.0)
+                    else:
+                        primaries_gamma = primaries_vec
+
+                    # Get LMS response
+                    predicted_lms = self.neugebauer.observe(primaries_gamma, sensor_matrix, self.illuminant)
+
+                    # Return MSE between target and predicted LMS
+                    return np.sum((target_lms - predicted_lms)**2)
+
+                # Optimize
+                try:
+                    result = minimize(
+                        objective,
+                        start_point,
+                        method='L-BFGS-B',
+                        bounds=[(0, 1)] * self.neugebauer.num_inks,
+                        options={'maxiter': 1000, 'ftol': 1e-12}
+                    )
+
+                    if result.success and result.fun < best_error:
+                        best_error = result.fun
+                        best_result = result
+
+                except Exception:
+                    continue
+
+            if best_result is not None:
+                recovered_primaries = np.clip(best_result.x, 0, 1)
+            else:
+                # Fallback to nearest neighbor
+                closest_idx = indices[0]
+                recovered_primaries = grid_combinations[closest_idx]
+
+            results.append(recovered_primaries)
+
+        return np.array(results)
+
+    def _nearest_neighbor_inverse_mapping(self, cone_points: npt.NDArray, sensor_matrix: npt.NDArray,
+                                          grid_resolution: float, verbose: bool) -> npt.NDArray:
+        """
+        Convert cone responses to primary percentages using nearest neighbor lookup.
+
+        This is a fallback method that simply finds the closest grid point.
+        """
+        from scipy.spatial import cKDTree
+
+        # Generate grid
+        values = np.arange(0, 1 + grid_resolution, grid_resolution)
+        grid_combinations = np.array(list(product(values, repeat=self.neugebauer.num_inks)))
+
+        # Compute LMS responses for grid points
+        if self.trc_gammas is not None:
+            grid_gamma = self._apply_trc_gamma(grid_combinations * 255.0)
+        else:
+            grid_gamma = grid_combinations
+
+        grid_lms = self.neugebauer.observe(grid_gamma, sensor_matrix, self.illuminant)
+
+        # Build KDTree for fast nearest neighbor search
+        kdtree = cKDTree(grid_lms)
+
+        results = []
+
+        for target_lms in cone_points:
+            # Find closest grid point
+            distances, indices = kdtree.query(target_lms, k=1)
+            closest_primaries = grid_combinations[indices]
+            results.append(closest_primaries)
+
+        return np.array(results)
+
+    def primaries_to_cone(self, primary_points: npt.NDArray,
+                          observer: Union[Observer, npt.NDArray]) -> npt.NDArray:
+        """
+        Convert primary percentages to cone responses (forward process).
+
+        Args:
+            primary_points: Array of primary percentages (N x num_inks)
+            observer: Observer model for cone response calculation
+
+        Returns:
+            Array of cone responses (N x num_cones)
+        """
+        # Convert observer to sensor matrix if needed
+        if isinstance(observer, Observer):
+            sensor_matrix = observer.get_sensor_matrix(wavelengths=self.wavelengths)
+        else:
+            sensor_matrix = observer
+
+        # Handle single point input
+        if primary_points.ndim == 1:
+            primary_points = primary_points.reshape(1, -1)
+            single_point = True
+        else:
+            single_point = False
+
+        # Apply TRC gamma if available
+        if self.trc_gammas is not None:
+            primary_points_gamma = self._apply_trc_gamma(primary_points * 255.0)
+        else:
+            primary_points_gamma = primary_points
+
+        # Compute cone responses using Neugebauer model
+        cone_responses = self.neugebauer.observe(primary_points_gamma, sensor_matrix, self.illuminant)
+
+        # Return single point if input was single point
+        if single_point:
+            return cone_responses[0]
+
+        return cone_responses
+
+    def clear_inverse_mapping_cache(self) -> None:
+        """Clear the inverse mapping cache to free memory."""
+        self._inverse_mapping_cache.clear()
+        self._interpolator = None
+
+    def get_inverse_mapping_info(self) -> Dict[str, any]:
+        """Get information about the current inverse mapping setup."""
+        return {
+            'cache_size': len(self._inverse_mapping_cache),
+            'has_interpolator': self._interpolator is not None,
+            'trc_gammas': self.trc_gammas,
+            'n_param': self.n_param,
+            'num_inks': self.neugebauer.num_inks
+        }
 
 
 class InkLibrary:

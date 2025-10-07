@@ -186,7 +186,7 @@ class Spectra:
         """Converts the spectra to the Lab color space value.
         """
         i = illuminant.to_colour() if illuminant is not None else Illuminant.get("D65").to_colour()
-        return XYZ_to_Lab(sd_to_XYZ(i, cmfs=cmfs) / 100)
+        return XYZ_to_Lab(sd_to_XYZ(self.to_colour(), cmfs=cmfs) / 100)
 
     @staticmethod
     def delta_e(spectra1: "Spectra", spectra2: "Spectra") -> float:

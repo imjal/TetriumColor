@@ -6,6 +6,7 @@ from scipy.linalg import orth
 
 from TetriumColor.Observer import Observer, MaxBasisFactory, GetHeringMatrix, GetPerceptualHering
 from TetriumColor.Observer.Spectra import Illuminant, Spectra
+from TetriumColor.Observer.Inks import InkGamut
 from TetriumColor.Utils.CustomTypes import TetraColor, PlateColor
 from TetriumColor.Observer.ColorSpaceTransform import (
     GetColorSpaceTransform, CSTDisplayType, GetMaxBasisToDisplayTransform
@@ -71,6 +72,9 @@ class ColorSpaceType(Enum):
     CHROM = "chrom"  # Chromaticity space
     HERING_CHROM = "hering_chrom"  # Hering chromaticity space
     MACLEOD_CHROM = "macleod_chrom"  # MacLeod-Boynton chromaticity space
+
+    # Printer gamut primaries (percentages/area coverages)
+    PRINT = "print"
 
     def __str__(self):
         return self.value
@@ -404,7 +408,8 @@ class ColorSpace:
 
     def convert(self, points: npt.NDArray,
                 from_space: str | ColorSpaceType,
-                to_space: str | ColorSpaceType) -> npt.NDArray:
+                to_space: str | ColorSpaceType,
+                ink_gamut: InkGamut | None = None) -> npt.NDArray:
         """
         Transform points from one color space to another. --> only handles linear conversions. For perceptual, use convert_to_perceptual
 
@@ -430,11 +435,37 @@ class ColorSpace:
         from_space = self._remove_perceptual_name(from_space.name)
         to_space = self._remove_perceptual_name(to_space.name)
 
+        # Printer gamut integration: allow PRINT as a first-class color space
+        # - If converting from PRINT, first go to CONE using InkGamut, then proceed
+        # - If converting to PRINT, first convert to CONE, then use InkGamut inverse mapping
+        if from_space == ColorSpaceType.PRINT:
+            # Validate gamut provided and observer compatibility
+            if ink_gamut is None:
+                raise ValueError("InkGamut required for PRINT conversions")
+            if ink_gamut.neugebauer.num_inks != self.observer.dimension:
+                raise ValueError("InkGamut inks must match observer dimension")
+
+            cone_from_print = ink_gamut.primaries_to_cone(points, self.observer)
+            # Continue converting from CONE to the requested to_space
+            return self.convert(cone_from_print, ColorSpaceType.CONE, to_space, ink_gamut=ink_gamut)
+
+        if to_space == ColorSpaceType.PRINT:
+            # Validate gamut provided and observer compatibility
+            if ink_gamut is None:
+                raise ValueError("InkGamut required for PRINT conversions")
+            if ink_gamut.neugebauer.num_inks != self.observer.dimension:
+                raise ValueError("InkGamut inks must match observer dimension")
+
+            # First convert input to CONE, then use InkGamut inverse mapping
+            cone_points = self.convert(points, from_space, ColorSpaceType.CONE, ink_gamut=ink_gamut)
+            primaries = ink_gamut.cone_to_primaries(cone_points, self.observer, method='optimization')
+            return primaries
+
         # Handle 3D only points separately -- only one directional
 
         if to_space == ColorSpaceType.SRGB:
             # Convert to cone space first, then to sRGB
-            cone_points = self.convert(points, from_space, ColorSpaceType.XYZ)
+            cone_points = self.convert(points, from_space, ColorSpaceType.XYZ, ink_gamut=ink_gamut)
             # Apply gamma encoding for sRGB
             linear_rgb = M_XYZ_to_RGB @ cone_points.T
 
@@ -447,7 +478,7 @@ class ColorSpace:
             if self.transform.dim != 3:
                 raise ValueError("OKLAB color space is only defined for 3D color spaces")
             # Convert to cone space first, then to OKLAB
-            xyz_points = self.convert(points, from_space, ColorSpaceType.XYZ)
+            xyz_points = self.convert(points, from_space, ColorSpaceType.XYZ, ink_gamut=ink_gamut)
             m1_points = OKLAB_M1 @ xyz_points.T
             m1_cubed = np.cbrt(m1_points)
             m2_points = OKLAB_M2 @ m1_cubed
@@ -456,7 +487,7 @@ class ColorSpace:
             if self.transform.dim != 3:
                 raise ValueError("OKLAB color space is only defined for 3D color spaces")
             # Convert to cone space first, then to OKLAB
-            xyz_points = self.convert(points, from_space, ColorSpaceType.XYZ)
+            xyz_points = self.convert(points, from_space, ColorSpaceType.XYZ, ink_gamut=ink_gamut)
             m1_points = OKLAB_M1 @ xyz_points.T
             m1_cubed = np.cbrt(m1_points)
             return m1_cubed.T
@@ -471,24 +502,24 @@ class ColorSpace:
         if from_space == ColorSpaceType.CHROM or from_space == ColorSpaceType.HERING_CHROM:
             raise ValueError("Cannot transform from chromaticity back to another color space")
         elif to_space == ColorSpaceType.MACLEOD_CHROM:
-            cone_pts = self.convert(points, from_space, ColorSpaceType.CONE)
+            cone_pts = self.convert(points, from_space, ColorSpaceType.CONE, ink_gamut=ink_gamut)
             # auto drop the second coord (M cone?)
             return (cone_pts.T / (np.sum(cone_pts[:, 1:].T, axis=0) + 1e-9))[[i for i in range(self.dim) if i != 1]].T
         elif to_space == ColorSpaceType.CHROM:
-            cone_pts = self.convert(points, from_space, ColorSpaceType.CONE)
+            cone_pts = self.convert(points, from_space, ColorSpaceType.CONE, ink_gamut=ink_gamut)
             return (cone_pts.T / (np.sum(cone_pts.T, axis=0) + 1e-9))[1:].T  # auto drop first coordinate
         elif to_space == ColorSpaceType.HERING_CHROM:
-            maxbasis_pts = self.convert(points, from_space, ColorSpaceType.MAXBASIS)
+            maxbasis_pts = self.convert(points, from_space, ColorSpaceType.MAXBASIS, ink_gamut=ink_gamut)
             return (GetHeringMatrix(self.transform.dim) @
                     (maxbasis_pts.T / (np.sum(maxbasis_pts.T, axis=0) + 1e-9)))[1:].T
 
         # Handle the basic linear transforms
         if from_space == ColorSpaceType.VSH:
-            return self.convert(self._vsh_to_hering(points), ColorSpaceType.HERING, to_space)
+            return self.convert(self._vsh_to_hering(points), ColorSpaceType.HERING, to_space, ink_gamut=ink_gamut)
         elif from_space == ColorSpaceType.SRGB:
             # Convert from sRGB to cone space, then proceed with normal conversions
             cone_points = (np.linalg.inv(M_XYZ_to_RGB) @ points.T).T
-            return self.convert(cone_points, ColorSpaceType.XYZ, to_space)
+            return self.convert(cone_points, ColorSpaceType.XYZ, to_space, ink_gamut=ink_gamut)
         elif from_space == ColorSpaceType.OKLAB:
             if self.transform.dim != 3:
                 raise ValueError("OKLAB color space is only defined for 3D color spaces")
@@ -496,27 +527,27 @@ class ColorSpace:
             m2_points = np.linalg.inv(OKLAB_M2) @ points.T
             m2_cubed = np.power(m2_points, 3)
             xyz_points = np.linalg.inv(OKLAB_M1) @ m2_cubed
-            return self.convert(xyz_points.T, ColorSpaceType.XYZ, to_space)
+            return self.convert(xyz_points.T, ColorSpaceType.XYZ, to_space, ink_gamut=ink_gamut)
         elif from_space == ColorSpaceType.XYZ:
             if self.transform.dim != 3:
                 raise ValueError("transforming from XYZ to another color space is only defined for 3D color spaces")
             cone_pts = np.linalg.inv(self.transform.cone_to_XYZ) @ points.T  # can't do this inverse if it's not 3D
-            return self.convert(cone_pts.T, ColorSpaceType.CONE, to_space)
+            return self.convert(cone_pts.T, ColorSpaceType.CONE, to_space, ink_gamut=ink_gamut)
         elif from_space == ColorSpaceType.HERING:
             disp_points = self.transform.hering_to_disp @ points.T
-            return self.convert(disp_points.T, ColorSpaceType.DISP, to_space)
+            return self.convert(disp_points.T, ColorSpaceType.DISP, to_space, ink_gamut=ink_gamut)
         elif from_space == ColorSpaceType.MAXBASIS:
             disp_points = self.transform.maxbasis_to_disp @ points.T
-            return self.convert(disp_points.T, ColorSpaceType.DISP, to_space)
+            return self.convert(disp_points.T, ColorSpaceType.DISP, to_space, ink_gamut=ink_gamut)
         elif from_space == ColorSpaceType.MAXBASIS243:
             disp_points = self.transform.maxbasis_243_to_disp @ points.T
-            return self.convert(disp_points.T, ColorSpaceType.DISP, to_space)
+            return self.convert(disp_points.T, ColorSpaceType.DISP, to_space, ink_gamut=ink_gamut)
         elif from_space == ColorSpaceType.MAXBASIS300:
             disp_points = self.transform.maxbasis_3_to_disp @ points.T
-            return self.convert(disp_points.T, ColorSpaceType.DISP, to_space)
+            return self.convert(disp_points.T, ColorSpaceType.DISP, to_space, ink_gamut=ink_gamut)
         elif from_space == ColorSpaceType.CONE:
             disp_points = self.transform.cone_to_disp @ points.T
-            return self.convert(disp_points.T, ColorSpaceType.DISP, to_space)
+            return self.convert(disp_points.T, ColorSpaceType.DISP, to_space, ink_gamut=ink_gamut)
         elif from_space == ColorSpaceType.DISP:
             if to_space == ColorSpaceType.VSH:
                 hering = (np.linalg.inv(self.transform.hering_to_disp) @ points.T).T
@@ -546,7 +577,7 @@ class ColorSpace:
 
         elif from_space == ColorSpaceType.DISP_6P:
             display = Conversion.Map6DTo4D(points, self.transform)
-            return self.convert(display, ColorSpaceType.DISP, to_space)
+            return self.convert(display, ColorSpaceType.DISP, to_space, ink_gamut=ink_gamut)
 
         # If we reach here, the transformation is not defined
         raise ValueError(f"Transformation from {from_space} to {to_space} not implemented")

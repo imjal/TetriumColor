@@ -52,8 +52,8 @@ def discover_channels_from_names(names: List[str]) -> List[str]:
 
 
 def parse_combo_name(name: str, channels: List[str]) -> np.ndarray:
-    """Parse a combination like 'C255M128' into a vector aligned to channels order."""
-    s = name.strip()
+    """Parse a combination like 'C255M128' or 'C255 M128' into a vector aligned to channels order."""
+    s = name.strip().replace(" ", "")
     levels = {ch: 0 for ch in channels}
     # Greedy scan: letter followed by up to 3 digits
     i = 0
@@ -436,7 +436,7 @@ def generate_error_analysis_plots(original_errors: List[float], calibrated_error
 # -------- Subcommands --------
 
 def cmd_register_primaries(args):
-    input_path = os.path.abspath(args.csv)
+    input_path = os.path.abspath(args.input_file)
     out_name = args.name
 
     # Try Nix CSV first, else assume already in standard format
@@ -639,7 +639,6 @@ def cmd_calibrate(args):
     combos, _ = read_nix_csv(os.path.abspath(args.combos_file))
     wavelengths = combos[list(combos.keys())[0]].wavelengths
 
-    # Build dataset
     X_levels: List[np.ndarray] = []
     Y_specs: List[np.ndarray] = []
     combo_names: List[str] = []
