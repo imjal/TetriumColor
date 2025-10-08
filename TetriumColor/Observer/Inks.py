@@ -462,9 +462,6 @@ class InkGamut:
         if isinstance(inks, Neugebauer) or isinstance(inks, CellNeugebauer):
             self.neugebauer = inks
 
-            import pdb
-            pdb.set_trace()
-
             if calibration_json is not None:
                 calib_n_param, calib_trc_gammas, calib_residual_scale = self._load_calibration_parameters(
                     calibration_json)
