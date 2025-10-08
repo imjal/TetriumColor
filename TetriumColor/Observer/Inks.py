@@ -364,11 +364,13 @@ class Neugebauer:
         self.residual_scale = residual_scale
 
     def _apply_trc_gamma(self, levels_0_255: npt.NDArray) -> npt.NDArray:
-        """Apply TRC gamma correction to ink levels."""
-        if self.trc_gammas is None:
-            return levels_0_255 / 255.0
-
+        """Apply TRC gamma correction to ink levels, rescaling from [0, 255] to [0, 1]."""
+        # Always rescale from [0, 255] to [0, 1]
         t = np.clip(levels_0_255 / 255.0, 0.0, 1.0)
+
+        if self.trc_gammas is None:
+            return t
+
         g = np.clip(self.trc_gammas, 0.1, 5.0)
         return np.power(t, g)
 
@@ -390,8 +392,11 @@ class Neugebauer:
         return result
 
     def batch_mix(self, percentages: npt.NDArray) -> npt.NDArray:
-        w_p = ((self.weights_array * percentages[:, np.newaxis, :]) +
-               (1 - self.weights_array) * (1 - percentages[:, np.newaxis, :]))
+        # Always apply TRC gamma correction, rescaling from [0, 255] to [0, 1]
+        gamma_corrected_percentages = self._apply_trc_gamma(percentages * 255.0)
+
+        w_p = ((self.weights_array * gamma_corrected_percentages[:, np.newaxis, :]) +
+               (1 - self.weights_array) * (1 - gamma_corrected_percentages[:, np.newaxis, :]))
         w_p_prod = np.prod(w_p, axis=2, keepdims=True)
 
         result = np.power(np.matmul(w_p_prod.transpose(0, 2, 1), self.spectras_array), self.n).squeeze(axis=1)
@@ -399,7 +404,11 @@ class Neugebauer:
         return result
 
     def mix(self, percentages: npt.NDArray) -> npt.NDArray:
-        w_p = (self.weights_array * percentages) + (1 - self.weights_array) * (1 - percentages)
+        # Always apply TRC gamma correction, rescaling from [0, 255] to [0, 1]
+        gamma_corrected_percentages = self._apply_trc_gamma(percentages * 255.0)
+
+        w_p = (self.weights_array * gamma_corrected_percentages) + \
+            (1 - self.weights_array) * (1 - gamma_corrected_percentages)
         w_p_prod = np.prod(w_p, axis=1, keepdims=True)
 
         result = np.power(np.matmul(w_p_prod.T, self.spectras_array), self.n)
@@ -452,6 +461,16 @@ class InkGamut:
 
         if isinstance(inks, Neugebauer) or isinstance(inks, CellNeugebauer):
             self.neugebauer = inks
+
+            import pdb
+            pdb.set_trace()
+
+            if calibration_json is not None:
+                calib_n_param, calib_trc_gammas, calib_residual_scale = self._load_calibration_parameters(
+                    calibration_json)
+                self.neugebauer.n = calib_n_param
+                self.neugebauer.trc_gammas = calib_trc_gammas
+                self.neugebauer.residual_scale = calib_residual_scale
             return
 
         assert np.array_equal(self.wavelengths, paper.wavelengths), \
@@ -460,18 +479,9 @@ class InkGamut:
         for ink in inks:
             assert np.array_equal(ink.wavelengths, self.wavelengths)
 
-        # Load calibration parameters from JSON if provided
         if calibration_json is not None:
-            import json
-            with open(calibration_json, 'r') as f:
-                calibration = json.load(f)
-
-            # Override parameters with calibration values
-            n_param = calibration.get('n', n_param)
-            if calibration.get('gammas_by_ch'):
-                trc_gammas = np.array(list(calibration['gammas_by_ch'].values()))
-            if calibration.get('residual_scale'):
-                residual_scale = np.array(calibration['residual_scale'])
+            calib_n_param, calib_trc_gammas, calib_residual_scale = self._load_calibration_parameters(
+                calibration_json)
 
         # Create Neugebauer with calibration parameters
         primaries_dict = {'0' * len(inks): paper}
@@ -479,13 +489,27 @@ class InkGamut:
             key = '0' * i + '1' + '0' * (len(inks) - i - 1)
             primaries_dict[key] = ink
 
-        self.neugebauer = Neugebauer(primaries_dict, n=n_param or 2.0,
-                                     trc_gammas=trc_gammas,
-                                     residual_scale=residual_scale)
+        self.neugebauer = Neugebauer(primaries_dict, n=calib_n_param or 2.0,
+                                     trc_gammas=calib_trc_gammas,
+                                     residual_scale=calib_residual_scale)
 
         # Inverse mapping cache
         self._inverse_mapping_cache = {}
         self._interpolator = None
+
+    def _load_calibration_parameters(self, calibration_json: Optional[str]):
+        # Load calibration parameters from JSON if provided
+        import json
+        with open(calibration_json, 'r') as f:
+            calibration = json.load(f)
+
+        # Override parameters with calibration values
+        n_param = calibration.get('n')
+        if calibration.get('gammas_by_ch'):
+            trc_gammas = np.array(list(calibration['gammas_by_ch'].values()))
+        if calibration.get('residual_scale'):
+            residual_scale = np.array(calibration['residual_scale'])
+        return n_param, trc_gammas, residual_scale
 
     def get_spectra(self, percentages: Union[List, npt.NDArray], clip=False, use_levels=True):
         """
@@ -498,13 +522,7 @@ class InkGamut:
         """
         if not isinstance(percentages, np.ndarray):
             percentages = np.array(percentages)
-
-        if use_levels:
-            # Use calibrated mixing with TRC gamma
-            data = self.neugebauer.mix_from_levels(percentages).T
-        else:
-            # Use standard mixing
-            data = self.neugebauer.mix(percentages).T
+        data = self.neugebauer.mix(percentages).T
 
         if clip:
             data = np.clip(data, 0, 1)
@@ -979,14 +997,8 @@ class InkGamut:
         else:
             single_point = False
 
-        # Apply TRC gamma if available
-        if self.trc_gammas is not None:
-            primary_points_gamma = self._apply_trc_gamma(primary_points * 255.0)
-        else:
-            primary_points_gamma = primary_points
-
         # Compute cone responses using Neugebauer model
-        cone_responses = self.neugebauer.observe(primary_points_gamma, sensor_matrix, self.illuminant)
+        cone_responses = self.neugebauer.observe(primary_points, sensor_matrix, self.illuminant)
 
         # Return single point if input was single point
         if single_point:
@@ -1349,6 +1361,61 @@ class FastNeugebauer:
         pca.fit(stimulus)
 
         return np.sqrt(pca.explained_variance_)[-1]
+
+
+def load_primaries_from_registry(library_name: str) -> Dict[str, Spectra]:
+    """Load Neugebauer primaries dictionary from library registry.
+
+    Args:
+        library_name: Name of the registered library
+
+    Returns:
+        Dictionary mapping binary keys (e.g., '0000', '1000', '1100') to Spectra objects
+
+    Raises:
+        ValueError: If library not found or doesn't have primaries
+    """
+    # Import here to avoid circular imports
+    import sys
+    import os
+    sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', 'scripts', 'inkset'))
+    from library_registry import registry
+
+    if not registry.library_exists(library_name):
+        raise ValueError(f"Library '{library_name}' not found in registry")
+
+    metadata = registry.get_library_metadata(library_name)
+    if not metadata.get('has_complete_neugebauer', False):
+        raise ValueError(f"Library '{library_name}' does not have complete Neugebauer primaries")
+
+    primaries_path = metadata.get('primaries_path')
+    if not primaries_path:
+        raise ValueError(f"Library '{library_name}' missing primaries_path in metadata")
+
+    # Resolve full path
+    if os.path.isabs(primaries_path):
+        full_path = primaries_path
+    else:
+        base_path = os.path.join(os.path.dirname(__file__), '..', '..', 'scripts', 'inkset', 'data', 'inksets')
+        full_path = os.path.join(base_path, primaries_path)
+
+    if not os.path.exists(full_path):
+        raise ValueError(f"Primaries file not found: {full_path}")
+
+    # Load the primaries dictionary
+    import pickle
+    with open(full_path, 'rb') as f:
+        serializable_dict = pickle.load(f)
+
+    # Convert back to Spectra objects
+    primaries_dict = {}
+    for key, data in serializable_dict.items():
+        primaries_dict[key] = Spectra(
+            wavelengths=data['wavelengths'],
+            data=data['data']
+        )
+
+    return primaries_dict
 
 
 def load_inkset(filepath: str, filter_clogged: bool = True) -> Tuple[Dict[str, Spectra], Spectra, npt.NDArray]:

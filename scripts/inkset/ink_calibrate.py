@@ -78,6 +78,128 @@ def parse_combo_name(name: str, channels: List[str]) -> np.ndarray:
 
 # -------- Helpers for new calibration pipeline --------
 
+def build_complete_neugebauer_primaries(measurements: Dict[str, Spectra], paper: Spectra,
+                                        channels: List[str], prefer_overprints: bool = True) -> Tuple[Dict[str, Spectra], np.ndarray]:
+    """Build complete Neugebauer primaries dictionary from measurements.
+
+    Args:
+        measurements: Dictionary mapping measurement names to Spectra
+        paper: Paper spectra
+        channels: List of channel names (e.g., ['C', 'M', 'Y', 'K'])
+        prefer_overprints: Whether to prefer measured overprints over computed ones
+
+    Returns:
+        Tuple of (primaries_dict, wavelengths) where primaries_dict maps binary keys to Spectra
+    """
+    wavelengths = paper.wavelengths
+
+    # Start with paper (all channels off)
+    primaries_dict: Dict[str, Spectra] = {}
+    primaries_dict['0' * len(channels)] = paper.interpolate_values(wavelengths)
+
+    # Add single-channel primaries (one channel on, others off)
+    for i, ch in enumerate(channels):
+        # Find the highest level measurement for this channel
+        best_spectra = None
+        best_level = -1
+
+        for name, sp in measurements.items():
+            m = PRIMARY_RE.match(name.strip())
+            if m and m.group(1) == ch:
+                level = int(m.group(2))
+                if level > best_level:
+                    best_level = level
+                    best_spectra = sp
+
+        if best_spectra is None:
+            raise ValueError(f"No measurements found for channel {ch}")
+
+        # Create binary key for this single-channel primary
+        key_vec = ['0'] * len(channels)
+        key_vec[i] = '1'
+        key = ''.join(key_vec)
+
+        primaries_dict[key] = best_spectra.interpolate_values(wavelengths)
+
+    # Add multi-channel primaries (overprints) if available
+    if prefer_overprints:
+        for name, sp in measurements.items():
+            try:
+                levels = parse_combo_name(name, channels)
+            except Exception:
+                continue
+
+            # Only consider exact 0/255 combinations (binary solids)
+            if not np.all((levels == 0) | (levels == 255)):
+                continue
+
+            # Skip paper (already added)
+            if not np.any(levels == 255):
+                continue
+
+            # Create binary key
+            key = combo_to_binary_key(levels)
+
+            # Skip if already present (single-channel primaries)
+            if key in primaries_dict and key.count('1') <= 1:
+                continue
+
+            primaries_dict[key] = sp.interpolate_values(wavelengths)
+
+    return primaries_dict, wavelengths
+
+
+def save_primaries_as_csv(primaries_dict: Dict[str, Spectra], wavelengths: np.ndarray, output_path: str):
+    """Save primaries dictionary as a standard CSV format."""
+    # Convert to DataFrame format
+    rows = []
+    for key, spectra in primaries_dict.items():
+        rows.append((key, spectra.data))
+
+    df = pd.DataFrame([r[1] for r in rows],
+                      index=[r[0] for r in rows],
+                      columns=wavelengths)
+    df.index.name = "Name"
+    df = df.reset_index()
+    df.insert(0, 'ID', range(1, len(df) + 1))
+    df['clogged'] = 0
+    df.to_csv(output_path, index=False)
+
+
+def save_primaries_dict(primaries_dict: Dict[str, Spectra], output_path: str):
+    """Save primaries dictionary as a pickle file for easy loading."""
+    import pickle
+
+    # Convert Spectra objects to a serializable format
+    serializable_dict = {}
+    for key, spectra in primaries_dict.items():
+        serializable_dict[key] = {
+            'wavelengths': spectra.wavelengths,
+            'data': spectra.data
+        }
+
+    with open(output_path, 'wb') as f:
+        pickle.dump(serializable_dict, f)
+
+
+def load_primaries_dict(input_path: str) -> Dict[str, Spectra]:
+    """Load primaries dictionary from pickle file."""
+    import pickle
+
+    with open(input_path, 'rb') as f:
+        serializable_dict = pickle.load(f)
+
+    # Convert back to Spectra objects
+    primaries_dict = {}
+    for key, data in serializable_dict.items():
+        primaries_dict[key] = Spectra(
+            wavelengths=data['wavelengths'],
+            data=data['data']
+        )
+
+    return primaries_dict
+
+
 def is_single_channel_name(name: str, channels: List[str]) -> bool:
     try:
         v = parse_combo_name(name, channels)
@@ -756,101 +878,107 @@ def cmd_register_primaries(args):
     # Try Nix CSV first, else assume already in standard format
     try:
         name_to_spectra, paper = read_nix_csv(input_path)
-        # Filter to keep only 255-level single-channel primaries
-        filtered_spectra = {}
-        for nm, sp in name_to_spectra.items():
-            m = PRIMARY_RE.match(nm.strip())
-            if m and m.group(2) == "255":  # Only 255-level primaries
-                filtered_spectra[nm] = sp
-            elif nm.strip().lower() == 'paper':  # Keep paper
-                if paper is None:
-                    paper = sp
-        name_to_spectra = filtered_spectra
 
-        # Compose standard inkset DataFrame
-        # Use paper if present; ensure wavelengths alignment
-        names = list(name_to_spectra.keys())
-        wavelengths = None
-        rows = []
-        for nm, sp in name_to_spectra.items():
-            if wavelengths is None:
-                wavelengths = sp.wavelengths
-            elif not np.array_equal(wavelengths, sp.wavelengths):
-                sp = sp.interpolate_values(wavelengths)
-            rows.append((nm, sp.data))
-        if paper is None:
-            raise ValueError("No paper spectra found in input Nix CSV")
+        # Discover channels from all measurements (not just 255-level)
+        channels = discover_channels_from_names(list(name_to_spectra.keys()))
+        if not channels:
+            raise ValueError("Could not infer channels from measurement names")
 
+        # Build complete Neugebauer primaries dictionary
+        primaries_dict, wavelengths = build_complete_neugebauer_primaries(
+            name_to_spectra, paper, channels, prefer_overprints=True
+        )
+
+        # Save both formats: standard CSV and primaries dictionary
         output_dir = f"data/inksets/{out_name}"
         os.makedirs(output_dir, exist_ok=True)
-        output_path = os.path.join(output_dir, f"{out_name}-inks.csv")
 
-        # Build DataFrame (ink rows + paper)
-        df = pd.DataFrame([r[1] for r in rows] + [paper.data],
-                          index=[r[0] for r in rows] + ["paper"],
-                          columns=wavelengths)
-        df.index.name = "Name"
-        df = df.reset_index()
-        df.insert(0, 'ID', range(1, len(df) + 1))
-        df['clogged'] = 0
-        df.to_csv(output_path, index=False)
+        # 1. Save standard CSV format (for backward compatibility)
+        csv_path = os.path.join(output_dir, f"{out_name}-inks.csv")
+        save_primaries_as_csv(primaries_dict, wavelengths, csv_path)
 
+        # 2. Save primaries dictionary as pickle (for easy loading)
+        primaries_path = os.path.join(output_dir, f"{out_name}-primaries.pkl")
+        save_primaries_dict(primaries_dict, primaries_path)
+
+        # Register in library registry with both formats
         registry.register_library(
             out_name,
             f"{out_name}/{out_name}-inks.csv",
             {
                 "created": "registered_primaries",
                 "source_path": input_path,
-                "num_rows": len(rows),
-                "filtered_to_255_only": True,
+                "primaries_path": f"{out_name}/{out_name}-primaries.pkl",
+                "channels": channels,
+                "num_primaries": len(primaries_dict),
+                "primaries_keys": list(primaries_dict.keys()),
+                "has_complete_neugebauer": True,
             }
         )
-        print(f"Registered {len(rows)} 255-level primaries as library '{out_name}' at {output_path}")
+
+        print(f"Registered complete Neugebauer primaries for library '{out_name}'")
+        print(f"  Channels: {channels}")
+        print(f"  Number of primaries: {len(primaries_dict)}")
+        print(f"  Primary keys: {sorted(primaries_dict.keys())}")
+        print(f"  CSV saved to: {csv_path}")
+        print(f"  Primaries dict saved to: {primaries_path}")
         return
-    except Exception:
+
+    except Exception as e:
+        print(f"Nix CSV parsing failed: {e}")
         # Fallback: assume it's already a standard inkset CSV → filter and register
         pass
 
     # Validate and register a standard-format inkset CSV
     try:
         inks, paper, wavelengths = load_inkset_csv(input_path, filter_clogged=True)
+
+        # Discover channels from all measurements
+        channels = discover_channels_from_names(list(inks.keys()))
+        if not channels:
+            raise ValueError("Could not infer channels from measurement names")
+
+        # Build complete Neugebauer primaries dictionary
+        primaries_dict, wavelengths = build_complete_neugebauer_primaries(
+            inks, paper, channels, prefer_overprints=True
+        )
+
+        # Save both formats
+        output_dir = f"data/inksets/{out_name}"
+        os.makedirs(output_dir, exist_ok=True)
+
+        # 1. Save standard CSV format
+        csv_path = os.path.join(output_dir, f"{out_name}-inks.csv")
+        save_primaries_as_csv(primaries_dict, wavelengths, csv_path)
+
+        # 2. Save primaries dictionary as pickle
+        primaries_path = os.path.join(output_dir, f"{out_name}-primaries.pkl")
+        save_primaries_dict(primaries_dict, primaries_path)
+
+        # Register in library registry
+        registry.register_library(
+            out_name,
+            f"{out_name}/{out_name}-inks.csv",
+            {
+                "created": "registered_primaries",
+                "source_path": input_path,
+                "primaries_path": f"{out_name}/{out_name}-primaries.pkl",
+                "channels": channels,
+                "num_primaries": len(primaries_dict),
+                "primaries_keys": list(primaries_dict.keys()),
+                "has_complete_neugebauer": True,
+            }
+        )
+
+        print(f"Registered complete Neugebauer primaries for library '{out_name}'")
+        print(f"  Channels: {channels}")
+        print(f"  Number of primaries: {len(primaries_dict)}")
+        print(f"  Primary keys: {sorted(primaries_dict.keys())}")
+        print(f"  CSV saved to: {csv_path}")
+        print(f"  Primaries dict saved to: {primaries_path}")
+
     except Exception as e:
         raise ValueError(f"Failed to load CSV '{input_path}': {e}")
-
-    # Filter to keep only 255-level single-channel primaries
-    filtered_inks = {}
-    for name, sp in inks.items():
-        m = PRIMARY_RE.match(name.strip())
-        if m and m.group(2) == "255":  # Only 255-level primaries
-            filtered_inks[name] = sp
-
-    if not filtered_inks:
-        raise ValueError("No 255-level primaries found in input CSV")
-
-    output_dir = f"data/inksets/{out_name}"
-    os.makedirs(output_dir, exist_ok=True)
-    output_path = os.path.join(output_dir, f"{out_name}-inks.csv")
-    # Copy/normalize into standard format
-    df = pd.DataFrame([sp.data for sp in filtered_inks.values()] + [paper.data],
-                      index=list(filtered_inks.keys()) + ["paper"],
-                      columns=wavelengths)
-    df.index.name = "Name"
-    df = df.reset_index()
-    df.insert(0, 'ID', range(1, len(df) + 1))
-    df['clogged'] = 0
-    df.to_csv(output_path, index=False)
-
-    registry.register_library(
-        out_name,
-        f"{out_name}/{out_name}-inks.csv",
-        {
-            "created": "registered_primaries",
-            "source_path": input_path,
-            "num_rows": len(filtered_inks),
-            "filtered_to_255_only": True,
-        }
-    )
-    print(f"Registered {len(filtered_inks)} 255-level primaries as library '{out_name}' at {output_path}")
 
 
 def predict_spectrum_from_levels(gamut: InkGamut, levels_vec_0_255: np.ndarray,
@@ -1352,6 +1480,7 @@ def cmd_calibrate_proc(args):
         n_reg=args.n_reg,
         enable_residual=(not args.no_residual)
     )
+    # Save neug as a pickle file if requested
 
     # Report
     print(f"Fitted n = {model['n']:.4f}")
@@ -1376,6 +1505,11 @@ def cmd_calibrate_proc(args):
             sp_meas = combos[name]
             levels = parse_combo_name(name, channels)
             pred = predict_with_model(neug, levels, channels, gammas_by_ch, residual_scale)
+
+            with open("neug.pkl", "wb") as f:
+                import pickle
+                pickle.dump((neug, levels, channels, gammas_by_ch, residual_scale), f)
+            print(f"Saved Neugebauer model (neug) to neug.pkl")
 
             # Interpolate measured to match wavelengths if needed
             if not np.array_equal(sp_meas.wavelengths, wavelengths):
