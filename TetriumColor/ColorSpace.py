@@ -131,6 +131,7 @@ class ColorSpace:
     def __init__(self, observer: Observer,
                  cst_display_type: CSTDisplayType | str = CSTDisplayType.NONE,
                  display_primaries: List[Spectra] | None = None,
+                 print_gamut: InkGamut | None = None,
                  metameric_axis: int = 2,
                  luminance_per_channel: List[float] = [1/np.sqrt(3)] * 3,
                  chromas_per_channel: List[float] = [np.sqrt(2/3)] * 3,
@@ -153,6 +154,7 @@ class ColorSpace:
         self.lums_per_channel = luminance_per_channel
         self.chromas_per_channel = chromas_per_channel
         self.display_primaries = display_primaries
+        self.print_gamut = print_gamut
 
         if isinstance(cst_display_type, str):
             cst_display_type = CSTDisplayType[cst_display_type.upper()]
@@ -441,7 +443,10 @@ class ColorSpace:
         if from_space == ColorSpaceType.PRINT:
             # Validate gamut provided and observer compatibility
             if ink_gamut is None:
-                raise ValueError("InkGamut required for PRINT conversions")
+                if self.print_gamut is None:
+                    raise ValueError("InkGamut required for PRINT conversions")
+                else:
+                    ink_gamut = self.print_gamut
             if ink_gamut.neugebauer.num_inks != self.observer.dimension:
                 raise ValueError("InkGamut inks must match observer dimension")
 
@@ -452,7 +457,10 @@ class ColorSpace:
         if to_space == ColorSpaceType.PRINT:
             # Validate gamut provided and observer compatibility
             if ink_gamut is None:
-                raise ValueError("InkGamut required for PRINT conversions")
+                if self.print_gamut is None:
+                    raise ValueError("InkGamut required for PRINT conversions")
+                else:
+                    ink_gamut = self.print_gamut
             if ink_gamut.neugebauer.num_inks != self.observer.dimension:
                 raise ValueError("InkGamut inks must match observer dimension")
 

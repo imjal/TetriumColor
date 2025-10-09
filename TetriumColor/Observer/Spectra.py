@@ -7,7 +7,7 @@ import numpy.typing as npt
 import warnings
 import copy
 
-from colour import SDS_ILLUMINANTS, SDS_LIGHT_SOURCES, sd_to_XYZ, XYZ_to_xy, XYZ_to_sRGB, XYZ_to_Lab, delta_E, SpectralDistribution, notation, MultiSpectralDistributions
+from colour import SDS_ILLUMINANTS, SDS_LIGHT_SOURCES, sRGB_to_XYZ, sd_to_XYZ, XYZ_to_xy, XYZ_to_sRGB, XYZ_to_Lab, delta_E, SpectralDistribution, notation, MultiSpectralDistributions
 from scipy.interpolate import interp1d
 from scipy.signal import savgol_filter
 
@@ -185,14 +185,27 @@ class Spectra:
     def to_lab(self, illuminant: Optional["Spectra"] = None, cmfs: Optional["MultiSpectralDistributions"] = None) -> npt.NDArray:
         """Converts the spectra to the Lab color space value.
         """
-        i = illuminant.to_colour() if illuminant is not None else Illuminant.get("D65").to_colour()
-        return XYZ_to_Lab(sd_to_XYZ(self.to_colour(), cmfs=cmfs) / 100)
+        return XYZ_to_Lab(self.to_xyz(illuminant))
 
     @staticmethod
     def delta_e(spectra1: "Spectra", spectra2: "Spectra") -> float:
         """Calculates the delta E between two spectra.
         """
         return delta_E(spectra1.to_lab(), spectra2.to_lab())
+
+    def avg_delta_e_unit(self, illuminant: "Spectra", num_samples: int = 100, ball_radius: float = 0.01) -> float:
+        chromaticity_coord = XYZ_to_xy(sd_to_XYZ(illuminant.to_colour()) / 100)
+        rgb = self.to_rgb(illuminant)
+
+        peturbations = np.random.normal(size=(num_samples, 3))
+        peturbations /= np.linalg.norm(peturbations, axis=1, keepdims=True)
+        peturbations = peturbations * ball_radius + rgb
+
+        deltas = []
+        for p in peturbations:
+            peturb_lab = XYZ_to_Lab(sRGB_to_XYZ(p, illuminant=chromaticity_coord))
+            deltas.append(delta_E(self.to_lab(), peturb_lab))
+        return np.mean(deltas), np.std(deltas)
 
     @staticmethod
     def spectral_rmse(spectra1: "Spectra", spectra2: "Spectra") -> float:
