@@ -11,3 +11,5 @@ screeninfo==0.8.1
 setuptools==75.1.0
 tqdm==4.67.0
 hashlib
+joblib
+scikit-learn
