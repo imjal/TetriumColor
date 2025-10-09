@@ -20,6 +20,8 @@ set(Python3_FIND_VIRTUALENV FIRST)
 if(APPLE)
     set(Python3_FIND_FRAMEWORK NEVER)  # Critical for macOS - prevents finding Homebrew Python
     message(STATUS "macOS detected - disabling Framework search to use conda Python")
+elseif(WIN32)
+    set(Python3_ROOT_DIR "C:/Users/yty10/miniconda3/envs/tetrium")
 endif()
 
 # Find Python libraries - THIS MUST COME BEFORE manually setting paths
