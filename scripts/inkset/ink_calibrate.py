@@ -1506,11 +1506,6 @@ def cmd_calibrate_proc(args):
             levels = parse_combo_name(name, channels)
             pred = predict_with_model(neug, levels, channels, gammas_by_ch, residual_scale)
 
-            with open("neug.pkl", "wb") as f:
-                import pickle
-                pickle.dump((neug, levels, channels, gammas_by_ch, residual_scale), f)
-            print(f"Saved Neugebauer model (neug) to neug.pkl")
-
             # Interpolate measured to match wavelengths if needed
             if not np.array_equal(sp_meas.wavelengths, wavelengths):
                 sp_meas = sp_meas.interpolate_values(wavelengths)
