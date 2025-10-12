@@ -9,10 +9,13 @@ import hashlib
 
 from importlib import resources
 from TetriumColor.ColorSpace import ColorSpace, ColorSpaceType
+from TetriumColor.Observer import Spectra
 from TetriumColor.PsychoPhys.IshiharaPlate import generate_ishihara_plate
 from TetriumColor.Utils.CustomTypes import TetraColor, PlateColor
 import TetriumColor.ColorMath.Geometry as Geometry
 from TetriumColor.ColorMath.SubSpaceIntersection import FindMaximalSaturation, FindMaximumIn1DimDirection, FindMaximumWidthAlongDirection, excitations_to_contrast, receptor_isolate_spectral
+
+from TetriumColor.Measurement import load_primaries_from_csv
 
 
 class ColorSampler:
@@ -686,6 +689,7 @@ class ColorSampler:
                                   cube_idx: int, secrets: Optional[List[int]] = None,
                                   lum_noise=0.0,
                                   s_cone_noise=0.0,
+                                  output_space: ColorSpaceType = ColorSpaceType.DISP_6P,
                                   background: None | npt.NDArray = None,
                                   isSRGB: bool = False) -> List[Tuple[Image.Image, Image.Image]]:
         """ Get the metamer points for a given luminance and cube index
@@ -704,39 +708,17 @@ class ColorSampler:
         if secrets is None:
             secrets = np.random.randint(10, 100, size=len(disp_points)).tolist()
 
-        if background is None:
-            vec = np.zeros(self.color_space.dim)
-            vec[0] = luminance
-            background = self.color_space.to_tetra_color(np.array([vec]), from_space=ColorSpaceType.VSH)[0]
-        else:
-            background = self.color_space.to_tetra_color(np.array([background]), from_space=ColorSpaceType.DISP)[0]
-
         metamers_in_disp = np.zeros((disp_points.shape[0], 2, self.color_space.dim))
         plates = []
         for i in tqdm(range(metamers_in_disp.shape[0]), desc="Generating plates"):
             # points in contention in disp space, bounded by unit cube scaled by vectors, direction is the metameric axis
             metamers_in_disp[i] = np.array(FindMaximumIn1DimDirection(
                 disp_points[i], metamer_dir_in_disp, np.eye(self.color_space.dim)))
-
-            display_color_space = ColorSpaceType.SRGB if isSRGB else ColorSpaceType.DISP_6P
             colors = self.color_space.convert(metamers_in_disp[i], ColorSpaceType.DISP, ColorSpaceType.CONE)
+            # Output as a copyable numpy array
 
             plates += [generate_ishihara_plate(colors[0], colors[1], self.color_space, secrets[i],
-                                               background_color=background, output_space=display_color_space,
-                                               lum_noise=lum_noise, s_cone_noise=s_cone_noise)]
-
-        # Convert to cone space
-        print((metamers_in_disp.reshape(-1, self.color_space.dim)
-              * self.color_space.transform.white_weights * 255).astype(np.uint8))
-
-        disp_6p = self.color_space.convert(metamers_in_disp.reshape(-1, self.color_space.dim),
-                                           ColorSpaceType.DISP, ColorSpaceType.DISP_6P)
-
-        print((disp_6p * 255).astype(np.uint8))
-
-        cones = self.color_space.convert(metamers_in_disp.reshape(-1, self.color_space.dim),
-                                         ColorSpaceType.DISP, ColorSpaceType.CONE)
-        print(cones)
+                                               lum_noise=lum_noise, s_cone_noise=s_cone_noise, output_space=output_space)]
 
         return plates
 

@@ -324,6 +324,18 @@ class Spectra:
 
         return Spectra(wavelengths=self.wavelengths, data=smoothed_data)
 
+    @staticmethod
+    def multiply(primaries: List['Spectra'], bgor: npt.NDArray[np.float64]) -> List['Spectra']:
+        new_specs = []
+        for p, b in zip(primaries, bgor):
+            new_specs.append(Spectra(wavelengths=p.wavelengths, data=p.data * b))
+        return new_specs
+
+    @staticmethod
+    def add(primaries: List['Spectra']) -> 'Spectra':
+        data = np.sum(p.data for p in primaries)
+        return Spectra(wavelengths=primaries[0].wavelengths, data=data)
+
     def __getitem__(self, wavelength: float) -> float:
         return self.interpolated_value(wavelength)
 

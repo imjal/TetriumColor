@@ -63,7 +63,7 @@ def GetColorSpaceTransform(observer: Observer, display_basis: CSTDisplayType,
                            display_primaries: List[Spectra] | None = None,
                            metameric_axis: int = 2,
                            led_mapping: List[int] | None = [0, 1, 3, 2, 1, 3],
-                           scaling_factor: float = 10000, generate_max_basis=False) -> ColorSpaceTransform:
+                           scaling_factor: float = 100, generate_max_basis=False) -> ColorSpaceTransform:
     """Get ColorSpaceTransform for the observer
 
     Args:
@@ -88,12 +88,14 @@ def GetColorSpaceTransform(observer: Observer, display_basis: CSTDisplayType,
             raise ValueError("Display primaries and led_mapping must be provided for LED display basis together.")
         disp = observer.observe_spectras(display_primaries)
         intensities = disp.T * scaling_factor
-        white_pt = observer.observe_normalized(np.ones_like(observer.wavelengths))
-        white_weights = np.linalg.inv(intensities)@white_pt
+        # white_pt = observer.observe_normalized(np.ones_like(observer.wavelengths))
+        # white_weights = np.linalg.inv(intensities)@white_pt
 
-        rescaled_white_weights = white_weights / np.max(white_weights)
-        new_intensities = intensities * rescaled_white_weights
-        M_Cone_To_Primaries = np.linalg.inv(new_intensities)  # something is fucked
+        # rescaled_white_weights = white_weights / np.max(white_weights)
+        # new_intensities = intensities * rescaled_white_weights
+
+        rescaled_white_weights = np.ones(observer.dimension)
+        M_Cone_To_Primaries = np.linalg.inv(intensities)  # something is fucked
     else:
         rescaled_white_weights = np.ones(observer.dimension)
         led_mapping = [i for i in range(observer.dimension)]
