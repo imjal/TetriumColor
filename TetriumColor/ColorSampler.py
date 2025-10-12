@@ -712,10 +712,33 @@ class ColorSampler:
         plates = []
         for i in tqdm(range(metamers_in_disp.shape[0]), desc="Generating plates"):
             # points in contention in disp space, bounded by unit cube scaled by vectors, direction is the metameric axis
-            metamers_in_disp[i] = np.array(FindMaximumIn1DimDirection(
-                disp_points[i], metamer_dir_in_disp, np.eye(self.color_space.dim)))
+            # Find metamers in unit cube space first, then scale to display space
+            # metamers_unit_cube = np.array(FindMaximumIn1DimDirection(
+            #     disp_points[i] / self.color_space.transform.white_weights,
+            #     metamer_dir_in_disp / self.color_space.transform.white_weights,
+            #     np.eye(self.color_space.dim)))
+            metamers_in_disp[i] = np.clip(FindMaximumIn1DimDirection(
+                disp_points[i],
+                metamer_dir_in_disp,
+                np.eye(self.color_space.dim)), 0, 1)
+
+            # Scale back to display space
+            # metamers_in_disp[i] = metamers_unit_cube * self.color_space.transform.white_weights
             colors = self.color_space.convert(metamers_in_disp[i], ColorSpaceType.DISP, ColorSpaceType.CONE)
             # Output as a copyable numpy array
+
+            if False:
+                primaries = load_primaries_from_csv("../../measurements/2025-10-11/primaries")
+
+                bgor = self.color_space.convert(colors, ColorSpaceType.CONE, ColorSpaceType.DISP)
+                metamers = [Spectra.add(Spectra.multiply(primaries, bgor[0])),
+                            Spectra.add(Spectra.multiply(primaries, bgor[1]))]
+                cones = self.color_space.observer.observe_spectras(metamers)
+                print(cones)
+                print("Q diff: ", np.abs(cones[0][self.color_space.metameric_axis] -
+                      cones[1][self.color_space.metameric_axis]))
+                assert np.all((metamers_in_disp[i] >= 0) & (metamers_in_disp[i] <= 1)
+                              ), f"metamer_vals values not in [0, 1]: {metamers_in_disp[i]}"
 
             plates += [generate_ishihara_plate(colors[0], colors[1], self.color_space, secrets[i],
                                                lum_noise=lum_noise, s_cone_noise=s_cone_noise, output_space=output_space)]

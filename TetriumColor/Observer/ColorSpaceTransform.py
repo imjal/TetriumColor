@@ -88,14 +88,13 @@ def GetColorSpaceTransform(observer: Observer, display_basis: CSTDisplayType,
             raise ValueError("Display primaries and led_mapping must be provided for LED display basis together.")
         disp = observer.observe_spectras(display_primaries)
         intensities = disp.T * scaling_factor
-        # white_pt = observer.observe_normalized(np.ones_like(observer.wavelengths))
-        # white_weights = np.linalg.inv(intensities)@white_pt
-
+        white_pt = observer.observe_normalized(np.ones_like(observer.wavelengths))
+        white_weights = np.linalg.inv(intensities)@white_pt
         # rescaled_white_weights = white_weights / np.max(white_weights)
-        # new_intensities = intensities * rescaled_white_weights
 
+        new_intensities = intensities * np.max(white_weights)
         rescaled_white_weights = np.ones(observer.dimension)
-        M_Cone_To_Primaries = np.linalg.inv(intensities)  # something is fucked
+        M_Cone_To_Primaries = np.linalg.inv(new_intensities)  # something is fucked
     else:
         rescaled_white_weights = np.ones(observer.dimension)
         led_mapping = [i for i in range(observer.dimension)]
