@@ -4,7 +4,7 @@ from PIL import Image
 import math
 
 
-def CreatePaddedGrid(images: List[str] | List[Image.Image], canvas_size=(1280, 720), padding=10, bg_color=(0, 0, 0)) -> Image.Image:
+def CreatePaddedGrid(images: List[str] | List[Image.Image], canvas_size=(1280, 720), padding=10, bg_color=(0, 0, 0), channels=3) -> Image.Image:
     """
     Create a padded grid of images centered on a canvas of specified size.
 
@@ -34,12 +34,19 @@ def CreatePaddedGrid(images: List[str] | List[Image.Image], canvas_size=(1280, 7
     grid_width = cols * max_width + (cols - 1) * padding
     grid_height = rows * max_height + (rows - 1) * padding
 
+    if channels == 4:
+        mode = "RGBA"
+    elif channels == 3:
+        mode = "RGB"
+    else:
+        raise ValueError(f"Unsupported number of channels: {channels}")
+
     # Create a blank canvas
     canvas_width, canvas_height = canvas_size
-    canvas = Image.new("RGB", (canvas_width, canvas_height), bg_color)
+    canvas = Image.new(mode, (canvas_width, canvas_height), bg_color)
 
     # Create the grid
-    grid_image = Image.new("RGB", (grid_width, grid_height), bg_color)
+    grid_image = Image.new(mode, (grid_width, grid_height), bg_color)
     for idx, img in enumerate(resized_images):
         row = idx // cols
         col = idx % cols

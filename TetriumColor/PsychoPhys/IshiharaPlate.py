@@ -112,7 +112,7 @@ def _generate_geometry(dot_sizes: List[int], image_size: int, seed: int) -> List
     np.random.seed(seed)
 
     # Create packed_circles, a list of (x, y, r) tuples
-    radii = dot_sizes * 2000
+    radii = dot_sizes * 2000 * 8
     np.random.shuffle(radii)
     packed_circles = packcircles.pack(radii)
 
@@ -204,8 +204,9 @@ def _draw_plate(
     color_space: ColorSpace,
     channel_draws: List[ImageDraw.ImageDraw],
     lum_noise: float,
+    s_cone_noise: float = 0.0,
+    input_space: ColorSpaceType = ColorSpaceType.CONE,
     output_space: ColorSpaceType = ColorSpaceType.DISP_6P,
-    s_cone_noise: float = 0.0
 ) -> None:
     """
     Draw the plate with the computed circle positions and colors.
@@ -233,16 +234,24 @@ def _draw_plate(
             noise_vector += np.random.normal(0, lum_noise, size=color_space.dim)
 
         circle_color = np.clip(circle_color + noise_vector, 0, None)
-        circle_color = color_space.convert(np.array([circle_color]), ColorSpaceType.CONE, output_space)[0]
+        circle_color = color_space.convert(np.array([circle_color]), input_space, output_space)[0]
 
         # Draw the ellipse
         bounding_box = [x-r, y-r, x+r, y+r]
-        ellipse_color = (circle_color * 255).astype(int)
-        if len(ellipse_color) > 4:
+        if input_space != output_space:
+            circle_color = (circle_color * 255).astype(int)
+        else:
+            noise_vector = np.full((4), np.random.normal(0, lum_noise))
+            # lum_dir = color_space.convert(np.ones(4), ColorSpaceType.CONE, ColorSpaceType.PRINT)
+            # lum_dir = lum_dir / np.linalg.norm(lum_dir) * noise_vector
+            circle_color = circle_color + noise_vector
+            circle_color = (circle_color).astype(int)
+
+        if len(circle_color) > 4:
             for i in range(len(channel_draws)):
-                channel_draws[i].ellipse(bounding_box, fill=tuple(ellipse_color[3*i:3*i + 3]), width=0)
+                channel_draws[i].ellipse(bounding_box, fill=tuple(circle_color[3*i:3*i + 3]), width=0)
         else:  # should match the rgb/cmyk length
-            channel_draws[0].ellipse(bounding_box, fill=tuple(ellipse_color), width=0)
+            channel_draws[0].ellipse(bounding_box, fill=tuple(circle_color), width=0)
 
 
 def generate_ishihara_plate(
@@ -258,6 +267,7 @@ def generate_ishihara_plate(
     lum_noise: float = 0,
     s_cone_noise: float = 0,
     noise: float = 0,
+    input_space: ColorSpaceType = ColorSpaceType.CONE,
     output_space: ColorSpaceType = ColorSpaceType.DISP_6P,
     gradient: bool = False,
     corner_label: Optional[str] = None,
@@ -330,6 +340,7 @@ def generate_ishihara_plate(
     inside_props, outside_props = _compute_inside_outside(
         circles, secret_img, image_size, num_samples, noise, gradient
     )
+
     # Become fancier eventually - determine the # of channels / type of image based on the output space -- we need some function that maps each of the color spaces to a specific number
     background_color = tuple(background_color.tolist())
     if output_space.num_channels() > 4:  # 6P disp
@@ -337,7 +348,7 @@ def generate_ishihara_plate(
             image_size, image_size), color=background_color) for i in range(2)]
     elif output_space.num_channels() == 4:  # any 4P space like CMYK
         channels: List[Image.Image] = [Image.new(mode="RGBA", size=(
-            image_size, image_size), color=background_color) for i in range(1)]
+            image_size, image_size), color=(0, 0, 0, 0)) for i in range(1)]
     else:  # any 3P space like sRGB, XYZ, OKLAB, OKLABM1, CIELAB
         channels: List[Image.Image] = [Image.new(mode="RGB", size=(
             image_size, image_size), color=background_color) for i in range(1)]
@@ -347,7 +358,7 @@ def generate_ishihara_plate(
     # Draw plate
     _draw_plate(
         circles, inside_props, outside_props, inside_cone, outside_cone, color_space,
-        channel_draws, lum_noise, output_space, s_cone_noise
+        channel_draws, lum_noise, s_cone_noise, input_space, output_space
     )
 
     # Draw corner label if provided
@@ -365,7 +376,6 @@ def generate_ishihara_plate(
     if blur_radius > 0:
         for i in range(len(channels)):
             channels[i] = channels[i].filter(ImageFilter.GaussianBlur(radius=blur_radius))
-
     return channels
 
 

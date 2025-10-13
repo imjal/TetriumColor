@@ -12,13 +12,14 @@ from TetriumColor.Utils.ParserOptions import AddObserverArgs
 from TetriumColor.Utils.ImageUtils import CreatePaddedGrid
 
 
-def generate_grid_from_color_space(filename, output_dir, color_space, grid_size, num_plates, luminance, chroma):
+def generate_grid_from_color_space(filename, output_dir, color_space, grid_size, num_plates, luminance, chroma, lum_noise, s_cone_noise):
     """
     Generate Ishihara-style metameric grid plates from a color space.
     """
     color_sampler = ColorSampler(color_space, cubemap_size=grid_size)
 
-    images = color_sampler.get_metameric_grid_plates(luminance, chroma, num_plates)
+    images = color_sampler.get_metameric_grid_plates(
+        luminance, chroma, num_plates, lum_noise=lum_noise, s_cone_noise=s_cone_noise)
 
     foreground_images = [x for x, _ in images]
     background_images = [y for _, y in images]
@@ -36,7 +37,7 @@ def generate_grid_from_color_space(filename, output_dir, color_space, grid_size,
 def generate_ishihara_grid(output_dir, measurement_dir, grid_size, metameric_axis,
                            display_type, num_plates, luminance, chroma, scramble_prob,
                            od, dimension, s_cone_peak, m_cone_peak, q_cone_peak,
-                           l_cone_peak, macula, lens, template):
+                           l_cone_peak, macula, lens, template, lum_noise, s_cone_noise):
     """
     Generate Ishihara-style metameric grid plates for a single observer.
 
@@ -66,12 +67,13 @@ def generate_ishihara_grid(output_dir, measurement_dir, grid_size, metameric_axi
 
     filename = f"{od}_{dimension}_{s_cone_peak}_{m_cone_peak}_{q_cone_peak}_{l_cone_peak}_{macula}_{lens}_{template}"
 
-    generate_grid_from_color_space(filename, output_dir, cs_4d, grid_size, num_plates, luminance, chroma)
+    generate_grid_from_color_space(filename, output_dir, cs_4d, grid_size, num_plates,
+                                   luminance, chroma, lum_noise, s_cone_noise)
 
 
 def generate_ishihara_grid_genotypes(output_dir, measurement_dir, grid_size, metameric_axis,
                                      display_type, num_plates, luminance, chroma,
-                                     top_percentage, peak_to_test, sex='male'):
+                                     top_percentage, peak_to_test, lum_noise, s_cone_noise, sex='femmale'):
     """
     Generate Ishihara-style metameric grid plates for multiple observer genotypes.
 
@@ -87,6 +89,8 @@ def generate_ishihara_grid_genotypes(output_dir, measurement_dir, grid_size, met
         scramble_prob: Probability of scrambling the color
         top_percentage: Percentage of population to cover (e.g., 0.9 for 90%)
         sex: 'male', 'female', or 'both'
+        lum_noise: Luminance noise level
+        s_cone_noise: S-cone noise level
     """
     # Initialize ObserverGenotypes
     og = ObserverGenotypes(dimensions=[2])
@@ -117,7 +121,7 @@ def generate_ishihara_grid_genotypes(output_dir, measurement_dir, grid_size, met
         genotype_filename = f"genotype_{genotype_str}"
 
         generate_grid_from_color_space(genotype_filename, output_dir, color_space,
-                                       grid_size, num_plates, luminance, chroma)
+                                       grid_size, num_plates, luminance, chroma, lum_noise, s_cone_noise)
 
         print(f"Saved plates for genotype {genotype} to {output_dir}")
 
@@ -149,6 +153,8 @@ if __name__ == "__main__":
         subparser.add_argument('--num_plates', type=int, default=4, help='Number of plates to generate')
         subparser.add_argument('--luminance', type=float, default=1.0, help='Luminance value')
         subparser.add_argument('--chroma', type=float, default=0.5, help='Chroma value')
+        subparser.add_argument('--lum_noise', type=float, default=0.0035, help='Luminance noise level')
+        subparser.add_argument('--s_cone_noise', type=float, default=0.0035, help='S-cone noise level')
 
     # Genotypes-specific arguments
     genotypes_parser.add_argument('--top_percentage', type=float, default=0.9,
@@ -178,7 +184,9 @@ if __name__ == "__main__":
             l_cone_peak=args.l_cone_peak,
             macula=args.macula,
             lens=args.lens,
-            template=args.template
+            template=args.template,
+            lum_noise=args.lum_noise,
+            s_cone_noise=args.s_cone_noise
         )
     elif args.command == 'genotypes':
         generate_ishihara_grid_genotypes(
@@ -191,6 +199,8 @@ if __name__ == "__main__":
             luminance=args.luminance,
             chroma=args.chroma,
             top_percentage=args.top_percentage,
+            lum_noise=args.lum_noise,
+            s_cone_noise=args.s_cone_noise,
             sex=args.sex,
             peak_to_test=args.peak_to_test
         )

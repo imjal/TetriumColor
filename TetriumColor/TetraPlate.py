@@ -76,7 +76,7 @@ class PseudoIsochromaticPlateGenerator:
         from TetriumColor import PseudoIsochromaticPlateGenerator
         from TetriumColor.Measurement import load_primaries_from_csv
 
-        primaries = load_primaries_from_csv("./measurements/2025-10-01/primaries/")
+        primaries = load_primaries_from_csv("./measurements/2025-10-10/primaries/")
 
         # for p in primaries:
         #     p.plot()
@@ -89,10 +89,10 @@ class PseudoIsochromaticPlateGenerator:
         number_of_tests = color_generator.get_num_samples()
         plate_generator = PseudoIsochromaticPlateGenerator(color_generator)
 
-        lum_noise = 0.001
-        s_cone_noise = 0.000
+        lum_noise = 0.000
+        s_cone_noise = 0.001
 
-        dirname = f"./measurements/2025-10-01/tests_noise_{lum_noise}_scone_noise_{s_cone_noise}"
+        dirname = f"./measurements/2025-10-10/tests_noise_{lum_noise}_scone_noise_{s_cone_noise}"
         os.makedirs(dirname, exist_ok=True)
         for i in range(number_of_tests):
             print(f"Generating plate {i}")

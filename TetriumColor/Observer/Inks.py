@@ -1435,7 +1435,8 @@ def load_inkset(filepath: str, filter_clogged: bool = True) -> Tuple[Dict[str, S
     Raises:
     - ValueError: If the inkset does not contain a 'paper' ink.
     """
-    df = pd.read_csv(filepath)
+    # Read the CSV file, forcing the second column to string type
+    df = pd.read_csv(filepath, dtype={"Name": str} if hasattr(pd, 'read_csv') else None)
 
     # Identify optional 'clogged' column (case-insensitive match)
     clogged_col = next((c for c in df.columns if str(c).strip().lower() == 'clogged'), None)
@@ -1475,6 +1476,7 @@ def load_inkset(filepath: str, filter_clogged: bool = True) -> Tuple[Dict[str, S
 
     for i in range(len(df)):
         name = df.iloc[i, 1]
+        print(name)
         # Read spectral data for this row in the sorted wavelength order
         data = df.loc[i, wave_cols].to_numpy(dtype=float)
 
@@ -1496,7 +1498,8 @@ def load_inkset(filepath: str, filter_clogged: bool = True) -> Tuple[Dict[str, S
         inks[name] = spectra_obj
 
     if paper is None:
-        raise ValueError("No paper spectra found in inkset CSV.")
+        print("No paper spectra found in inkset CSV.")
+        # raise ValueError("No paper spectra found in inkset CSV.")
 
     # Paper may be managed outside of this file (e.g., via registry). Do not error if missing.
     return inks, paper, wavelengths

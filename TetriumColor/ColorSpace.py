@@ -82,6 +82,8 @@ class ColorSpaceType(Enum):
     def num_channels(self) -> int:
         if self == ColorSpaceType.DISP_6P:
             return 6
+        elif self == ColorSpaceType.PRINT:
+            return 4
         elif self == ColorSpaceType.SRGB or self == ColorSpaceType.XYZ or self == ColorSpaceType.OKLAB or self == ColorSpaceType.OKLABM1 or self == ColorSpaceType.CIELAB:
             return 3
         else:
