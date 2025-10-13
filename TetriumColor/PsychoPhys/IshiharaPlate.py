@@ -112,7 +112,9 @@ def _generate_geometry(dot_sizes: List[int], image_size: int, seed: int) -> List
     np.random.seed(seed)
 
     # Create packed_circles, a list of (x, y, r) tuples
-    radii = dot_sizes * 2000 * 8
+    radii = dot_sizes * 2000
+    if image_size > 1024:
+        radii = radii * 8
     np.random.shuffle(radii)
     packed_circles = packcircles.pack(radii)
 
@@ -231,7 +233,7 @@ def _draw_plate(
 
         if lum_noise > 0:
             # Add luminance noise
-            noise_vector += np.random.normal(0, lum_noise, size=color_space.dim)
+            noise_vector += np.full(color_space.dim, np.random.normal(0, lum_noise))
 
         circle_color = np.clip(circle_color + noise_vector, 0, None)
         circle_color = color_space.convert(np.array([circle_color]), input_space, output_space)[0]
@@ -239,13 +241,14 @@ def _draw_plate(
         # Draw the ellipse
         bounding_box = [x-r, y-r, x+r, y+r]
         if input_space != output_space:
-            circle_color = (circle_color * 255).astype(int)
+            # Use rounding to nearest integer when discretizing to int
+            circle_color = np.round(circle_color * 255).astype(int)
         else:
             noise_vector = np.full((4), np.random.normal(0, lum_noise))
-            # lum_dir = color_space.convert(np.ones(4), ColorSpaceType.CONE, ColorSpaceType.PRINT)
+            noise_vector = color_space.convert(noise_vector, ColorSpaceType.CONE, ColorSpaceType.PRINT)
             # lum_dir = lum_dir / np.linalg.norm(lum_dir) * noise_vector
             circle_color = circle_color + noise_vector
-            circle_color = (circle_color).astype(int)
+            circle_color = np.round((circle_color)).astype(int)
 
         if len(circle_color) > 4:
             for i in range(len(channel_draws)):
