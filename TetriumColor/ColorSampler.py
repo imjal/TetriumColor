@@ -10,7 +10,7 @@ import hashlib
 from importlib import resources
 from TetriumColor.ColorSpace import ColorSpace, ColorSpaceType
 from TetriumColor.Observer import Spectra
-from TetriumColor.PsychoPhys.IshiharaPlate import generate_ishihara_plate
+from TetriumColor.PsychoPhys.IshiharaPlate import IshiharaPlateGenerator, generate_ishihara_plate
 from TetriumColor.Utils.CustomTypes import TetraColor, PlateColor
 import TetriumColor.ColorMath.Geometry as Geometry
 from TetriumColor.ColorMath.SubSpaceIntersection import FindMaximalSaturation, FindMaximumIn1DimDirection, FindMaximumWidthAlongDirection, excitations_to_contrast, receptor_isolate_spectral
@@ -710,6 +710,7 @@ class ColorSampler:
 
         metamers_in_disp = np.zeros((disp_points.shape[0], 2, self.color_space.dim))
         plates = []
+        plate_generator = IshiharaPlateGenerator(seed=0)
         for i in tqdm(range(metamers_in_disp.shape[0]), desc="Generating plates"):
             # points in contention in disp space, bounded by unit cube scaled by vectors, direction is the metameric axis
             # Find metamers in unit cube space first, then scale to display space
@@ -740,8 +741,8 @@ class ColorSampler:
                 assert np.all((metamers_in_disp[i] >= 0) & (metamers_in_disp[i] <= 1)
                               ), f"metamer_vals values not in [0, 1]: {metamers_in_disp[i]}"
 
-            plates += [generate_ishihara_plate(colors[0], colors[1], self.color_space, secrets[i],
-                                               lum_noise=lum_noise, s_cone_noise=s_cone_noise, output_space=output_space)]
+            plates += [plate_generator.GeneratePlate(colors[0], colors[1], self.color_space, secrets[i], output_space,
+                                                     lum_noise=lum_noise, s_cone_noise=s_cone_noise)]
 
         return plates
 

@@ -97,4 +97,4 @@ class PseudoIsochromaticPlateGenerator:
         for i in range(number_of_tests):
             print(f"Generating plate {i}")
             plate_generator.GetPlate(
-                None, os.path.join(dirname, f"test_{i}"), 10, ColorSpaceType.DISP_6P, lum_noise=lum_noise, s_cone_noise=s_cone_noise)
+                None, os.path.join(dirname, f"test_{i}"), 10, output_space=ColorSpaceType.SRGB, lum_noise=lum_noise, s_cone_noise=s_cone_noise)

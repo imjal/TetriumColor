@@ -4,7 +4,7 @@ import numpy as np
 import argparse
 import os
 
-from TetriumColor import ColorSpace, ColorSampler
+from TetriumColor import ColorSpace, ColorSampler, ColorSpaceType
 from TetriumColor.Observer import Observer
 from TetriumColor.Observer.ObserverGenotypes import ObserverGenotypes
 from TetriumColor.Measurement import load_primaries_from_csv
@@ -12,32 +12,37 @@ from TetriumColor.Utils.ParserOptions import AddObserverArgs
 from TetriumColor.Utils.ImageUtils import CreatePaddedGrid
 
 
-def generate_grid_from_color_space(filename, output_dir, color_space, grid_size, num_plates, luminance, chroma, lum_noise, s_cone_noise):
+def generate_grid_from_color_space(filename, output_dir, color_space, grid_size, num_plates, luminance, chroma, lum_noise, s_cone_noise, output_space):
     """
     Generate Ishihara-style metameric grid plates from a color space.
     """
     color_sampler = ColorSampler(color_space, cubemap_size=grid_size)
 
     images = color_sampler.get_metameric_grid_plates(
-        luminance, chroma, num_plates, lum_noise=lum_noise, s_cone_noise=s_cone_noise)
+        luminance, chroma, num_plates, lum_noise=lum_noise, s_cone_noise=s_cone_noise, output_space=output_space)
 
-    foreground_images = [x for x, _ in images]
-    background_images = [y for _, y in images]
+    if len(images[0]) == 1:
+        foreground_images = [x[0] for x in images]
+        foreground = CreatePaddedGrid(foreground_images, padding=0)
+        os.makedirs(output_dir, exist_ok=True)
+        foreground.save(os.path.join(output_dir, f"{filename}_sRGB.png"))
 
-    # bg_color = color_space.get_background(1)
-    foreground = CreatePaddedGrid(foreground_images, padding=0)
-    background = CreatePaddedGrid(background_images, padding=0)
+    else:
+        foreground_images = [x for x, _ in images]
+        background_images = [y for _, y in images]
+        foreground = CreatePaddedGrid(foreground_images, padding=0)
+        background = CreatePaddedGrid(background_images, padding=0)
 
-    os.makedirs(output_dir, exist_ok=True)
+        os.makedirs(output_dir, exist_ok=True)
 
-    foreground.save(os.path.join(output_dir, f"{filename}_RGB.png"))
-    background.save(os.path.join(output_dir, f"{filename}_OCV.png"))
+        foreground.save(os.path.join(output_dir, f"{filename}_RGB.png"))
+        background.save(os.path.join(output_dir, f"{filename}_OCV.png"))
 
 
 def generate_ishihara_grid(output_dir, measurement_dir, grid_size, metameric_axis,
-                           display_type, num_plates, luminance, chroma, scramble_prob,
+                           display_type, num_plates, luminance, chroma,
                            od, dimension, s_cone_peak, m_cone_peak, q_cone_peak,
-                           l_cone_peak, macula, lens, template, lum_noise, s_cone_noise):
+                           l_cone_peak, macula, lens, template, lum_noise, s_cone_noise, output_space):
     """
     Generate Ishihara-style metameric grid plates for a single observer.
 
@@ -68,12 +73,12 @@ def generate_ishihara_grid(output_dir, measurement_dir, grid_size, metameric_axi
     filename = f"{od}_{dimension}_{s_cone_peak}_{m_cone_peak}_{q_cone_peak}_{l_cone_peak}_{macula}_{lens}_{template}"
 
     generate_grid_from_color_space(filename, output_dir, cs_4d, grid_size, num_plates,
-                                   luminance, chroma, lum_noise, s_cone_noise)
+                                   luminance, chroma, lum_noise, s_cone_noise, output_space)
 
 
 def generate_ishihara_grid_genotypes(output_dir, measurement_dir, grid_size, metameric_axis,
-                                     display_type, num_plates, luminance, chroma,
-                                     top_percentage, peak_to_test, lum_noise, s_cone_noise, sex='femmale'):
+                                     num_plates, luminance, chroma,
+                                     top_percentage, peak_to_test, lum_noise, s_cone_noise, output_space, sex='femmale'):
     """
     Generate Ishihara-style metameric grid plates for multiple observer genotypes.
 
@@ -86,7 +91,6 @@ def generate_ishihara_grid_genotypes(output_dir, measurement_dir, grid_size, met
         num_plates: Number of plates to generate
         luminance: Luminance value
         chroma: Chroma value
-        scramble_prob: Probability of scrambling the color
         top_percentage: Percentage of population to cover (e.g., 0.9 for 90%)
         sex: 'male', 'female', or 'both'
         lum_noise: Luminance noise level
@@ -105,7 +109,7 @@ def generate_ishihara_grid_genotypes(output_dir, measurement_dir, grid_size, met
     print(f"Loaded primaries: {primaries}")
 
     color_spaces = [og.get_color_space_for_peaks(
-        genotype + (peak_to_test,), cst_display_type='led', display_primaries=primaries) for genotype in genotypes if peak_to_test not in genotype]
+        genotype + (peak_to_test,), cst_display_type='led', display_primaries=primaries, metameric_axis=metameric_axis) for genotype in genotypes if peak_to_test not in genotype]
 
     print(f"Generating plates for {len(genotypes)} genotypes covering {top_percentage*100:.1f}% of {sex} population")
 
@@ -121,7 +125,7 @@ def generate_ishihara_grid_genotypes(output_dir, measurement_dir, grid_size, met
         genotype_filename = f"genotype_{genotype_str}"
 
         generate_grid_from_color_space(genotype_filename, output_dir, color_space,
-                                       grid_size, num_plates, luminance, chroma, lum_noise, s_cone_noise)
+                                       grid_size, num_plates, luminance, chroma, lum_noise, s_cone_noise, output_space)
 
         print(f"Saved plates for genotype {genotype} to {output_dir}")
 
@@ -149,13 +153,13 @@ if __name__ == "__main__":
                                help='Directory containing primary measurements')
         subparser.add_argument('--grid_size', type=int, default=5, help='Size of the grid (e.g., 5 for 5x5 grid)')
         subparser.add_argument('--metameric_axis', type=int, default=2, help='Metameric axis for colorspace')
-        subparser.add_argument('--display_type', type=str, default='led', help='Display type for colorspace')
         subparser.add_argument('--num_plates', type=int, default=4, help='Number of plates to generate')
         subparser.add_argument('--luminance', type=float, default=1.0, help='Luminance value')
         subparser.add_argument('--chroma', type=float, default=0.5, help='Chroma value')
         subparser.add_argument('--lum_noise', type=float, default=0.0035, help='Luminance noise level')
         subparser.add_argument('--s_cone_noise', type=float, default=0.0035, help='S-cone noise level')
-
+        subparser.add_argument('--output_space', type=str,
+                               default=ColorSpaceType.DISP_6P.name, help=f"Output space for colorspace. One of {[c.name for c in ColorSpaceType]}")
     # Genotypes-specific arguments
     genotypes_parser.add_argument('--top_percentage', type=float, default=0.9,
                                   help='Percentage of population to cover (e.g., 0.9 for 90%)')
@@ -171,11 +175,9 @@ if __name__ == "__main__":
             measurement_dir=args.measurement_dir,
             grid_size=args.grid_size,
             metameric_axis=args.metameric_axis,
-            display_type=args.display_type,
             num_plates=args.num_plates,
             luminance=args.luminance,
             chroma=args.chroma,
-            scramble_prob=args.scrambleProb,
             od=args.od,
             dimension=args.dimension,
             s_cone_peak=args.s_cone_peak,
@@ -186,7 +188,8 @@ if __name__ == "__main__":
             lens=args.lens,
             template=args.template,
             lum_noise=args.lum_noise,
-            s_cone_noise=args.s_cone_noise
+            s_cone_noise=args.s_cone_noise,
+            output_space=ColorSpaceType[args.output_space]
         )
     elif args.command == 'genotypes':
         generate_ishihara_grid_genotypes(
@@ -194,13 +197,13 @@ if __name__ == "__main__":
             measurement_dir=args.measurement_dir,
             grid_size=args.grid_size,
             metameric_axis=args.metameric_axis,
-            display_type=args.display_type,
             num_plates=args.num_plates,
             luminance=args.luminance,
             chroma=args.chroma,
             top_percentage=args.top_percentage,
             lum_noise=args.lum_noise,
             s_cone_noise=args.s_cone_noise,
+            output_space=ColorSpaceType[args.output_space],
             sex=args.sex,
             peak_to_test=args.peak_to_test
         )

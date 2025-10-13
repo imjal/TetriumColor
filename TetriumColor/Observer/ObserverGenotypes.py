@@ -90,7 +90,7 @@ class ObserverGenotypes:
         (False, False, False): 559
     }
 
-    def __init__(self, wavelengths: Optional[np.ndarray] = None, dimensions: Optional[List[int]] = None):
+    def __init__(self, wavelengths: Optional[np.ndarray] = None, dimensions: Optional[List[int]] = None, seed: int = 42):
         """
         Initialize ObserverGenotypes with a list of peak wavelengths.
 
@@ -99,6 +99,8 @@ class ObserverGenotypes:
             dimensions: Optional list of dimensions to filter (e.g., [2] for trichromats only).
                        If None, includes all dimensions.
         """
+        self.seed = seed
+        random.seed(self.seed)
         if wavelengths is None:
             self.wavelengths = np.arange(360, 831, 1)
         else:
