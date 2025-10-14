@@ -747,6 +747,61 @@ class ColorSampler:
 
         return plates
 
+    def get_hue_sphere_scramble(self, luminance: float, saturation: float,
+                                cube_idx: int,
+                                scramble_prob: float = 0.5,
+                                seed: int = 42,
+                                lum_noise=0.0,
+                                s_cone_noise=0.0,
+                                output_space: ColorSpaceType = ColorSpaceType.DISP_6P,
+                                background_color: None | npt.NDArray = None) -> Tuple[List[Tuple[Image.Image, ...]], List[Tuple[int, int]]]:
+        """ Get the metamer points for a given luminance and cube index
+        Args:
+            luminance (float): luminance value
+            saturation (float): saturation value
+            cube_idx (int): cube index
+            grid_size (int): grid size
+            color_space_transform (ColorSpaceTransform): color space transform object
+            background_color (None | npt.NDArray): background color in output space
+
+        Returns:
+            npt.NDArray: The metamer points
+        """
+        np.random.seed(seed)
+        from TetriumColor.Utils.ImageUtils import CreateCircleGridImages
+        disp_points = self.output_cubemap_values(luminance, saturation, ColorSpaceType.DISP)[cube_idx]
+        metamer_dir_in_disp = self.color_space.get_metameric_axis_in(ColorSpaceType.DISP)
+
+        metamers_in_disp = np.zeros((disp_points.shape[0], 2, self.color_space.dim))
+        colors_in_cone = []
+        for i in tqdm(range(metamers_in_disp.shape[0]), desc="Generating plates"):
+            metamers_in_disp[i] = np.clip(FindMaximumIn1DimDirection(
+                disp_points[i],
+                metamer_dir_in_disp,
+                np.eye(self.color_space.dim)), 0, 1)
+            colors_in_cone.append(self.color_space.convert(
+                metamers_in_disp[i], ColorSpaceType.DISP, ColorSpaceType.CONE))
+
+        colors_in_cone = np.array(colors_in_cone)
+        face1 = colors_in_cone[:, 0, :]
+        face2 = colors_in_cone[:, 1, :]
+        face1_colors = np.round(self.color_space.convert(face1, ColorSpaceType.CONE, output_space) * 255).astype(int)
+        face2_colors = np.round(self.color_space.convert(face2, ColorSpaceType.CONE, output_space) * 255).astype(int)
+
+        face1_unscrambled = CreateCircleGridImages(face1_colors)
+        face2_unscrambled = CreateCircleGridImages(face2_colors)
+
+        # Choose indices to scramble according to scramble_prob
+        num_to_scramble = int(np.round(scramble_prob * len(face1_colors)))
+        idxs = np.random.choice(len(face1_colors), size=num_to_scramble, replace=False)
+
+        # Copy face1_colors for scrambled face
+        scrambled_face_colors = face1_colors.copy()
+        # Replace the scrambled indices' colors with face2_colors at the same indices
+        scrambled_face_colors[idxs] = face2_colors[idxs]
+        scrambled_face = CreateCircleGridImages(scrambled_face_colors)
+        return [face1_unscrambled, face2_unscrambled, scrambled_face], idxs
+
     def get_metameric_grid_plate(self, luminance: float, saturation: float,
                                  cube_idx: int, grid_idx: tuple[int, int],
                                  secret: Optional[int] = None, lum_noise: float = 0.0,

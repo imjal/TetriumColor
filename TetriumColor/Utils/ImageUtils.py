@@ -1,7 +1,63 @@
 from typing import List, Tuple
 
-from PIL import Image
+from PIL import Image, ImageDraw
 import math
+
+
+def CreateCircleGridImages(colors: List[Tuple | List[int]],
+                           grid_size: int = None,
+                           circle_radius: int = 50,
+                           padding: int = 10,
+                           bg_color=(0, 0, 0), out_prefix="output"):
+    """
+    Create nxn grid images of circles colored from 'colors' list (rgb tuples 0-255), 
+    If len(colors) > 4, produce image(s) with up to 4 colors each, as _RGB.png and _OCV.png
+
+    Args:
+        colors (list): a list of color tuples, e.g., [(255,0,0), ...] (should be valid Pillow colors)
+        grid_size (int, optional): if None, auto-compute for closest square
+        circle_radius (int): radius of circles drawn
+        padding (int): pixel padding between circles
+        bg_color (tuple): background color
+        out_prefix (str): prefix for output files
+
+    Returns:
+        If len(colors) <= 4: returns the created grid (Pillow Image)
+        Otherwise: saves files ("{out_prefix}_{i}_RGB.png", "{out_prefix}_{i}_OCV.png") and returns the list of image files
+    """
+
+    # default grid size
+    n = grid_size if grid_size is not None else math.ceil(math.sqrt(len(colors)))
+    img_side = 2 * circle_radius + padding
+    img_width = n * img_side + padding
+    img_height = n * img_side + padding
+
+    def make_grid(colors_block):
+        img = Image.new("RGB", (img_width, img_height), bg_color)
+        draw = ImageDraw.Draw(img)
+        for idx, color in enumerate(colors_block):
+            row = idx // n
+            col = idx % n
+            cx = padding + col * img_side + circle_radius
+            cy = padding + row * img_side + circle_radius
+            bbox = [cx - circle_radius, cy - circle_radius, cx + circle_radius, cy + circle_radius]
+            draw.ellipse(bbox, fill=tuple(color))
+        return img
+
+    results = []
+    if colors.shape[1] > 4:
+        # Make images each with up to 4 colors at a time (for plate format)
+        path_ends = ["_RGB.png", "_OCV.png"]
+        blocks = [colors[:, i:i+3] for i in range(2)]
+        img_blocks = []
+        for i, block in enumerate(blocks):
+            # Build block image (grid will be at most 2x2)
+            img_blocks.append(make_grid(block))
+            # Save as _RGB.png and _OCV.png
+        return tuple(img_blocks)
+    else:
+        img = make_grid(colors)
+        return img
 
 
 def CreatePaddedGrid(images: List[str] | List[Image.Image], canvas_size=(1280, 720), padding=10, bg_color=(0, 0, 0), channels=3) -> Image.Image:
