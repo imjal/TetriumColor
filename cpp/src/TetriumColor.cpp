@@ -1,3 +1,4 @@
+#include "TetriumColor/TetriumColor.h"
 
 namespace TetriumColor
 {
@@ -17,4 +18,5 @@ void Init()
 }
 
 void Cleanup() { Py_Finalize(); }
-}; // namespace TetriumColor
+
+} // namespace TetriumColor

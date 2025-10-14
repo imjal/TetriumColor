@@ -43,6 +43,7 @@ set(SOURCES
     cpp/src/ColorGenerator.cpp
     cpp/src/PseudoIsochromaticPlateGenerator.cpp
     cpp/src/TetriumColor.cpp
+    cpp/src/CircleGridGenerator.cpp
 )
 
 # Create the library

@@ -26,7 +26,7 @@ class ColorSampler:
     gamut mapping by computing and caching the gamut boundary information.
     """
 
-    def __init__(self, color_space: ColorSpace, cubemap_size: int = 64):
+    def __init__(self, color_space: ColorSpace, cubemap_size: int = 64, disable: bool = True):
         """
         Initialize the ColorSampler with a ColorSpace.
 
@@ -34,6 +34,7 @@ class ColorSampler:
             color_space (ColorSpace): The color space to sample from
         """
         self.color_space = color_space
+        self.disable = disable
         self._gamut_cubemap = None
         self._lum_range = None
         self._sat_range = None
@@ -133,7 +134,7 @@ class ColorSampler:
 
         # Process each face of the cube
         lut_dicts = []
-        for i in tqdm(range(6), desc="Generating cubemap"):
+        for i in tqdm(range(6), desc="Generating cubemap", disable=self.disable):
             # Convert UV to XYZ coordinates for this cube face
             xyz = Geometry.ConvertCubeUVToXYZ(i, cube_u, cube_v, 1).reshape(-1, 3)
             xyz = np.dot(invMetamericDirMat, xyz.T).T
@@ -484,7 +485,7 @@ class ColorSampler:
         # For every point, find the reflectance of maximum saturation
         generating_vecs = self.color_space.observer.get_normalized_sensor_matrix(wavelengths=np.arange(360, 831, 1)).T
         pts = []
-        for pt in tqdm(all_disp_points):
+        for pt in tqdm(all_disp_points, disable=self.disable):
             res = FindMaximalSaturation(pt, generating_vecs=generating_vecs)
             if res is not None:
                 pts += [res]
@@ -562,7 +563,7 @@ class ColorSampler:
 
         # Process each face of the cube
         cubemap_images = []
-        for i in tqdm(range(6), desc="Generating cubemap"):
+        for i in tqdm(range(6), desc="Generating cubemap", disable=self.disable):
             # Convert UV to XYZ coordinates for this cube face
             xyz = Geometry.ConvertCubeUVToXYZ(i, cube_u, cube_v, 1).reshape(-1, 3)
             xyz = np.dot(invMetamericDirMat, xyz.T).T
@@ -623,7 +624,7 @@ class ColorSampler:
 
         # Process each face of the cube
         colors = []
-        for i in tqdm(range(6), desc="Generating cubemap"):
+        for i in range(6):
             # Convert UV to XYZ coordinates for this cube face
             xyz = Geometry.ConvertCubeUVToXYZ(i, cube_u, cube_v, 1).reshape(-1, 3)
             xyz = np.dot(invMetamericDirMat, xyz.T).T
@@ -664,7 +665,7 @@ class ColorSampler:
         vec[0] = luminance
 
         metamers_in_disp = np.zeros((disp_points.shape[0], 2, self.color_space.dim))
-        for i in tqdm(range(metamers_in_disp.shape[0]), desc="Generating plates"):
+        for i in range(metamers_in_disp.shape[0]):
             # points in contention in disp space, bounded by unit cube scaled by vectors, direction is the metameric axis
             metamers_in_disp[i] = np.array(FindMaximumIn1DimDirection(
                 disp_points[i], metamer_dir_in_disp, np.eye(self.color_space.dim)))
@@ -712,7 +713,7 @@ class ColorSampler:
         metamers_in_disp = np.zeros((disp_points.shape[0], 2, self.color_space.dim))
         plates = []
         plate_generator = IshiharaPlateGenerator(seed=0)
-        for i in tqdm(range(metamers_in_disp.shape[0]), desc="Generating plates"):
+        for i in tqdm(range(metamers_in_disp.shape[0]), desc="Generating plates", disable=self.disable):
             # points in contention in disp space, bounded by unit cube scaled by vectors, direction is the metameric axis
             # Find metamers in unit cube space first, then scale to display space
             # metamers_unit_cube = np.array(FindMaximumIn1DimDirection(
@@ -774,7 +775,7 @@ class ColorSampler:
 
         metamers_in_disp = np.zeros((disp_points.shape[0], 2, self.color_space.dim))
         colors_in_cone = []
-        for i in tqdm(range(metamers_in_disp.shape[0]), desc="Generating plates"):
+        for i in range(metamers_in_disp.shape[0]):
             metamers_in_disp[i] = np.clip(FindMaximumIn1DimDirection(
                 disp_points[i],
                 metamer_dir_in_disp,

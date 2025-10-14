@@ -2,7 +2,8 @@
 
 namespace TetriumColor
 {
-enum class ColorSpaceType {
+enum class ColorSpaceType
+{
     DISP_6P,
     SRGB,
     RGB,
