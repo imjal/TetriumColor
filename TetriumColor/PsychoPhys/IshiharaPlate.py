@@ -275,7 +275,7 @@ def generate_ishihara_plate(
     gradient: bool = False,
     corner_label: Optional[str] = None,
     corner_color: npt.ArrayLike = np.array([255/2, 255/2, 255/2, 255/2, 0, 0]).astype(int),
-    background_color: npt.NDArray = np.array([0, 0, 0]),
+    background_color: npt.NDArray = np.array([0, 0, 0, 0, 0, 0]),
     blur_radius: float = 1.0
 ) -> List[Image.Image]:
     """
@@ -347,14 +347,15 @@ def generate_ishihara_plate(
     # Become fancier eventually - determine the # of channels / type of image based on the output space -- we need some function that maps each of the color spaces to a specific number
     background_color = tuple(background_color.tolist())
     if output_space.num_channels() > 4:  # 6P disp
+        # INSERT_YOUR_CODE
         channels: List[Image.Image] = [Image.new(mode="RGB", size=(
-            image_size, image_size), color=background_color) for i in range(2)]
+            image_size, image_size), color=background_color[i * 3: i * 3 + 3]) for i in range(2)]
     elif output_space.num_channels() == 4:  # any 4P space like CMYK
         channels: List[Image.Image] = [Image.new(mode="RGBA", size=(
             image_size, image_size), color=(0, 0, 0, 0)) for i in range(1)]
     else:  # any 3P space like sRGB, XYZ, OKLAB, OKLABM1, CIELAB
         channels: List[Image.Image] = [Image.new(mode="RGB", size=(
-            image_size, image_size), color=background_color) for i in range(1)]
+            image_size, image_size), color=background_color[0:3]) for i in range(1)]
 
     channel_draws = [ImageDraw.Draw(ch) for ch in channels]
 

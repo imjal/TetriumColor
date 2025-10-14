@@ -36,17 +36,18 @@ class TestColorGenerator(ColorGenerator):
 
 
 class GeneticCDFTestColorGenerator(ColorGenerator):
-    def __init__(self, sex: str, percentage_screened: float,  peak_to_test: float = 547, metameric_axis: int = 2, dimensions: Optional[List[int]] = [2], **kwargs):
+    def __init__(self, sex: str, percentage_screened: float,  peak_to_test: float = 547, metameric_axis: int = 2, dimensions: Optional[List[int]] = [2], seed: int = 42, **kwargs):
         """Color Generator that samples from the most common trichromatic phenotypes, and tests for the presence of a given peak.
 
         Args:
             sex (str): 'male' or 'female'
             percentage_screened (float): Percentage of the population to screen
+            seed (int): Seed for the random number generator
             dimensions (Optional[List[int]], optional): Dimensions to screen. Defaults to [2], which corresponds to trichromats (S-cone already counted)
             peak_to_test (float, optional): Peak to test for. Defaults to 547, the functional peak.
         """
         self.percentage_screened = percentage_screened
-        self.observer_genotypes = ObserverGenotypes(dimensions=dimensions)
+        self.observer_genotypes = ObserverGenotypes(dimensions=dimensions, seed=seed)
         self.metameric_axis = metameric_axis
 
         self.genotypes = self.observer_genotypes.get_genotypes_covering_probability(
