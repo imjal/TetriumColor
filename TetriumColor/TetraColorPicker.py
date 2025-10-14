@@ -37,7 +37,7 @@ class TestColorGenerator(ColorGenerator):
 
 
 class GeneticCDFTestColorGenerator(ColorGenerator):
-    def __init__(self, sex: str, percentage_screened: float,  peak_to_test: float = 547, metameric_axis: int = 2, dimensions: Optional[List[int]] = [2], seed: int = 42, **kwargs):
+    def __init__(self, sex: str, percentage_screened: float,  peak_to_test: float = 547, metameric_axis: int = 2, luminance: float = 1.0, saturation: float = 0.5, dimensions: Optional[List[int]] = [2], seed: int = 42, **kwargs):
         """Color Generator that samples from the most common trichromatic phenotypes, and tests for the presence of a given peak.
 
         Args:
@@ -58,6 +58,9 @@ class GeneticCDFTestColorGenerator(ColorGenerator):
 
         self.color_spaces = [self.observer_genotypes.get_color_space_for_peaks(
             genotype + (peak_to_test,), **kwargs) for genotype in self.genotypes if peak_to_test not in genotype]
+
+        self.color_samplers = [ColorSampler(color_space, cubemap_size=5).output_cubemap_values(
+            luminance, saturation, ColorSpaceType.DISP)[4] for color_space in self.color_spaces]
 
         self.current_idx = 0
 
@@ -95,7 +98,9 @@ class GeneticCDFTestColorGenerator(ColorGenerator):
         if self.current_idx >= self.num_samples:
             raise StopIteration("No more genotypes to sample")
         color_space = self.color_spaces[self.current_idx]
-        inside_cone, outside_cone = color_space.get_maximal_metamer_pair_in_disp(metameric_axis=self.metameric_axis)
+        random_idx = np.random.randint(0, len(self.color_samplers[self.current_idx]))
+        point = self.color_samplers[self.current_idx][random_idx]
+        inside_cone, outside_cone = color_space.get_maximal_pair_in_disp_from_pt(point)
         self.current_idx += 1
         return inside_cone, outside_cone, color_space
 

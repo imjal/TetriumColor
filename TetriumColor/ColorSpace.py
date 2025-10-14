@@ -14,7 +14,7 @@ from TetriumColor.Observer.ColorSpaceTransform import (
 
 from colour.models import RGB_COLOURSPACE_BT709
 from colour import XYZ_to_Lab
-from TetriumColor.ColorMath.SubSpaceIntersection import FindMaximumWidthAlongDirection
+from TetriumColor.ColorMath.SubSpaceIntersection import FindMaximumWidthAlongDirection, FindMaximumIn1DimDirection
 import TetriumColor.ColorMath.Geometry as Geometry
 import TetriumColor.ColorMath.Conversion as Conversion
 import TetriumColor.Utils.BasisMath as BasisMath
@@ -383,6 +383,21 @@ class ColorSpace:
         cones = self.convert(metamers_in_disp.reshape(-1, self.dim),
                              ColorSpaceType.DISP, ColorSpaceType.CONE).reshape(-1, 2, self.dim)
         return cones[0][0], cones[0][1]
+
+    def get_maximal_pair_in_disp_from_pt(self, pt: npt.NDArray) -> Tuple[npt.NDArray, npt.NDArray]:
+        """Get Maximal Metameric Color Pairs from a Point
+
+        Returns:
+            Tuple[npt.NDArray, npt.NDArray]: metamers_in_disp, cones
+        """
+        metamer_dir_in_disp = self.get_metameric_axis_in(ColorSpaceType.DISP)
+        disp_pts = np.clip(FindMaximumIn1DimDirection(
+            pt,
+            metamer_dir_in_disp,
+            np.eye(self.dim)), 0, 1)
+
+        cones = self.convert(disp_pts, ColorSpaceType.DISP, ColorSpaceType.CONE)
+        return cones[0], cones[1]
 
     def is_in_gamut(self, points: npt.NDArray, color_space_type: ColorSpaceType) -> bool:
         """
