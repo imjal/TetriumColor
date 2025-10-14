@@ -690,7 +690,7 @@ class ColorSampler:
                                   lum_noise=0.0,
                                   s_cone_noise=0.0,
                                   output_space: ColorSpaceType = ColorSpaceType.DISP_6P,
-                                  background: None | npt.NDArray = None,
+                                  background_color: None | npt.NDArray = None,
                                   isSRGB: bool = False) -> List[Tuple[Image.Image, Image.Image]]:
         """ Get the metamer points for a given luminance and cube index
         Args:
@@ -699,6 +699,7 @@ class ColorSampler:
             cube_idx (int): cube index
             grid_size (int): grid size
             color_space_transform (ColorSpaceTransform): color space transform object
+            background_color (None | npt.NDArray): background color in output space
 
         Returns:
             npt.NDArray: The metamer points
@@ -742,7 +743,7 @@ class ColorSampler:
                               ), f"metamer_vals values not in [0, 1]: {metamers_in_disp[i]}"
 
             plates += [plate_generator.GeneratePlate(colors[0], colors[1], self.color_space, secrets[i], output_space,
-                                                     lum_noise=lum_noise, s_cone_noise=s_cone_noise)]
+                                                     lum_noise=lum_noise, s_cone_noise=s_cone_noise, background_color=background_color)]
 
         return plates
 

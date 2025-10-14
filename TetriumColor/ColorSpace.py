@@ -1009,11 +1009,10 @@ class ColorSpace:
         print(max_to_sRGB)
         return max_to_sRGB
 
-    def get_background(self, luminance):
-
+    def get_background(self, luminance, output_space: ColorSpaceType):
         vec = np.zeros(self.dim)
         vec[0] = luminance
-        return self.to_tetra_color(np.array([vec]), from_space=ColorSpaceType.VSH)[0]
+        return self.convert(np.array([vec]), from_space=ColorSpaceType.VSH, to_space=output_space)[0]
 
     def __str__(self) -> str:
         """

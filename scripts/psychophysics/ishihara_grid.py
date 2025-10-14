@@ -18,8 +18,11 @@ def generate_grid_from_color_space(filename, output_dir, color_space, grid_size,
     """
     color_sampler = ColorSampler(color_space, cubemap_size=grid_size)
 
+    # background = (color_space.get_background(1, output_space) * 255).astype(int)
+    # print(background)
+    background = np.zeros(6).astype(int)
     images = color_sampler.get_metameric_grid_plates(
-        luminance, chroma, num_plates, lum_noise=lum_noise, s_cone_noise=s_cone_noise, output_space=output_space)
+        luminance, chroma, num_plates, lum_noise=lum_noise, s_cone_noise=s_cone_noise, output_space=output_space, background_color=background)
 
     if len(images[0]) == 1:
         foreground_images = [x[0] for x in images]
