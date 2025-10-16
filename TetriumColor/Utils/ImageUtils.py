@@ -60,7 +60,7 @@ def CreateCircleGridImages(colors: List[Tuple | List[int]],
         return img
 
 
-def CreatePaddedGrid(images: List[str] | List[Image.Image], canvas_size=(1280, 720), padding=10, bg_color=(0, 0, 0), channels=3) -> Image.Image:
+def CreatePaddedGrid(images: List[str] | List[Image.Image], canvas_size=(1280, 720), padding=10, bg_color=(0, 0, 0), channels=3, square_grid=True) -> Image.Image:
     """
     Create a padded grid of images centered on a canvas of specified size.
 
@@ -77,18 +77,46 @@ def CreatePaddedGrid(images: List[str] | List[Image.Image], canvas_size=(1280, 7
     if isinstance(images[0], str):
         images = [Image.open(file) for file in images]
 
-    # Ensure all images are the same size
+    # Ensure all images are the same size baseline (we will resize again to optimal square size)
     max_width = max(img.width for img in images)
     max_height = max(img.height for img in images)
-    resized_images = [img.resize((max_width, max_height)) for img in images]
 
-    # Determine grid size (square grid)
+    # Dynamically compute grid size to best fit N square images inside the canvas.
     num_images = len(images)
-    cols = rows = math.ceil(math.sqrt(num_images))
+    canvas_width, canvas_height = canvas_size
 
-    # Calculate grid dimensions
-    grid_width = cols * max_width + (cols - 1) * padding
-    grid_height = rows * max_height + (rows - 1) * padding
+    def best_cell_size_for(cols: int, rows: int) -> int:
+        # available space minus paddings
+        if cols <= 0 or rows <= 0:
+            return 0
+        total_pad_x = padding * (cols - 1)
+        total_pad_y = padding * (rows - 1)
+        if canvas_width <= total_pad_x or canvas_height <= total_pad_y:
+            return 0
+        cell_w = (canvas_width - total_pad_x) / cols
+        cell_h = (canvas_height - total_pad_y) / rows
+        return int(max(0, math.floor(min(cell_w, cell_h))))
+
+    # Choose grid shape
+    if square_grid:
+        cols = rows = math.ceil(math.sqrt(num_images))
+    else:
+        # Search all reasonable column counts; pick the layout maximizing cell size
+        best = (0, 0, 0)  # (cell_size, cols, rows)
+        for c in range(1, num_images + 1):
+            r = math.ceil(num_images / c)
+            s = best_cell_size_for(c, r)
+            # Prefer larger cell size; tie-breaker: smaller grid area
+            if s > best[0] or (s == best[0] and c * r < best[1] * best[2] if best[1] and best[2] else False):
+                best = (s, c, r)
+        cell_size, cols, rows = best
+
+    if cell_size <= 0:
+        raise ValueError("Canvas too small to fit images with given padding")
+
+    # Calculate grid dimensions using the optimal square cell size
+    grid_width = cols * cell_size + (cols - 1) * padding
+    grid_height = rows * cell_size + (rows - 1) * padding
 
     if channels == 4:
         mode = "RGBA"
@@ -98,22 +126,22 @@ def CreatePaddedGrid(images: List[str] | List[Image.Image], canvas_size=(1280, 7
         raise ValueError(f"Unsupported number of channels: {channels}")
 
     # Create a blank canvas
-    canvas_width, canvas_height = canvas_size
     canvas = Image.new(mode, (canvas_width, canvas_height), bg_color)
 
     # Create the grid
     grid_image = Image.new(mode, (grid_width, grid_height), bg_color)
+    # Resize images to square cells
+    resized_images = [img.resize((cell_size, cell_size)) for img in images]
     for idx, img in enumerate(resized_images):
         row = idx // cols
         col = idx % cols
-        x = col * (max_width + padding)
-        y = row * (max_height + padding)
+        x = col * (cell_size + padding)
+        y = row * (cell_size + padding)
         grid_image.paste(img, (x, y))
 
-    grid_image = grid_image.resize((canvas_size[1], canvas_size[1]))
     # Center the grid on the canvas
-    x_offset = (canvas_width - canvas_size[1]) // 2
-    y_offset = (canvas_height - canvas_size[1]) // 2
+    x_offset = (canvas_width - grid_width) // 2
+    y_offset = (canvas_height - grid_height) // 2
     canvas.paste(grid_image, (x_offset, y_offset))
 
     return canvas

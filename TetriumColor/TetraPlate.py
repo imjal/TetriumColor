@@ -3,7 +3,7 @@ from typing import List
 
 from TetriumColor.Utils.CustomTypes import ColorTestResult
 from TetriumColor.Observer import *
-from TetriumColor import ColorSpaceType
+from TetriumColor import ColorSpaceType, ColorSpace
 from TetriumColor.PsychoPhys.IshiharaPlate import IshiharaPlateGenerator
 from TetriumColor.TetraColorPicker import ColorGenerator
 from TetriumColor.Utils.ImageUtils import CreatePaddedGrid
@@ -45,7 +45,7 @@ class PseudoIsochromaticPlateGenerator:
 
     def GetPlate(self, previous_result: ColorTestResult,
                  filename: str, hidden_number: int,
-                 output_space: ColorSpaceType, lum_noise: float = 0, s_cone_noise: float = 0):
+                 output_space: ColorSpaceType, lum_noise: float = 0, s_cone_noise: float = 0, corner_label: str = None):
         """
         Generates a new plate and saves it to files with the given hidden number and cone space colors
 
@@ -60,7 +60,7 @@ class PseudoIsochromaticPlateGenerator:
         image = self.plate_generator.GeneratePlate(
             inside_cone, outside_cone, color_space,
             hidden_number, output_space,
-            lum_noise=lum_noise, s_cone_noise=s_cone_noise
+            lum_noise=lum_noise, s_cone_noise=s_cone_noise, corner_label=corner_label
         )
         if output_space == ColorSpaceType.DISP_6P:
             self.plate_generator.ExportPlateTo6P(image, filename)
@@ -69,40 +69,64 @@ class PseudoIsochromaticPlateGenerator:
 
         return image
 
-    if __name__ == "__main__":
+    def GetControlPlate(self, filename: str, color_space: ColorSpace, lum_noise: float = 0, s_cone_noise: float = 0, output_space: ColorSpaceType = ColorSpaceType.SRGB, corner_label: str = None):
 
-        from TetriumColor.TetraColorPicker import GeneticCDFTestColorGenerator
-        from TetriumColor import PseudoIsochromaticPlateGenerator
-        from TetriumColor.Measurement import load_primaries_from_csv
+        inside_cone, _ = color_space.get_maximal_pair_in_disp_from_pt(np.array([0.5, 0.5, 0.5, 0.5]))
 
-        primaries = load_primaries_from_csv("./measurements/2025-10-10/primaries/")
-
-        color_generator = GeneticCDFTestColorGenerator(
-            sex='female', percentage_screened=0.999, cst_display_type='led', display_primaries=primaries, dimensions=[2])
-
-        print("Number of Genotypes: ", color_generator.get_num_samples())
-        number_of_tests = color_generator.get_num_samples()
-        plate_generator = PseudoIsochromaticPlateGenerator(color_generator)
-
-        lum_noise = 0.0
-        s_cone_noise = 0.1
-        output_space = ColorSpaceType.SRGB
-
-        dirname = f"./measurements/2025-10-16/tests_noise_{lum_noise}_scone_noise_{s_cone_noise}"
-        os.makedirs(dirname, exist_ok=True)
-        images = []
-        for i in range(number_of_tests):
-            print(f"Generating plate {i}")
-            images.append(plate_generator.GetPlate(
-                None, os.path.join(dirname, f"test_{i}"), 10, output_space=output_space, lum_noise=lum_noise, s_cone_noise=s_cone_noise))
+        image = self.plate_generator.GeneratePlate(
+            inside_cone, inside_cone, color_space,
+            10, output_space,
+            lum_noise=lum_noise, s_cone_noise=s_cone_noise, corner_label=corner_label
+        )
         if output_space == ColorSpaceType.DISP_6P:
-            rgb_images = [image[0] for image in images]
-            ocv_images = [image[1] for image in images]
-            rgb_grid = CreatePaddedGrid(rgb_images, padding=0, channels=3)
-            ocv_grid = CreatePaddedGrid(ocv_images, padding=0, channels=3)
-            rgb_grid.save(os.path.join(dirname, "rgb_grid.png"))
-            ocv_grid.save(os.path.join(dirname, "ocv_grid.png"))
+            self.plate_generator.ExportPlateTo6P(image, filename)
         else:
-            images = [image[0] for image in images]
-            grid = CreatePaddedGrid(images, padding=0, channels=3)
-            grid.save(os.path.join(dirname, "grid.png"))
+            image[0].save(f"{filename}_srgb.png")
+        return image
+
+
+if __name__ == "__main__":
+
+    from TetriumColor.TetraColorPicker import GeneticCDFTestColorGenerator
+    from TetriumColor import PseudoIsochromaticPlateGenerator
+    from TetriumColor.Measurement import load_primaries_from_csv
+
+    primaries = load_primaries_from_csv("./measurements/2025-10-10/primaries/")
+
+    color_generator = GeneticCDFTestColorGenerator(
+        sex='female', percentage_screened=0.999, cst_display_type='led', display_primaries=primaries, dimensions=[2])
+
+    print("Number of Genotypes: ", color_generator.get_num_samples())
+    number_of_tests = color_generator.get_num_samples()
+    plate_generator = PseudoIsochromaticPlateGenerator(color_generator)
+
+    lum_noise = 0.0
+    s_cone_noise = 0.1
+    output_space = ColorSpaceType.DISP_6P
+
+    dirname = f"./measurements/2025-10-16/tests_noise_{lum_noise}_scone_noise_{s_cone_noise}"
+    os.makedirs(dirname, exist_ok=True)
+
+    # Get the list of uppercase alphabet letters (A-Z)
+    import string
+    alphabet = list(string.ascii_uppercase)
+
+    control_plate = plate_generator.GetControlPlate(os.path.join(
+        dirname, "control"), color_generator.color_spaces[0], lum_noise=lum_noise, s_cone_noise=s_cone_noise, output_space=output_space, corner_label=alphabet[0])
+    images = [control_plate]
+
+    for i in range(1, number_of_tests + 1):
+        print(f"Generating plate {i}")
+        images.append(plate_generator.GetPlate(
+            None, os.path.join(dirname, f"test_{i}"), 10, output_space=output_space, lum_noise=lum_noise, s_cone_noise=s_cone_noise, corner_label=alphabet[i]))
+    if output_space == ColorSpaceType.DISP_6P:
+        rgb_images = [image[0] for image in images]
+        ocv_images = [image[1] for image in images]
+        rgb_grid = CreatePaddedGrid(rgb_images, padding=0, channels=3, square_grid=False)
+        ocv_grid = CreatePaddedGrid(ocv_images, padding=0, channels=3, square_grid=False)
+        rgb_grid.save(os.path.join(dirname, "genetics_grid_RGB.png"))
+        ocv_grid.save(os.path.join(dirname, "genetics_grid_OCV.png"))
+    else:
+        images = [image[0] for image in images]
+        grid = CreatePaddedGrid(images, padding=0, channels=3, square_grid=False)
+        grid.save(os.path.join(dirname, "genetics_grid_sRGB.png"))

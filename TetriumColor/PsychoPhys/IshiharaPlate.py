@@ -63,6 +63,7 @@ class IshiharaPlateGenerator:
                       color_space: ColorSpace,
                       hidden_number: int, output_space: ColorSpaceType,
                       lum_noise: float = 0, s_cone_noise: float = 0,
+                      corner_label: Optional[str] = None,
                       **kwargs) -> List[Image.Image]:
         """
         Generate plate with specified output color space.
@@ -88,7 +89,7 @@ class IshiharaPlateGenerator:
             inside_cone, outside_cone, color_space,
             secret=hidden_number, circles=circles,  # Use cached geometry
             output_space=output_space,
-            lum_noise=lum_noise, s_cone_noise=s_cone_noise,
+            lum_noise=lum_noise, s_cone_noise=s_cone_noise, corner_label=corner_label,
             seed=self.seed,  # Pass seed for consistency
             **kwargs
         )
