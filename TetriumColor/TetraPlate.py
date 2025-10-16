@@ -6,6 +6,7 @@ from TetriumColor.Observer import *
 from TetriumColor import ColorSpaceType
 from TetriumColor.PsychoPhys.IshiharaPlate import IshiharaPlateGenerator
 from TetriumColor.TetraColorPicker import ColorGenerator
+from TetriumColor.Utils.ImageUtils import CreatePaddedGrid
 
 
 class PseudoIsochromaticPlateGenerator:
@@ -61,14 +62,12 @@ class PseudoIsochromaticPlateGenerator:
             hidden_number, output_space,
             lum_noise=lum_noise, s_cone_noise=s_cone_noise
         )
-        self.plate_generator.ExportPlateTo6P(image, filename)
+        if output_space == ColorSpaceType.DISP_6P:
+            self.plate_generator.ExportPlateTo6P(image, filename)
+        else:
+            image[0].save(f"{filename}_srgb.png")
 
-        image = self.plate_generator.GeneratePlate(
-            inside_cone, outside_cone, color_space,
-            hidden_number, ColorSpaceType.SRGB,
-            lum_noise=lum_noise, s_cone_noise=s_cone_noise
-        )
-        image[0].save(f"{filename}_srgb.png")
+        return image
 
     if __name__ == "__main__":
 
@@ -78,10 +77,6 @@ class PseudoIsochromaticPlateGenerator:
 
         primaries = load_primaries_from_csv("./measurements/2025-10-10/primaries/")
 
-        # for p in primaries:
-        #     p.plot()
-        # plt.show()
-
         color_generator = GeneticCDFTestColorGenerator(
             sex='female', percentage_screened=0.999, cst_display_type='led', display_primaries=primaries, dimensions=[2])
 
@@ -89,12 +84,25 @@ class PseudoIsochromaticPlateGenerator:
         number_of_tests = color_generator.get_num_samples()
         plate_generator = PseudoIsochromaticPlateGenerator(color_generator)
 
-        lum_noise = 0.1
+        lum_noise = 0.0
         s_cone_noise = 0.1
+        output_space = ColorSpaceType.SRGB
 
-        dirname = f"./measurements/2025-10-10/tests_noise_{lum_noise}_scone_noise_{s_cone_noise}"
+        dirname = f"./measurements/2025-10-16/tests_noise_{lum_noise}_scone_noise_{s_cone_noise}"
         os.makedirs(dirname, exist_ok=True)
+        images = []
         for i in range(number_of_tests):
             print(f"Generating plate {i}")
-            plate_generator.GetPlate(
-                None, os.path.join(dirname, f"test_{i}"), 10, output_space=ColorSpaceType.DISP_6P, lum_noise=lum_noise, s_cone_noise=s_cone_noise)
+            images.append(plate_generator.GetPlate(
+                None, os.path.join(dirname, f"test_{i}"), 10, output_space=output_space, lum_noise=lum_noise, s_cone_noise=s_cone_noise))
+        if output_space == ColorSpaceType.DISP_6P:
+            rgb_images = [image[0] for image in images]
+            ocv_images = [image[1] for image in images]
+            rgb_grid = CreatePaddedGrid(rgb_images, padding=0, channels=3)
+            ocv_grid = CreatePaddedGrid(ocv_images, padding=0, channels=3)
+            rgb_grid.save(os.path.join(dirname, "rgb_grid.png"))
+            ocv_grid.save(os.path.join(dirname, "ocv_grid.png"))
+        else:
+            images = [image[0] for image in images]
+            grid = CreatePaddedGrid(images, padding=0, channels=3)
+            grid.save(os.path.join(dirname, "grid.png"))
