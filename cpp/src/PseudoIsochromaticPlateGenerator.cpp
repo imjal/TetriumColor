@@ -134,10 +134,49 @@ void PseudoIsochromaticPlateGenerator::NewPlate(
     }
 }
 
+void PseudoIsochromaticPlateGenerator::NewPlate(
+    const std::string& filename,
+    const std::string& hidden_symbol,
+    ColorSpaceType output_space,
+    float lum_noise,
+    float s_cone_noise
+)
+{
+    if (pInstance != nullptr) {
+        PyObject* pOutputSpace = ColorSpaceTypeToPython(output_space);
+        if (!pOutputSpace) {
+            printf("Failed to convert ColorSpaceType to Python\n");
+            return;
+        }
+
+        PyObject* pValue = PyObject_CallMethod(
+            reinterpret_cast<PyObject*>(pInstance),
+            "NewPlate",
+            "ssOff",
+            filename.c_str(),
+            hidden_symbol.c_str(),
+            pOutputSpace,
+            lum_noise,
+            s_cone_noise
+        );
+
+        Py_DECREF(pOutputSpace);
+
+        if (pValue != nullptr) {
+            Py_DECREF(pValue);
+        } else {
+            PyErr_Print();
+        }
+    } else {
+        printf("PseudoIsochromaticPlateGenerator instance is null\n");
+        exit(-1);
+    }
+}
+
 void PseudoIsochromaticPlateGenerator::GetPlate(
     ColorTestResult previous_result,
     const std::string& filename,
-    int hidden_number,
+    const std::string& hidden_symbol,
     ColorSpaceType output_space,
     float lum_noise,
     float s_cone_noise
@@ -156,10 +195,10 @@ void PseudoIsochromaticPlateGenerator::GetPlate(
         PyObject* pValue = PyObject_CallMethod(
             reinterpret_cast<PyObject*>(pInstance),
             "GetPlate",
-            "OsiOff",
+            "OssOff",
             pResult,
             filename.c_str(),
-            hidden_number,
+            hidden_symbol.c_str(),
             pOutputSpace,
             lum_noise,
             s_cone_noise
