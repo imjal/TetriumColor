@@ -44,7 +44,7 @@ class PseudoIsochromaticPlateGenerator:
         self.plate_generator.ExportPlateTo6P(image, filename)
 
     def GetPlate(self, previous_result: ColorTestResult,
-                 filename: str, hidden_number: int,
+                 filename: str, hidden_symbol: Union[int, str],
                  output_space: ColorSpaceType, lum_noise: float = 0, s_cone_noise: float = 0, corner_label: str = None):
         """
         Generates a new plate and saves it to files with the given hidden number and cone space colors
@@ -59,7 +59,7 @@ class PseudoIsochromaticPlateGenerator:
         inside_cone, outside_cone, color_space = self.color_generator.GetColor(previous_result)
         image = self.plate_generator.GeneratePlate(
             inside_cone, outside_cone, color_space,
-            hidden_number, output_space,
+            hidden_symbol, output_space,
             lum_noise=lum_noise, s_cone_noise=s_cone_noise, corner_label=corner_label
         )
         if output_space == ColorSpaceType.DISP_6P:
@@ -115,10 +115,13 @@ if __name__ == "__main__":
         dirname, "control"), color_generator.color_spaces[0], lum_noise=lum_noise, s_cone_noise=s_cone_noise, output_space=output_space, corner_label=alphabet[0])
     images = [control_plate]
 
+    landolt_symbols = ['landolt_up', 'landolt_down', 'landolt_left', 'landolt_right']
+
     for i in range(1, number_of_tests + 1):
+        random_landolt_symbol = np.random.choice(landolt_symbols)
         print(f"Generating plate {i}")
         images.append(plate_generator.GetPlate(
-            None, os.path.join(dirname, f"test_{i}"), 10, output_space=output_space, lum_noise=lum_noise, s_cone_noise=s_cone_noise, corner_label=alphabet[i]))
+            None, os.path.join(dirname, f"test_{i}"), random_landolt_symbol, output_space=output_space, lum_noise=lum_noise, s_cone_noise=s_cone_noise, corner_label=alphabet[i]))
     if output_space == ColorSpaceType.DISP_6P:
         rgb_images = [image[0] for image in images]
         ocv_images = [image[1] for image in images]

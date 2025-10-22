@@ -3,7 +3,7 @@ import packcircles
 import importlib.resources as resources
 from importlib.resources import as_file
 
-from typing import Callable, List, Tuple, Optional
+from typing import Callable, List, Tuple, Optional, Union
 import numpy.typing as npt
 
 from PIL import Image, ImageDraw
@@ -13,8 +13,11 @@ from PIL import ImageFont
 from pathlib import Path
 
 
-# Available hidden numbers
-_SECRETS = list(range(10, 100))
+# Available hidden numbers and Landolt C directions
+_SECRETS = list(range(10, 100)) + [
+    'landolt_up', 'landolt_down', 'landolt_left', 'landolt_right',
+    'landolt_up-right', 'landolt_down-right', 'landolt_up-left', 'landolt_down-left'
+]
 
 
 class IshiharaPlateGenerator:
@@ -61,7 +64,7 @@ class IshiharaPlateGenerator:
 
     def GeneratePlate(self, inside_cone: npt.NDArray, outside_cone: npt.NDArray,
                       color_space: ColorSpace,
-                      hidden_number: int, output_space: ColorSpaceType,
+                      hidden_symbol: Union[int, str], output_space: ColorSpaceType,
                       lum_noise: float = 0, s_cone_noise: float = 0,
                       corner_label: Optional[str] = None,
                       **kwargs) -> List[Image.Image]:
@@ -87,7 +90,7 @@ class IshiharaPlateGenerator:
         # Generate plate using cached geometry
         return generate_ishihara_plate(
             inside_cone, outside_cone, color_space,
-            secret=hidden_number, circles=circles,  # Use cached geometry
+            secret=hidden_symbol, circles=circles,  # Use cached geometry
             output_space=output_space,
             lum_noise=lum_noise, s_cone_noise=s_cone_noise, corner_label=corner_label,
             seed=self.seed,  # Pass seed for consistency
@@ -262,7 +265,7 @@ def generate_ishihara_plate(
     inside_cone: npt.NDArray,
     outside_cone: npt.NDArray,
     color_space: ColorSpace,
-    secret: int = _SECRETS[0],
+    secret: Union[int, str] = _SECRETS[0],
     circles: Optional[List[List[float]]] = None,
     num_samples: int = 100,
     dot_sizes: List[int] = [16, 22, 28],
@@ -288,7 +291,7 @@ def generate_ishihara_plate(
         Color for the inside of the plate (shape elements).
     outside_cone: npt.NDArray
         Color for the outside of the plate (background elements).
-    secret : int
+    secret : Union[int, str]
         Specifies which secret file to use from the secrets directory.
     circles : Optional[List[List[float]]]
         Pre-computed circle geometry. If None, geometry will be generated.
@@ -321,8 +324,10 @@ def generate_ishihara_plate(
         A list of images, one for each channel.
     """
     # Validate inputs
-    if secret not in _SECRETS:
-        raise ValueError(f"Invalid Hidden Number {secret}")
+    if isinstance(secret, int) and secret not in _SECRETS:
+        raise ValueError(f"Invalid Hidden Symbol {secret}")
+    elif isinstance(secret, str) and secret not in _SECRETS:
+        raise ValueError(f"Invalid Hidden Symbol {secret}")
 
     if not gradient:
         num_samples = 1
@@ -333,6 +338,7 @@ def generate_ishihara_plate(
     # Load secret image
     with resources.path("TetriumColor.Assets.HiddenImages", f"{str(secret)}.png") as data_path:
         secret_img = Image.open(data_path)
+
     secret_img = secret_img.resize([image_size, image_size])
     secret_img = np.asarray(secret_img)
 
@@ -397,6 +403,129 @@ def export_plate(rgb_img: Image.Image, ocv_img: Image.Image, filename_rgb: str, 
     ocv_img.save(filename_ocv)
 
 
+def GenerateLandoltC(output_dir: str, gap_directions: List[str] = None):
+    """
+    Generate Landolt C optotypes with different gap orientations.
+
+    The Landolt C is a standardized optotype that looks like a circle with a gap.
+    Gap directions: 'up', 'down', 'left', 'right', 'up-right', 'down-right', 'up-left', 'down-left'
+
+    :param output_dir: Directory to save the generated images.
+    :param gap_directions: List of gap directions to generate. If None, generates all 8 directions.
+    """
+    if gap_directions is None:
+        gap_directions = ['up', 'down', 'left', 'right', 'up-right', 'down-right', 'up-left', 'down-left']
+
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    # Landolt C specifications
+    image_size = 1024
+    outer_radius = image_size // 2 - 100  # Leave more margin to make C smaller
+    # inner_radius = outer_radius * 0.6     # Standard Landolt C proportions
+    gap_width = outer_radius * 2 * 0.2        # Gap width is 1/5 of outer diameter
+    stroke_width = gap_width
+
+    for i, direction in enumerate(gap_directions):
+        # Create a transparent image
+        img = Image.new("RGBA", (image_size, image_size), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+
+        center_x, center_y = image_size // 2, image_size // 2
+
+        # Calculate gap position based on direction
+        gap_angle = _get_gap_angle(direction)
+        gap_start_angle = gap_angle - np.degrees(np.arcsin(gap_width / (2 * outer_radius)))
+        gap_end_angle = gap_angle + np.degrees(np.arcsin(gap_width / (2 * outer_radius)))
+
+        # Draw the outer ring with gap
+        _draw_landolt_c_ring(draw, center_x, center_y, outer_radius, stroke_width,
+                             gap_start_angle, gap_end_angle, (255, 255, 255, 255))
+
+        # Save the image with direction identifier
+        img.save(output_path / f"landolt_{direction}.png")
+        print(f"Generated Landolt C with gap direction: {direction}")
+
+
+def _get_gap_angle(direction: str) -> float:
+    """Get the angle in degrees for the gap direction."""
+    # Note: In image coordinates, Y increases downward, so we need to flip the angles
+    angle_map = {
+        'up': 270,      # Gap pointing up (toward top of image)
+        'up-right': 315,
+        'right': 0,     # Gap pointing right (toward right of image)
+        'down-right': 45,
+        'down': 90,     # Gap pointing down (toward bottom of image)
+        'down-left': 135,
+        'left': 180,    # Gap pointing left (toward left of image)
+        'up-left': 225
+    }
+    return angle_map.get(direction, 0)
+
+
+def _draw_landolt_c_ring(draw: ImageDraw.ImageDraw, center_x: int, center_y: int,
+                         outer_radius: float, stroke_width: float,
+                         gap_start_angle: float, gap_end_angle: float,
+                         color: Tuple[int, int, int, int]):
+    """Draw a Landolt C ring with a gap."""
+    # Convert angles to radians
+    gap_start_rad = np.radians(gap_start_angle)
+    gap_end_rad = np.radians(gap_end_angle)
+
+    # Draw the ring in segments, skipping the gap
+    num_segments = 64
+    segment_angle = 2 * np.pi / num_segments
+
+    for i in range(num_segments):
+        start_angle = i * segment_angle
+        end_angle = (i + 1) * segment_angle
+
+        # Skip the gap segment
+        if _angle_in_gap(start_angle, end_angle, gap_start_rad, gap_end_rad):
+            continue
+
+        # Calculate arc endpoints
+        x1_start = center_x + outer_radius * np.cos(start_angle)
+        y1_start = center_y + outer_radius * np.sin(start_angle)
+        x1_end = center_x + outer_radius * np.cos(end_angle)
+        y1_end = center_y + outer_radius * np.sin(end_angle)
+
+        x2_start = center_x + (outer_radius - stroke_width) * np.cos(start_angle)
+        y2_start = center_y + (outer_radius - stroke_width) * np.sin(start_angle)
+        x2_end = center_x + (outer_radius - stroke_width) * np.cos(end_angle)
+        y2_end = center_y + (outer_radius - stroke_width) * np.sin(end_angle)
+
+        # Draw the arc segment as a polygon
+        points = [
+            (x1_start, y1_start),
+            (x1_end, y1_end),
+            (x2_end, y2_end),
+            (x2_start, y2_start)
+        ]
+        draw.polygon(points, fill=color)
+
+
+def _angle_in_gap(start_angle: float, end_angle: float, gap_start: float, gap_end: float) -> bool:
+    """Check if a segment overlaps with the gap."""
+    # Normalize angles to [0, 2π]
+    start_angle = start_angle % (2 * np.pi)
+    end_angle = end_angle % (2 * np.pi)
+    gap_start = gap_start % (2 * np.pi)
+    gap_end = gap_end % (2 * np.pi)
+
+    # Check if the segment overlaps with the gap
+    # A segment overlaps if either its start or end is within the gap range
+    if gap_start <= gap_end:
+        # Normal case: gap doesn't wrap around
+        return (start_angle >= gap_start and start_angle <= gap_end) or \
+               (end_angle >= gap_start and end_angle <= gap_end) or \
+               (start_angle <= gap_start and end_angle >= gap_end)
+    else:
+        # Wrap-around case: gap crosses 0 degrees
+        return (start_angle >= gap_start or start_angle <= gap_end) or \
+               (end_angle >= gap_start or end_angle <= gap_end)
+
+
 def GenerateHiddenImages(output_dir: str):
     """
     Generate a series of images from 1-99 that resemble the style of Assets/HiddenImages/27.png.
@@ -435,4 +564,6 @@ def GenerateHiddenImages(output_dir: str):
 
 
 if __name__ == "__main__":
-    GenerateHiddenImages("TetriumColor/Assets/HiddenImages")
+    # Generate both numeric hidden images and Landolt C optotypes
+    # GenerateHiddenImages("TetriumColor/Assets/HiddenImages")
+    GenerateLandoltC("TetriumColor/Assets/HiddenImages")
