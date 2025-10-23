@@ -13,11 +13,11 @@ from TetriumColor.Measurement import load_primaries_from_csv
 class ColorGenerator(ABC):
 
     @abstractmethod
-    def NewColor(self) -> Tuple[npt.NDArray, npt.NDArray, ColorSpace]:
+    def NewColor(self) -> Tuple[npt.NDArray, npt.NDArray, ColorSpace, float]:
         pass
 
     @abstractmethod
-    def GetColor(self, previous_result: ColorTestResult) -> Tuple[npt.NDArray, npt.NDArray, ColorSpace] | None:
+    def GetColor(self, previous_result: ColorTestResult) -> Tuple[npt.NDArray, npt.NDArray, ColorSpace, float] | None:
         pass
 
     @abstractmethod
@@ -29,11 +29,21 @@ class TestColorGenerator(ColorGenerator):
     def __init__(self, num_samples: int):
         self.num_samples = num_samples
 
-    def NewColor(self) -> PlateColor:
-        return PlateColor(shape=TetraColor(np.array([0, 255, 0], dtype=int), np.array([255, 0, 0], dtype=int)), background=TetraColor(np.array([255, 255, 0], dtype=int), np.array([0, 255, 255], dtype=int)))
+    def NewColor(self) -> Tuple[npt.NDArray, npt.NDArray, ColorSpace, float]:
+        # This is a test generator that doesn't use real color spaces
+        # Return dummy values for compatibility
+        dummy_cone = np.array([0.5, 0.5, 0.5, 0.5])
+        dummy_color_space = None  # This will need to be handled by callers
+        dummy_difference = 0.1  # Dummy metamer difference
+        return dummy_cone, dummy_cone, dummy_color_space, dummy_difference
 
-    def GetColor(self, previous_result: ColorTestResult) -> PlateColor | None:
-        return PlateColor(shape=TetraColor(np.array([255, 0, 0]), np.array([0, 255, 0])), background=TetraColor(np.array([255, 255, 0]), np.array([0, 255, 255])))
+    def GetColor(self, previous_result: ColorTestResult) -> Tuple[npt.NDArray, npt.NDArray, ColorSpace, float] | None:
+        # This is a test generator that doesn't use real color spaces
+        # Return dummy values for compatibility
+        dummy_cone = np.array([0.5, 0.5, 0.5, 0.5])
+        dummy_color_space = None  # This will need to be handled by callers
+        dummy_difference = 0.1  # Dummy metamer difference
+        return dummy_cone, dummy_cone, dummy_color_space, dummy_difference
 
 
 class GeneticCDFTestColorGenerator(ColorGenerator):
@@ -90,22 +100,40 @@ class GeneticCDFTestColorGenerator(ColorGenerator):
             self.current_idx = 0
         return self.NewColor()
 
-    def NewColor(self) -> Tuple[npt.NDArray, npt.NDArray, ColorSpace]:
+    def NewColor(self) -> Tuple[npt.NDArray, npt.NDArray, ColorSpace, float]:
         """Currently, we just return a color in a list down (non-adaptively)
         Raises:
             StopIteration: If no more genotypes to sample
 
         Returns:
-            Tuple[npt.NDArray, npt.NDArray, ColorSpace]: return inside/outside cone colors, with the associated color space
+            Tuple[npt.NDArray, npt.NDArray, ColorSpace, float]: return inside/outside cone colors, color space, and metamer difference
         """
         if self.current_idx >= self.num_samples:
             raise StopIteration("No more genotypes to sample")
         color_space = self.color_spaces[self.current_idx]
-        random_idx = np.random.randint(0, len(self.color_samplers[self.current_idx]))
-        point = self.color_samplers[self.current_idx][random_idx]
-        inside_cone, outside_cone = color_space.get_maximal_pair_in_disp_from_pt(point)
-        self.current_idx += 1
-        return inside_cone, outside_cone, color_space
+
+        # Retry logic for finding valid metamers
+        max_retries = 10
+        for attempt in range(max_retries):
+            random_idx = np.random.randint(0, len(self.color_samplers[self.current_idx]))
+            point = self.color_samplers[self.current_idx][random_idx]
+            inside_cone, outside_cone, metamer_difference = color_space.get_maximal_pair_in_disp_from_pt(point)
+            # inside_cone, outside_cone = color_space.get_maximal_metamer_pair_in_disp(
+            #     metameric_axis=color_space.metameric_axis)
+            # metamer_difference = abs(inside_cone[color_space.metameric_axis] - outside_cone[color_space.metameric_axis])
+            # print("inside cone: ", inside_cone)
+            # print("outside cone: ", outside_cone)
+            # print("metamer difference: ", metamer_difference)
+
+            if metamer_difference > 0.01:
+                print("Metamer difference: ", metamer_difference)
+                self.current_idx += 1
+                return inside_cone, outside_cone, color_space, metamer_difference
+
+        # If we couldn't find a valid metamer after retries, raise an exception
+        # raise RuntimeError(f"Could not find valid metamer after {max_retries} attempts for genotype {self.current_idx}")
+        print(f"Could not find valid metamer after {max_retries} attempts for genotype {self.current_idx}")
+        return inside_cone, outside_cone, color_space, metamer_difference
 
 
 class CircleGridGenerator:

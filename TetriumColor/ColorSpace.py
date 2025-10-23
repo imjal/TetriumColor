@@ -384,11 +384,15 @@ class ColorSpace:
                              ColorSpaceType.DISP, ColorSpaceType.CONE).reshape(-1, 2, self.dim)
         return cones[0][0], cones[0][1]
 
-    def get_maximal_pair_in_disp_from_pt(self, pt: npt.NDArray) -> Tuple[npt.NDArray, npt.NDArray]:
+    def get_maximal_pair_in_disp_from_pt(self, pt: npt.NDArray) -> Optional[Tuple[npt.NDArray, npt.NDArray, float]]:
         """Get Maximal Metameric Color Pairs from a Point
 
+        Args:
+            pt: Point in display space
+            minimum_noise: Minimum metamer difference threshold for visibility
+
         Returns:
-            Tuple[npt.NDArray, npt.NDArray]: metamers_in_disp, cones
+            Optional[Tuple[npt.NDArray, npt.NDArray, float]]: (cone1, cone2, metamer_difference) or None if rejected
         """
         metamer_dir_in_disp = self.get_metameric_axis_in(ColorSpaceType.DISP)
         disp_pts = np.clip(FindMaximumIn1DimDirection(
@@ -397,7 +401,11 @@ class ColorSpace:
             np.eye(self.dim)), 0, 1)
 
         cones = self.convert(disp_pts, ColorSpaceType.DISP, ColorSpaceType.CONE)
-        return cones[0], cones[1]
+
+        # Calculate metamer difference in the metameric channel
+        metamer_difference = abs(cones[0][self.metameric_axis] - cones[1][self.metameric_axis])
+
+        return cones[0], cones[1], metamer_difference
 
     def is_in_gamut(self, points: npt.NDArray, color_space_type: ColorSpaceType) -> bool:
         """

@@ -35,11 +35,12 @@ class PseudoIsochromaticPlateGenerator:
             lum_noise (float): Luminance noise amount
             s_cone_noise (float): S-cone noise amount
         """
-        inside_cone, outside_cone, color_space = self.color_generator.NewColor()
+        inside_cone, outside_cone, color_space, metamer_difference = self.color_generator.NewColor()
         image = self.plate_generator.GeneratePlate(
             inside_cone, outside_cone, color_space,
             hidden_number, output_space,
-            lum_noise=lum_noise, s_cone_noise=s_cone_noise
+            lum_noise=lum_noise, s_cone_noise=s_cone_noise,
+            metamer_difference=metamer_difference
         )
         self.plate_generator.ExportPlateTo6P(image, filename)
 
@@ -56,11 +57,12 @@ class PseudoIsochromaticPlateGenerator:
             lum_noise (float): Luminance noise amount
             s_cone_noise (float): S-cone noise amount
         """
-        inside_cone, outside_cone, color_space = self.color_generator.GetColor(previous_result)
+        inside_cone, outside_cone, color_space, metamer_difference = self.color_generator.GetColor(previous_result)
         image = self.plate_generator.GeneratePlate(
             inside_cone, outside_cone, color_space,
             hidden_symbol, output_space,
-            lum_noise=lum_noise, s_cone_noise=s_cone_noise, corner_label=corner_label
+            lum_noise=lum_noise, s_cone_noise=s_cone_noise, corner_label=corner_label,
+            metamer_difference=metamer_difference
         )
         if output_space == ColorSpaceType.DISP_6P:
             self.plate_generator.ExportPlateTo6P(image, filename)
@@ -71,7 +73,7 @@ class PseudoIsochromaticPlateGenerator:
 
     def GetControlPlate(self, filename: str, color_space: ColorSpace, lum_noise: float = 0, s_cone_noise: float = 0, output_space: ColorSpaceType = ColorSpaceType.SRGB, corner_label: str = None):
 
-        inside_cone, _ = color_space.get_maximal_pair_in_disp_from_pt(np.array([0.5, 0.5, 0.5, 0.5]))
+        inside_cone, _, _ = color_space.get_maximal_pair_in_disp_from_pt(np.array([0.5, 0.5, 0.5, 0.5]))
 
         image = self.plate_generator.GeneratePlate(
             inside_cone, inside_cone, color_space,
@@ -102,7 +104,7 @@ if __name__ == "__main__":
 
     lum_noise = 0.0
     s_cone_noise = 0.1
-    output_space = ColorSpaceType.DISP_6P
+    output_space = ColorSpaceType.SRGB
 
     dirname = f"./measurements/2025-10-16/tests_noise_{lum_noise}_scone_noise_{s_cone_noise}"
     os.makedirs(dirname, exist_ok=True)

@@ -67,6 +67,7 @@ class IshiharaPlateGenerator:
                       hidden_symbol: Union[int, str], output_space: ColorSpaceType,
                       lum_noise: float = 0, s_cone_noise: float = 0,
                       corner_label: Optional[str] = None,
+                      metamer_difference: Optional[float] = None,
                       **kwargs) -> List[Image.Image]:
         """
         Generate plate with specified output color space.
@@ -78,6 +79,7 @@ class IshiharaPlateGenerator:
             output_space: Target color space (DISP_6P, PRINT_4D, SRGB, etc.)
             lum_noise: Luminance noise amount
             s_cone_noise: S-cone noise amount
+            metamer_difference: Metamer difference for adaptive noise calculation
             **kwargs: Additional arguments passed to generate_ishihara_plate
         """
         # Get default values or use provided kwargs
@@ -93,6 +95,7 @@ class IshiharaPlateGenerator:
             secret=hidden_symbol, circles=circles,  # Use cached geometry
             output_space=output_space,
             lum_noise=lum_noise, s_cone_noise=s_cone_noise, corner_label=corner_label,
+            metamer_difference=metamer_difference,
             seed=self.seed,  # Pass seed for consistency
             **kwargs
         )
@@ -213,6 +216,7 @@ def _draw_plate(
     s_cone_noise: float = 0.0,
     input_space: ColorSpaceType = ColorSpaceType.CONE,
     output_space: ColorSpaceType = ColorSpaceType.DISP_6P,
+    metamer_difference: Optional[float] = None,
 ) -> None:
     """
     Draw the plate with the computed circle positions and colors.
@@ -223,7 +227,9 @@ def _draw_plate(
     :param inside_color: Color for shape elements
     :param outside_color: Color for background elements
     :param channel_draws: ImageDraw objects for each channel
-    :param lum_noise: Luminance noise amount
+    :param lum_noise: Luminance noise amount (ignored if metamer_difference provided)
+    :param s_cone_noise: S-cone noise amount (ignored if metamer_difference provided)
+    :param metamer_difference: Metamer difference for adaptive noise (applied to all channels except metameric axis)
     """
     for i, [x, y, r] in enumerate(circles):
         in_p, out_p = inside_props[i], outside_props[i]
@@ -232,12 +238,25 @@ def _draw_plate(
         circle_color = in_p * inside_color + out_p * outside_color
 
         noise_vector = np.zeros(color_space.dim)
-        if s_cone_noise > 0:
-            noise_vector[0] += np.random.normal(0, s_cone_noise)
 
-        if lum_noise > 0:
-            # Add luminance noise
-            noise_vector += np.full(color_space.dim, np.random.normal(0, lum_noise))
+        # Determine which noise to apply
+        if metamer_difference is not None:
+            # Use adaptive noise based on metamer difference
+            adaptive_noise = metamer_difference / 2
+            # Apply noise to all channels except the metameric axis
+            for channel in range(color_space.dim):
+                if channel != color_space.metameric_axis:
+                    noise_vector[channel] += np.random.normal(0, adaptive_noise)
+        else:
+            # Use traditional noise parameters
+            if s_cone_noise > 0:
+                noise_vector[0] += np.random.normal(0, s_cone_noise)
+
+            if lum_noise > 0:
+                # Add luminance noise to all channels except metameric axis
+                for channel in range(color_space.dim):
+                    if channel != color_space.metameric_axis:
+                        noise_vector[channel] += np.random.normal(0, lum_noise)
 
         circle_color = np.clip(circle_color + noise_vector, 0, None)
         circle_color = color_space.convert(np.array([circle_color]), input_space, output_space)[0]
@@ -280,7 +299,8 @@ def generate_ishihara_plate(
     corner_label: Optional[str] = None,
     corner_color: npt.ArrayLike = np.array([255/2, 255/2, 255/2, 255/2, 0, 0]).astype(int),
     background_color: npt.NDArray = np.array([0, 0, 0, 0, 0, 0]),
-    blur_radius: float = 1.0
+    blur_radius: float = 1.0,
+    metamer_difference: Optional[float] = None
 ) -> List[Image.Image]:
     """
     Generate an Ishihara Plate with specified properties.
@@ -304,11 +324,17 @@ def generate_ishihara_plate(
     seed : int
         RNG seed for plate generation.
     lum_noise : float
-        Amount of luminance noise to add.
+        Amount of luminance noise to add to all channels except metameric axis.
+        Ignored if metamer_difference is provided.
     s_cone_noise : float
         Amount of S-cone specific noise to add.
+        Ignored if metamer_difference is provided.
     noise : float
-        Amount of noise to add to gradient plates.
+        Legacy noise parameter (deprecated).
+    metamer_difference : Optional[float]
+        Metamer difference for adaptive noise calculation. When provided,
+        adaptive noise (metamer_difference/2) is applied to all channels except
+        the metameric axis, and lum_noise/s_cone_noise are ignored.
     output_space : ColorSpaceType
         Target color space for output.
     gradient : bool
@@ -369,7 +395,7 @@ def generate_ishihara_plate(
     # Draw plate
     _draw_plate(
         circles, inside_props, outside_props, inside_cone, outside_cone, color_space,
-        channel_draws, lum_noise, s_cone_noise, input_space, output_space
+        channel_draws, lum_noise, s_cone_noise, input_space, output_space, metamer_difference
     )
 
     # Draw corner label if provided
