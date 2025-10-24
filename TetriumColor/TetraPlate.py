@@ -62,7 +62,7 @@ class PseudoIsochromaticPlateGenerator:
             inside_cone, outside_cone, color_space,
             hidden_symbol, output_space,
             lum_noise=lum_noise, s_cone_noise=s_cone_noise, corner_label=corner_label,
-        #     metamer_difference=metamer_difference
+            metamer_difference=metamer_difference
         )
         if output_space == ColorSpaceType.DISP_6P:
             self.plate_generator.ExportPlateTo6P(image, filename)
@@ -102,9 +102,10 @@ if __name__ == "__main__":
     number_of_tests = color_generator.get_num_samples()
     plate_generator = PseudoIsochromaticPlateGenerator(color_generator)
 
-    lum_noise = 0.0
-    s_cone_noise = 0.1
-    output_space = ColorSpaceType.SRGB
+    lum_noise = 0.1
+    s_cone_noise = 0.0
+    output_space = ColorSpaceType.DISP_6P
+    output_filename = "metamer_difference_noise_all"
 
     dirname = f"./measurements/2025-10-16/tests_noise_{lum_noise}_scone_noise_{s_cone_noise}"
     os.makedirs(dirname, exist_ok=True)
@@ -129,9 +130,9 @@ if __name__ == "__main__":
         ocv_images = [image[1] for image in images]
         rgb_grid = CreatePaddedGrid(rgb_images, padding=0, channels=3, square_grid=False)
         ocv_grid = CreatePaddedGrid(ocv_images, padding=0, channels=3, square_grid=False)
-        rgb_grid.save(os.path.join(dirname, "genetics_grid_RGB.png"))
-        ocv_grid.save(os.path.join(dirname, "genetics_grid_OCV.png"))
+        rgb_grid.save(os.path.join(dirname, f"{output_filename}_RGB.png"))
+        ocv_grid.save(os.path.join(dirname, f"{output_filename}_OCV.png"))
     else:
         images = [image[0] for image in images]
         grid = CreatePaddedGrid(images, padding=0, channels=3, square_grid=False)
-        grid.save(os.path.join(dirname, "genetics_grid_sRGB.png"))
+        grid.save(os.path.join(dirname, f"{output_filename}_sRGB.png"))

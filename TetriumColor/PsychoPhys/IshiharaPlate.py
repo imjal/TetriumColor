@@ -245,9 +245,7 @@ def _draw_plate(
             adaptive_noise = metamer_difference / 2
             # Apply noise to all channels except the metameric axis
             sample_noise = np.random.normal(0, adaptive_noise)
-            for channel in range(color_space.dim):
-                if channel != color_space.metameric_axis:
-                    noise_vector[channel] += sample_noise
+            noise_vector = np.ones(color_space.dim) * sample_noise
         else:
             # Use traditional noise parameters
             if s_cone_noise > 0:
@@ -256,9 +254,7 @@ def _draw_plate(
             if lum_noise > 0:
                 sample_noise = np.random.normal(0, lum_noise)
                 # Add luminance noise to all channels except metameric axis
-                for channel in range(color_space.dim):
-                    if channel != color_space.metameric_axis:
-                        noise_vector[channel] += sample_noise
+                noise_vector = np.ones(color_space.dim) * sample_noise
 
         circle_color = np.clip(circle_color + noise_vector, 0, None)
         circle_color = color_space.convert(np.array([circle_color]), input_space, output_space)[0]
