@@ -62,7 +62,7 @@ class PseudoIsochromaticPlateGenerator:
             inside_cone, outside_cone, color_space,
             hidden_symbol, output_space,
             lum_noise=lum_noise, s_cone_noise=s_cone_noise, corner_label=corner_label,
-            metamer_difference=metamer_difference
+        #     metamer_difference=metamer_difference
         )
         if output_space == ColorSpaceType.DISP_6P:
             self.plate_generator.ExportPlateTo6P(image, filename)
