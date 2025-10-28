@@ -476,19 +476,26 @@ class InkGamut:
         for ink in inks:
             assert np.array_equal(ink.wavelengths, self.wavelengths)
 
-        if calibration_json is not None:
-            calib_n_param, calib_trc_gammas, calib_residual_scale = self._load_calibration_parameters(
-                calibration_json)
+        self.neugebauer = load_neugebauer(inks, paper, n=2.0)
 
-        # Create Neugebauer with calibration parameters
-        primaries_dict = {'0' * len(inks): paper}
-        for i, ink in enumerate(inks):
-            key = '0' * i + '1' + '0' * (len(inks) - i - 1)
-            primaries_dict[key] = ink
+        # Initialize calibration parameters with defaults
+        # calib_n_param = None
+        # calib_trc_gammas = None
+        # calib_residual_scale = None
 
-        self.neugebauer = Neugebauer(primaries_dict, n=calib_n_param or 2.0,
-                                     trc_gammas=calib_trc_gammas,
-                                     residual_scale=calib_residual_scale)
+        # if calibration_json is not None:
+        #     calib_n_param, calib_trc_gammas, calib_residual_scale = self._load_calibration_parameters(
+        #         calibration_json)
+
+        # # Create Neugebauer with calibration parameters
+        # primaries_dict = {'0' * len(inks): paper}
+        # for i, ink in enumerate(inks):
+        #     key = '0' * i + '1' + '0' * (len(inks) - i - 1)
+        #     primaries_dict[key] = ink
+
+        # self.neugebauer = Neugebauer(primaries_dict, n=calib_n_param or 2.0,
+        #                              trc_gammas=calib_trc_gammas,
+        #                              residual_scale=calib_residual_scale)
 
         # Inverse mapping cache
         self._inverse_mapping_cache = {}
@@ -1080,13 +1087,16 @@ class InkLibrary:
         return sorted(top_scores, reverse=True)
 
     def convex_hull_search(self, observe: Union[Observer, npt.NDArray],
-                           illuminant: Union[Spectra, npt.NDArray], top=100, k=None) -> List[Tuple[float, List[str]]]:
+                           illuminant: Union[Spectra, npt.NDArray], top=100, k=None,
+                           fixed_inks: Optional[List[str]] = None) -> List[Tuple[float, List[str]]]:
         """Find the best k-ink subset of the ink library using a convex hull approach.
         Args:
             observe (Union[Observer, npt.NDArray]): The observer or sensor matrix.
             illuminant (Union[Spectra, npt.NDArray]): The illuminant spectra
             top (int): The number of top results to return.
             k (Optional[int]): The number of inks to consider in the subset. If None, defaults to the number of observer channels.
+            fixed_inks (Optional[List[str]]): List of ink names that must be included in all combinations.
+                                             Search will find best k-len(fixed_inks) inks to complement these.
         Returns:
             List[Tuple[float, List[str]]]: A list of tuples containing the volume and the names of the inks.
         """
@@ -1098,50 +1108,144 @@ class InkLibrary:
         if k is None:
             k = observe.shape[0]
 
+        # Handle fixed inks
+        fixed_inks = fixed_inks or []
+        if fixed_inks:
+            # Validate fixed inks exist
+            missing = [ink for ink in fixed_inks if ink not in self.names]
+            if missing:
+                raise ValueError(f"Fixed inks not found in library: {missing}")
+
+            if len(fixed_inks) >= k:
+                raise ValueError(f"Number of fixed inks ({len(fixed_inks)}) must be less than k ({k})")
+
+            # Get indices of fixed and variable inks
+            fixed_indices = [self.names.index(ink) for ink in fixed_inks]
+            variable_indices = [i for i in range(self.K) if i not in fixed_indices]
+            search_k = k - len(fixed_inks)  # Number of inks to search for
+
+            print(f"Searching for {search_k} complementary inks to {len(fixed_inks)} fixed inks")
+        else:
+            fixed_indices = []
+            variable_indices = list(range(self.K))
+            search_k = k
+
         # Check cache first
-        cache_data = self._load_from_cache('convex_hull_search',
-                                           observe=observe.tolist() if isinstance(observe, np.ndarray) else str(observe),
-                                           illuminant=illuminant.tolist() if isinstance(illuminant, np.ndarray) else str(illuminant),
-                                           top=top, k=k)
+        cache_key = {
+            'observe': observe.tolist() if isinstance(observe, np.ndarray) else str(observe),
+            'illuminant': illuminant.tolist() if isinstance(illuminant, np.ndarray) else str(illuminant),
+            'top': top,
+            'k': k,
+            'fixed_inks': tuple(sorted(fixed_inks)) if fixed_inks else None
+        }
+        cache_data = self._load_from_cache('convex_hull_search', **cache_key)
         if cache_data is not None:
             return cache_data
 
-        km_cache = {}
-
-        total_iterations = sum(comb(self.K, i) for i in range(2, k + 1))
-
+        # Build k/s cache for individual inks
         ks_cache = []
         for ink in self.spectras:
             ks_cache.append(np.stack(k_s_from_data(ink)))
 
-        with tqdm(total=total_iterations, desc="loading km cache") as pbar:
-            for i in range(2, k + 1):
-                concentrations = np.ones(i) / i
-                for subset in combinations(range(self.K), i):
-                    inks_to_mix = [ks_cache[idx] for idx in subset]
-                    ks_batch = np.stack(inks_to_mix, axis=2)
-                    ks_mix = ks_batch @ concentrations
-                    data = data_from_k_s(ks_mix[0], ks_mix[1])
-                    km_cache[subset] = data.astype(np.float16)
-                    pbar.update(1)
+        km_cache = {}
 
-        del ks_cache
+        if fixed_inks:
+            # Optimized cache building when we have fixed inks
+            # Strategy: Only pre-compute combinations that include ALL fixed inks.
+            # All other combinations (including variable-only and partial-fixed) are computed on-demand.
+            # This is optimal because during search, we only evaluate k-ink sets that include all fixed inks.
+            #
+            # Example: K=50, k=6, fixed=3 (e.g., C255, M255, Y255)
+            #   - Original: binom(50,2) + ... + binom(50,6) = ~16M combinations
+            #   - At least 1 fixed: ~1.5M combinations (current "optimized")
+            #   - ALL fixed inks: ~17K combinations (new optimization)
+            #   - Speedup: ~1000x reduction in cache building time!
+            print(f"Building optimized km_cache for {len(fixed_inks)} fixed inks...")
+
+            # Calculate combinations that include ALL fixed inks
+            total_iterations = 0
+            for i in range(len(fixed_indices), k + 1):  # Start from len(fixed_indices) since we need all of them
+                num_variable = i - len(fixed_indices)
+                if num_variable <= len(variable_indices):
+                    total_iterations += comb(len(variable_indices), num_variable)
+
+            # Show the reduction vs. full cache
+            full_cache_size = sum(comb(self.K, i) for i in range(2, k + 1))
+            reduction = 100 * (1 - total_iterations / full_cache_size) if full_cache_size > 0 else 0
+            print(f"  Cache size: {total_iterations:,} (vs. {full_cache_size:,} full, {reduction:.1f}% reduction)")
+
+            with tqdm(total=total_iterations, desc="loading km cache (optimized)") as pbar:
+                for i in range(len(fixed_indices), k + 1):
+                    concentrations = np.ones(i) / i
+                    num_variable = i - len(fixed_indices)
+                    if num_variable > len(variable_indices):
+                        continue
+
+                    # All combinations include ALL fixed inks plus some variable inks
+                    for variable_combo in combinations(variable_indices, num_variable):
+                        subset = tuple(sorted(tuple(fixed_indices) + variable_combo))
+                        inks_to_mix = [ks_cache[idx] for idx in subset]
+                        ks_batch = np.stack(inks_to_mix, axis=2)
+                        ks_mix = ks_batch @ concentrations
+                        data = data_from_k_s(ks_mix[0], ks_mix[1])
+                        km_cache[subset] = data.astype(np.float16)
+                        pbar.update(1)
+        else:
+            # Original cache building for no fixed inks
+            total_iterations = sum(comb(self.K, i) for i in range(2, k + 1))
+
+            with tqdm(total=total_iterations, desc="loading km cache") as pbar:
+                for i in range(2, k + 1):
+                    concentrations = np.ones(i) / i
+                    for subset in combinations(range(self.K), i):
+                        inks_to_mix = [ks_cache[idx] for idx in subset]
+                        ks_batch = np.stack(inks_to_mix, axis=2)
+                        ks_mix = ks_batch @ concentrations
+                        data = data_from_k_s(ks_mix[0], ks_mix[1])
+                        km_cache[subset] = data.astype(np.float16)
+                        pbar.update(1)
+
+        # Keep ks_cache for on-demand computation if needed
+        # del ks_cache
 
         denominator = np.matmul(observe, illuminant.T)[:, np.newaxis]
 
         top_scores = []
-        for inkset_idx in tqdm(combinations(range(self.K), k), total=comb(self.K, k), desc="finding best inkset"):
+
+        # Search only through variable ink combinations
+        total_combinations = comb(len(variable_indices), search_k)
+        desc = f"finding best {search_k}-ink complement" if fixed_inks else "finding best inkset"
+
+        # Helper function to get or compute km_cache entry
+        def get_km_mix(subset):
+            subset = tuple(sorted(subset))
+            if subset not in km_cache:
+                # Compute on-demand for variable-only combinations
+                i = len(subset)
+                concentrations = np.ones(i) / i
+                inks_to_mix = [ks_cache[idx] for idx in subset]
+                ks_batch = np.stack(inks_to_mix, axis=2)
+                ks_mix = ks_batch @ concentrations
+                data = data_from_k_s(ks_mix[0], ks_mix[1])
+                km_cache[subset] = data.astype(np.float16)
+            return km_cache[subset]
+
+        for variable_combo in tqdm(combinations(variable_indices, search_k),
+                                   total=total_combinations, desc=desc):
+            # Combine fixed inks with this variable combination
+            inkset_idx = tuple(sorted(fixed_indices + list(variable_combo)))
             names = [self.names[i] for i in inkset_idx]
 
+            # Build primaries array with all k inks (fixed + variable)
             primaries_array = [self.paper]
             primaries_array.extend([self.spectras[idx] for idx in inkset_idx])
             primaries_array.extend(
-                [km_cache[subset] for i in range(2, k + 1) for subset in combinations(inkset_idx, i)])
+                [get_km_mix(subset) for i in range(2, k + 1) for subset in combinations(inkset_idx, i)])
 
             primaries_array = np.array(primaries_array)
 
             numerator = np.matmul(observe, (primaries_array * illuminant).T)
-            observe_mix = np.divide(numerator, denominator)  # 4 x 16
+            observe_mix = np.divide(numerator, denominator)
             vol = ConvexHull(observe_mix.T).volume
 
             if len(top_scores) < top:
@@ -1150,12 +1254,12 @@ class InkLibrary:
                 if vol > top_scores[0][0]:
                     heapq.heapreplace(top_scores, (vol, names))
 
+        # Clean up ks_cache
+        del ks_cache
+
         # Save to cache
         result = sorted(top_scores, reverse=True)
-        self._save_to_cache('convex_hull_search', result,
-                            observe=observe.tolist() if isinstance(observe, np.ndarray) else str(observe),
-                            illuminant=illuminant.tolist() if isinstance(illuminant, np.ndarray) else str(illuminant),
-                            top=top, k=k)
+        self._save_to_cache('convex_hull_search', result, **cache_key)
         return result
 
     def cached_pca_search(self, observe: Union[Observer, npt.NDArray],
@@ -1534,26 +1638,45 @@ def combine_inksets(inkset_paths: List[str], output_path: str = None, filter_clo
     if not inkset_paths:
         raise ValueError("At least one inkset path must be provided")
 
-    # Load all inksets
+    # Load all inksets (allowing paper to be None)
     inksets = {}
+    inksets_with_paper = {}
     for path in inkset_paths:
         inkset_name = os.path.splitext(os.path.basename(path))[0]
-        inksets[inkset_name] = InkLibrary.load_ink_library(path, filter_clogged=filter_clogged)
+        library, paper, wavelengths = load_inkset(path, filter_clogged=filter_clogged)
+        inksets[inkset_name] = {
+            'library': library,
+            'paper': paper,
+            'wavelengths': wavelengths
+        }
+        if paper is not None:
+            inksets_with_paper[inkset_name] = inksets[inkset_name]
+
+    # Ensure at least one inkset has paper
+    if not inksets_with_paper:
+        raise ValueError("At least one inkset must contain paper spectra")
 
     # Determine which inkset to use for paper
     if paper_source == "first":
-        paper_inkset = inksets[list(inksets.keys())[0]]
+        # Use first inkset that has paper
+        paper_inkset_name = list(inksets_with_paper.keys())[0]
     elif paper_source == "last":
-        paper_inkset = inksets[list(inksets.keys())[-1]]
+        # Use last inkset that has paper
+        paper_inkset_name = list(inksets_with_paper.keys())[-1]
     elif paper_source in inksets:
-        paper_inkset = inksets[paper_source]
+        # Use specified inkset (error if it doesn't have paper)
+        if inksets[paper_source]['paper'] is None:
+            raise ValueError(f"Specified paper_source '{paper_source}' does not contain paper spectra")
+        paper_inkset_name = paper_source
     else:
         raise ValueError(f"Invalid paper_source: {paper_source}. Must be 'first', 'last', or a valid inkset name.")
 
+    paper_spectra = inksets[paper_inkset_name]['paper']
+
     # Check wavelength compatibility
-    reference_wavelengths = paper_inkset.wavelengths
-    for name, inkset in inksets.items():
-        if not np.array_equal(inkset.wavelengths, reference_wavelengths):
+    reference_wavelengths = inksets[paper_inkset_name]['wavelengths']
+    for name, inkset_data in inksets.items():
+        if not np.array_equal(inkset_data['wavelengths'], reference_wavelengths):
             raise ValueError(f"Inkset {name} has incompatible wavelengths with reference inkset")
 
     # Combine all inks
@@ -1563,11 +1686,11 @@ def combine_inksets(inkset_paths: List[str], output_path: str = None, filter_clo
     if len(name_prefixes) != len(inkset_paths):
         raise ValueError("Number of name_prefixes must match number of inkset_paths")
 
-    for i, (inkset_name, inkset) in enumerate(inksets.items()):
+    for i, (inkset_name, inkset_data) in enumerate(inksets.items()):
         prefix = name_prefixes[i]
-        for ink_name, ink_spectra in inkset.library.items():
-            # Skip paper from non-reference inksets
-            if ink_name.lower() == "paper" and inkset != paper_inkset:
+        for ink_name, ink_spectra in inkset_data['library'].items():
+            # Skip paper entries from all inksets (we'll use the designated paper_spectra)
+            if ink_name.lower() == "paper":
                 continue
 
             # Add prefix to avoid name conflicts
@@ -1575,7 +1698,7 @@ def combine_inksets(inkset_paths: List[str], output_path: str = None, filter_clo
             combined_library[prefixed_name] = ink_spectra
 
     # Create combined InkLibrary
-    combined_inkset = InkLibrary(combined_library, paper_inkset.get_paper())
+    combined_inkset = InkLibrary(combined_library, paper_spectra)
 
     # Save to CSV if output path is provided
     if output_path:
@@ -1598,8 +1721,14 @@ def save_combined_inkset_to_csv(inkset: InkLibrary, output_path: str):
     ink_names = list(inkset.library.keys())
     wavelengths = inkset.wavelengths
 
-    # Prepare data matrix
+    # Prepare data matrix (inks only)
     reflectance_data = np.array([inkset.library[name].data for name in ink_names])
+
+    # Add paper spectra if available
+    if inkset.get_paper() is not None:
+        ink_names.append("paper")
+        paper_data = inkset.get_paper().data.reshape(1, -1)
+        reflectance_data = np.vstack([reflectance_data, paper_data])
 
     # Create DataFrame
     df = pd.DataFrame(reflectance_data, index=ink_names, columns=wavelengths)

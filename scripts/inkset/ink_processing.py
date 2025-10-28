@@ -14,6 +14,7 @@ import argparse
 import os
 import sys
 import json
+import colorsys
 from pathlib import Path
 from typing import List, Dict, Optional
 
@@ -95,7 +96,7 @@ def convert_nix_to_csv(input_path: str, library_name: str, output_dir: Optional[
     if not all_spectra:
         raise ValueError("No valid spectra found in input files")
 
-    # Ensure we have paper
+    # Try to find paper if not already set
     if paper_spectra is None:
         # Look for a spectra named "paper" (case insensitive)
         for name, spectra in all_spectra.items():
@@ -103,8 +104,8 @@ def convert_nix_to_csv(input_path: str, library_name: str, output_dir: Optional[
                 paper_spectra = spectra
                 break
 
-        if paper_spectra is None:
-            raise ValueError("No paper spectra found. Please ensure one of your samples is named 'paper'")
+    if paper_spectra is None:
+        print("Warning: No paper spectra found. Creating library without paper.")
 
     # Create DataFrame in the standard format
     ink_names = list(all_spectra.keys())
@@ -258,6 +259,150 @@ def filter_library_by_names(source_library: str, output_name: str, names_file: s
     return output_path
 
 
+def filter_by_color(source_library: str, output_name: str, exclude_colors: List[str],
+                    filter_clogged: bool = True, hue_tolerance: float = 30.0,
+                    saturation_threshold: float = 0.15, value_threshold: float = 0.15,
+                    keep_names: Optional[List[str]] = None) -> str:
+    """
+    Filter an ink library by removing inks of specified colors based on HSV analysis.
+
+    Args:
+        source_library: Name of an existing library in the registry to filter.
+        output_name: Name for the new filtered library.
+        exclude_colors: List of color names to exclude. Supported: 'blue', 'yellow', 'cyan', 'red', 'green', 'purple'
+        filter_clogged: Whether to filter clogged inks when loading source.
+        hue_tolerance: How many degrees around the hue center to exclude (default: 30).
+        saturation_threshold: Minimum saturation to consider an ink as colored (default: 0.15).
+        value_threshold: Minimum value/brightness to consider an ink (default: 0.15).
+        keep_names: Optional list of ink names to always keep regardless of color filtering.
+
+    Returns:
+        Path to the created CSV file for the filtered library.
+    """
+    # HSV hue ranges (in degrees, 0-360)
+    color_hue_centers = {
+        'red': 0,       # 0 degrees (wraps around)
+        'yellow': 60,   # 60 degrees
+        'green': 120,   # 120 degrees
+        'cyan': 180,    # 180 degrees
+        'blue': 240,    # 240 degrees (NOT purple)
+        'purple': 300,  # 300 degrees (magenta/purple)
+    }
+
+    # Validate exclude_colors
+    for color in exclude_colors:
+        if color not in color_hue_centers:
+            raise ValueError(f"Unknown color: {color}. Supported colors: {list(color_hue_centers.keys())}")
+
+    # Resolve and load the source library
+    if not registry.library_exists(source_library):
+        raise ValueError(f"Library '{source_library}' not found")
+
+    source_path = registry.resolve_library_path(source_library)
+    library, paper, wavelengths = load_inkset(source_path, filter_clogged=filter_clogged)
+
+    def is_ink_excluded(ink_name: str, spectra: Spectra) -> bool:
+        """Check if an ink should be excluded based on its color."""
+        try:
+            # Convert spectra to RGB (0-1 range)
+            rgb = spectra.to_rgb()
+
+            # Convert to HSV (hue in 0-1, saturation 0-1, value 0-1)
+            h, s, v = colorsys.rgb_to_hsv(rgb[0], rgb[1], rgb[2])
+
+            # Convert hue to degrees (0-360)
+            hue_deg = h * 360
+
+            # Skip very desaturated (gray/white/black) inks
+            if s < saturation_threshold or v < value_threshold:
+                return False
+
+            # Check if hue matches any excluded color
+            for color in exclude_colors:
+                center = color_hue_centers[color]
+
+                # Handle wraparound for red (0/360 degrees)
+                if color == 'red':
+                    # Red wraps around 0/360
+                    if hue_deg < hue_tolerance or hue_deg > (360 - hue_tolerance):
+                        print(f"  Excluding {ink_name}: {color} (H={hue_deg:.1f}°, S={s:.2f}, V={v:.2f})")
+                        return True
+                else:
+                    # Check if within tolerance of the color center
+                    if abs(hue_deg - center) < hue_tolerance:
+                        print(f"  Excluding {ink_name}: {color} (H={hue_deg:.1f}°, S={s:.2f}, V={v:.2f})")
+                        return True
+
+            return False
+        except Exception as e:
+            print(f"  Warning: Failed to analyze color for {ink_name}: {e}")
+            return False
+
+    # Filter the library
+    filtered: Dict[str, Spectra] = {}
+    excluded_count = 0
+    keep_set = set(keep_names) if keep_names else set()
+
+    print(f"Filtering inks, excluding colors: {exclude_colors}")
+    if keep_names:
+        print(f"Always keeping: {keep_names}")
+
+    for name, spectra in library.items():
+        # Always keep whitelisted inks
+        if name in keep_set:
+            print(f"  Keeping {name} (in whitelist)")
+            filtered[name] = spectra
+        elif is_ink_excluded(name, spectra):
+            excluded_count += 1
+        else:
+            filtered[name] = spectra
+
+    if not filtered:
+        raise ValueError("All inks were filtered out!")
+
+    # Set up output
+    output_dir = f"data/inksets/{output_name}"
+    os.makedirs(output_dir, exist_ok=True)
+    output_path = os.path.join(output_dir, f"{output_name}-inks.csv")
+
+    # Create DataFrame in the standard format (including paper if available)
+    ink_names = list(filtered.keys())
+    if paper is not None:
+        reflectance_data = np.array([filtered[name].data for name in ink_names] + [paper.data])
+        index_list = ink_names + ["paper"]
+    else:
+        reflectance_data = np.array([filtered[name].data for name in ink_names])
+        index_list = ink_names
+
+    df = pd.DataFrame(reflectance_data, index=index_list, columns=wavelengths)
+    df.index.name = "Name"
+    df = df.reset_index()
+    df.insert(0, 'ID', range(1, len(df) + 1))
+    df['clogged'] = 0
+    df.to_csv(output_path, index=False)
+
+    # Register the new filtered library
+    registry.register_library(
+        output_name,
+        f"{output_name}/{output_name}-inks.csv",
+        {
+            "created": "color_filtered",
+            "source_library": source_library,
+            "excluded_colors": exclude_colors,
+            "keep_names": keep_names,
+            "filter_clogged": filter_clogged,
+            "original_count": len(library),
+            "kept": len(filtered),
+            "excluded": excluded_count,
+        }
+    )
+
+    print(f"\nFiltered library saved to {output_path}")
+    print(f"Kept {len(filtered)} inks, excluded {excluded_count} inks")
+
+    return output_path
+
+
 def combine_libraries(library_names: List[str], output_name: str,
                       prefixes: Optional[List[str]] = None, paper_source: str = "first",
                       filter_clogged: bool = True) -> str:
@@ -400,7 +545,7 @@ def create_library_from_files(library_name: str, input_files: List[str],
     if not all_spectra:
         raise ValueError("No valid spectra found in input files")
 
-    # Ensure we have paper
+    # Try to find paper if not already set
     if paper_spectra is None:
         # Look for a spectra named "paper" (case insensitive)
         for name, spectra in all_spectra.items():
@@ -408,19 +553,26 @@ def create_library_from_files(library_name: str, input_files: List[str],
                 paper_spectra = spectra
                 break
 
-        if paper_spectra is None:
-            raise ValueError(
-                "No paper spectra found. Please ensure one of your samples is named 'paper' or specify a paper file")
-
-    # Create DataFrame in the standard format
+    # Create DataFrame - paper is optional
     ink_names = list(all_spectra.keys())
-    wavelengths = paper_spectra.wavelengths
-    reflectance_data = np.array([all_spectra[name].data for name in ink_names] + [paper_spectra.data])
+
+    # Get wavelengths from paper if available, otherwise from first ink
+    if paper_spectra is not None:
+        wavelengths = paper_spectra.wavelengths
+        reflectance_data = np.array([all_spectra[name].data for name in ink_names] + [paper_spectra.data])
+        index_list = ink_names + ["paper"]
+    else:
+        print("Warning: No paper spectra found. Creating library without paper.")
+        wavelengths = next(iter(all_spectra.values())).wavelengths
+        reflectance_data = np.array([all_spectra[name].data for name in ink_names])
+        index_list = ink_names
 
     # Remove trailing spaces from all ink_names
     ink_names = [name.rstrip() for name in ink_names]
+    index_list = [name.rstrip() for name in index_list]
+
     # Create DataFrame
-    df = pd.DataFrame(reflectance_data, index=ink_names + ["paper"], columns=wavelengths)
+    df = pd.DataFrame(reflectance_data, index=index_list, columns=wavelengths)
     df.index.name = "Name"
 
     # Reset index to make Name a column
@@ -498,6 +650,25 @@ def main():
                                help='Filter out clogged inks when loading source (default: True)')
     filter_parser.add_argument('--no-filter-clogged', action='store_true', help='Do not filter out clogged inks')
 
+    # Filter by color command
+    filter_color_parser = subparsers.add_parser(
+        'filter-color', help='Filter an ink library by removing specific colors')
+    filter_color_parser.add_argument('source_library', help='Existing library name in registry to filter')
+    filter_color_parser.add_argument('output_name', help='Name for the new filtered library')
+    filter_color_parser.add_argument('--exclude', required=True,
+                                     help='Comma-separated list of colors to exclude (blue, yellow, cyan, red, green, purple)')
+    filter_color_parser.add_argument('--keep',
+                                     help='Comma-separated list of ink names to always keep (e.g., C255,Y255)')
+    filter_color_parser.add_argument('--hue-tolerance', type=float, default=30.0,
+                                     help='Degrees around hue center to exclude (default: 30.0)')
+    filter_color_parser.add_argument('--saturation-threshold', type=float, default=0.15,
+                                     help='Minimum saturation to consider colored (default: 0.15)')
+    filter_color_parser.add_argument('--value-threshold', type=float, default=0.15,
+                                     help='Minimum brightness to consider (default: 0.15)')
+    filter_color_parser.add_argument('--filter-clogged', action='store_true', default=True,
+                                     help='Filter out clogged inks when loading source (default: True)')
+    filter_color_parser.add_argument('--no-filter-clogged', action='store_true', help='Do not filter out clogged inks')
+
     # List command
     list_parser = subparsers.add_parser('list', help='List all available ink libraries')
 
@@ -568,6 +739,20 @@ def main():
                 args.output_name,
                 args.names_file,
                 filter_clogged
+            )
+
+        elif args.command == 'filter-color':
+            exclude_colors = [c.strip().lower() for c in args.exclude.split(',')]
+            keep_names = [n.strip() for n in args.keep.split(',')] if args.keep else None
+            filter_by_color(
+                args.source_library,
+                args.output_name,
+                exclude_colors,
+                filter_clogged,
+                args.hue_tolerance,
+                args.saturation_threshold,
+                args.value_threshold,
+                keep_names
             )
 
         elif args.command == 'list':
