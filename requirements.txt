@@ -12,3 +12,5 @@ setuptools
 tqdm
 joblib
 scikit-learn
+tetrapolyscope
+pyglm
