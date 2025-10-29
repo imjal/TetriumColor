@@ -22,6 +22,7 @@ class CircleGridGenerator
     // For SRGB: writes filenames[i] + ".png"
     // For DISP_6P: writes filenames[i] + "_RGB.png" and "_OCV.png"
     std::vector<std::pair<int, int>> GetImages(
+        int metameric_axis,
         float luminance,
         float saturation,
         const std::vector<std::string>& filenames,
