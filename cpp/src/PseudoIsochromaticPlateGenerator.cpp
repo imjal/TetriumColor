@@ -78,6 +78,23 @@ PseudoIsochromaticPlateGenerator::PseudoIsochromaticPlateGenerator(
                 PyErr_Print();
                 exit(-1);
             }
+            // Grab default color space from color_generator.color_spaces[0]
+            PyObject* pColorSpaces = PyObject_GetAttrString(
+                reinterpret_cast<PyObject*>(color_generator.pInstance), "color_spaces"
+            );
+            if (!pColorSpaces) {
+                PyErr_Print();
+                exit(-1);
+            }
+            PyObject* pFirst = PyList_GetItem(pColorSpaces, 0); // borrowed ref
+            if (!pFirst) {
+                PyErr_Print();
+                Py_DECREF(pColorSpaces);
+                exit(-1);
+            }
+            Py_INCREF(pFirst); // store our own reference
+            pDefaultColorSpace = pFirst;
+            Py_DECREF(pColorSpaces);
         } else {
             PyErr_Print();
             exit(-1);
@@ -93,6 +110,7 @@ PseudoIsochromaticPlateGenerator::~PseudoIsochromaticPlateGenerator()
     Py_XDECREF(pInstance);
     Py_XDECREF(pClass);
     Py_XDECREF(pModule);
+    Py_XDECREF(pDefaultColorSpace);
 }
 
 void PseudoIsochromaticPlateGenerator::NewPlate(
@@ -206,6 +224,52 @@ void PseudoIsochromaticPlateGenerator::GetPlate(
 
         Py_DECREF(pOutputSpace);
         Py_DECREF(pResult);
+
+        if (pValue != nullptr) {
+            Py_DECREF(pValue);
+        } else {
+            PyErr_Print();
+        }
+    } else {
+        printf("PseudoIsochromaticPlateGenerator instance is null\n");
+        exit(-1);
+    }
+}
+
+void PseudoIsochromaticPlateGenerator::GetLuminancePlate(
+    const std::string& filename,
+    const std::string& hidden_symbol,
+    ColorSpaceType output_space,
+    float lum_noise,
+    float s_cone_noise
+)
+{
+    if (pInstance != nullptr) {
+        PyObject* pOutputSpace = ColorSpaceTypeToPython(output_space);
+        if (!pOutputSpace) {
+            printf("Failed to convert ColorSpaceType to Python\n");
+            return;
+        }
+
+        if (!pDefaultColorSpace) {
+            printf("Default ColorSpace is null\n");
+            Py_DECREF(pOutputSpace);
+            exit(-1);
+        }
+
+        PyObject* pValue = PyObject_CallMethod(
+            reinterpret_cast<PyObject*>(pInstance),
+            "GetLuminancePlate",
+            "ssOffO",
+            filename.c_str(),
+            hidden_symbol.c_str(),
+            reinterpret_cast<PyObject*>(pDefaultColorSpace),
+            lum_noise,
+            s_cone_noise,
+            pOutputSpace
+        );
+
+        Py_DECREF(pOutputSpace);
 
         if (pValue != nullptr) {
             Py_DECREF(pValue);

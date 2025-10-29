@@ -48,9 +48,18 @@ class PseudoIsochromaticPlateGenerator
         float s_cone_noise = 0.0f
     );
 
+    void GetLuminancePlate(
+        const std::string& filename,
+        const std::string& hidden_symbol,
+        ColorSpaceType output_space = ColorSpaceType::SRGB,
+        float lum_noise = 0.0f,
+        float s_cone_noise = 0.0f
+    );
+
   private:
     void* pModule;
     void* pClass;
     void* pInstance;
+    void* pDefaultColorSpace;
 };
 } // namespace TetriumColor

@@ -86,13 +86,13 @@ class PseudoIsochromaticPlateGenerator:
             image[0].save(f"{filename}_srgb.png")
         return image
 
-    def GetLuminancePlate(self, filename: str, color_space: ColorSpace, lum_noise: float = 0, s_cone_noise: float = 0, output_space: ColorSpaceType = ColorSpaceType.SRGB, corner_label: str = None):
+    def GetLuminancePlate(self, filename: str, hidden_symbol: Union[int, str], color_space: ColorSpace, lum_noise: float = 0, s_cone_noise: float = 0, output_space: ColorSpaceType = ColorSpaceType.SRGB, corner_label: str = None):
         vshh_points = np.array([[1.5, 0, 0.0, 0.0], [0.5, 0, 0.0, 0.0]])
         cones = color_space.convert(vshh_points, ColorSpaceType.VSH, ColorSpaceType.CONE)
 
         image = self.plate_generator.GeneratePlate(
             cones[0], cones[1], color_space,
-            10, output_space,
+            hidden_symbol, output_space,
             lum_noise=lum_noise, s_cone_noise=s_cone_noise, corner_label=corner_label
         )
         if output_space == ColorSpaceType.DISP_6P:
@@ -119,7 +119,7 @@ if __name__ == "__main__":
 
     lum_noise = 0.1
     s_cone_noise = 0.0
-    output_space = ColorSpaceType.SRGB
+    output_space = ColorSpaceType.DISP_6P
     output_filename = "metamer_difference_noise_all"
 
     dirname = f"./measurements/2025-10-16/tests_noise_{lum_noise}_scone_noise_{s_cone_noise}"
@@ -129,19 +129,9 @@ if __name__ == "__main__":
     import string
     alphabet = list(string.ascii_uppercase)
 
-    # control -- nobody can see this
     control_plate = plate_generator.GetControlPlate(os.path.join(
         dirname, "control"), color_generator.color_spaces[0], lum_noise=lum_noise, s_cone_noise=s_cone_noise, output_space=output_space, corner_label=alphabet[0])
     images = [control_plate]
-
-    # luminance -- everybody can see this
-    luminance_plate = plate_generator.GetLuminancePlate(os.path.join(
-        dirname, "luminance"), color_generator.color_spaces[0], lum_noise=lum_noise, s_cone_noise=s_cone_noise, output_space=output_space, corner_label=alphabet[0])
-    images.append(luminance_plate)
-
-    # dichromatic plates -- all observers but dis can see this
-
-    # trichromatic plates -- all tetra observers can see this
 
     landolt_symbols = ['landolt_up', 'landolt_down', 'landolt_left', 'landolt_right']
 
