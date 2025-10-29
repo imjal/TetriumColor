@@ -163,4 +163,4 @@ class CircleGridGenerator:
 if __name__ == "__main__":
     generator = CircleGridGenerator(
         primary_path="../measurements/2025-10-12/primaries", num_samples=10, scramble_prob=0.5)
-    generator.GetImages(1.0, 0.4, ["unscramble1", "unscramble2", "scramble"], output_space=ColorSpaceType.SRGB)
+    generator.GetImages(1.0, 0.4, ["unscramble1", "unscramble2", "scramble"], output_space=ColorSpaceType.DISP_6P)

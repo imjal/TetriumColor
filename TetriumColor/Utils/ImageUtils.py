@@ -8,7 +8,7 @@ def CreateCircleGridImages(colors: List[Tuple | List[int]],
                            grid_size: int = None,
                            circle_radius: int = 50,
                            padding: int = 10,
-                           bg_color=(0, 0, 0), out_prefix="output"):
+                           bg_color=(0, 0, 0)):
     """
     Create nxn grid images of circles colored from 'colors' list (rgb tuples 0-255), 
     If len(colors) > 4, produce image(s) with up to 4 colors each, as _RGB.png and _OCV.png
@@ -44,11 +44,9 @@ def CreateCircleGridImages(colors: List[Tuple | List[int]],
             draw.ellipse(bbox, fill=tuple(color))
         return img
 
-    results = []
     if colors.shape[1] > 4:
         # Make images each with up to 4 colors at a time (for plate format)
-        path_ends = ["_RGB.png", "_OCV.png"]
-        blocks = [colors[:, i:i+3] for i in range(2)]
+        blocks = [colors[:, 3*i:3*i+3] for i in range(2)]
         img_blocks = []
         for i, block in enumerate(blocks):
             # Build block image (grid will be at most 2x2)
