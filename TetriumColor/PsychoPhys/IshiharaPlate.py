@@ -25,7 +25,7 @@ class IshiharaPlateGenerator:
     Ishihara plate generator with geometry caching for improved performance.
     """
 
-    def __init__(self, seed: int = 42):
+    def __init__(self):
         """
         Initialize the plate generator.
 
@@ -33,7 +33,6 @@ class IshiharaPlateGenerator:
             color_space: ColorSpace object for color conversions
             seed: Random seed for geometry generation
         """
-        self.seed = seed
 
     def _get_geometry_cache_path(self, seed: int, dot_sizes: List[int], image_size: int) -> Path:
         """Get the cache file path for geometry."""
@@ -68,6 +67,7 @@ class IshiharaPlateGenerator:
                       lum_noise: float = 0, s_cone_noise: float = 0,
                       corner_label: Optional[str] = None,
                       metamer_difference: Optional[float] = None,
+                      seed: int = 42,
                       **kwargs) -> List[Image.Image]:
         """
         Generate plate with specified output color space.
@@ -87,7 +87,7 @@ class IshiharaPlateGenerator:
         image_size = kwargs.get("image_size", 1024)
 
         # Get cached geometry
-        circles = self._get_geometry(self.seed, dot_sizes, image_size)
+        circles = self._get_geometry(seed, dot_sizes, image_size)
 
         # Generate plate using cached geometry
         return generate_ishihara_plate(
@@ -96,7 +96,7 @@ class IshiharaPlateGenerator:
             output_space=output_space,
             lum_noise=lum_noise, s_cone_noise=s_cone_noise, corner_label=corner_label,
             metamer_difference=metamer_difference,
-            seed=self.seed,  # Pass seed for consistency
+            seed=seed,  # Pass seed for consistency
             **kwargs
         )
 

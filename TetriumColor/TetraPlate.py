@@ -19,9 +19,9 @@ class PseudoIsochromaticPlateGenerator:
             color_generator (ColorGenerator): The color generator to use for plate colors
             seed (int): The seed for the plate pattern generation.
         """
-        self.seed: int = seed
+        np.random.seed(seed)
         self.color_generator: ColorGenerator = color_generator
-        self.plate_generator: IshiharaPlateGenerator = IshiharaPlateGenerator(seed=self.seed)
+        self.plate_generator: IshiharaPlateGenerator = IshiharaPlateGenerator()
 
     # must be called before GetPlate
     def NewPlate(self, filename: str, hidden_number: int,
@@ -35,12 +35,12 @@ class PseudoIsochromaticPlateGenerator:
             lum_noise (float): Luminance noise amount
             s_cone_noise (float): S-cone noise amount
         """
-        inside_cone, outside_cone, color_space, metamer_difference = self.color_generator.NewColor()
+        inside_cone, outside_cone, color_space, _ = self.color_generator.NewColor()
         image = self.plate_generator.GeneratePlate(
             inside_cone, outside_cone, color_space,
             hidden_number, output_space,
             lum_noise=lum_noise, s_cone_noise=s_cone_noise,
-            metamer_difference=metamer_difference
+            seed=np.random.randint(0, 1000000)
         )
         self.plate_generator.ExportPlateTo6P(image, filename)
 
@@ -57,12 +57,12 @@ class PseudoIsochromaticPlateGenerator:
             lum_noise (float): Luminance noise amount
             s_cone_noise (float): S-cone noise amount
         """
-        inside_cone, outside_cone, color_space, metamer_difference = self.color_generator.GetColor(previous_result)
+        inside_cone, outside_cone, color_space, _ = self.color_generator.GetColor(previous_result)
         image = self.plate_generator.GeneratePlate(
             inside_cone, outside_cone, color_space,
             hidden_symbol, output_space,
             lum_noise=lum_noise, s_cone_noise=s_cone_noise, corner_label=corner_label,
-            metamer_difference=metamer_difference
+            seed=np.random.randint(0, 1000000)
         )
         if output_space == ColorSpaceType.DISP_6P:
             self.plate_generator.ExportPlateTo6P(image, filename)
@@ -77,6 +77,21 @@ class PseudoIsochromaticPlateGenerator:
 
         image = self.plate_generator.GeneratePlate(
             inside_cone, inside_cone, color_space,
+            10, output_space,
+            lum_noise=lum_noise, s_cone_noise=s_cone_noise, corner_label=corner_label
+        )
+        if output_space == ColorSpaceType.DISP_6P:
+            self.plate_generator.ExportPlateTo6P(image, filename)
+        else:
+            image[0].save(f"{filename}_srgb.png")
+        return image
+
+    def GetLuminancePlate(self, filename: str, color_space: ColorSpace, lum_noise: float = 0, s_cone_noise: float = 0, output_space: ColorSpaceType = ColorSpaceType.SRGB, corner_label: str = None):
+        vshh_points = np.array([[1.5, 0, 0.0, 0.0], [0.5, 0, 0.0, 0.0]])
+        cones = color_space.convert(vshh_points, ColorSpaceType.VSH, ColorSpaceType.CONE)
+
+        image = self.plate_generator.GeneratePlate(
+            cones[0], cones[1], color_space,
             10, output_space,
             lum_noise=lum_noise, s_cone_noise=s_cone_noise, corner_label=corner_label
         )
@@ -104,7 +119,7 @@ if __name__ == "__main__":
 
     lum_noise = 0.1
     s_cone_noise = 0.0
-    output_space = ColorSpaceType.DISP_6P
+    output_space = ColorSpaceType.SRGB
     output_filename = "metamer_difference_noise_all"
 
     dirname = f"./measurements/2025-10-16/tests_noise_{lum_noise}_scone_noise_{s_cone_noise}"
@@ -114,9 +129,19 @@ if __name__ == "__main__":
     import string
     alphabet = list(string.ascii_uppercase)
 
+    # control -- nobody can see this
     control_plate = plate_generator.GetControlPlate(os.path.join(
         dirname, "control"), color_generator.color_spaces[0], lum_noise=lum_noise, s_cone_noise=s_cone_noise, output_space=output_space, corner_label=alphabet[0])
     images = [control_plate]
+
+    # luminance -- everybody can see this
+    luminance_plate = plate_generator.GetLuminancePlate(os.path.join(
+        dirname, "luminance"), color_generator.color_spaces[0], lum_noise=lum_noise, s_cone_noise=s_cone_noise, output_space=output_space, corner_label=alphabet[0])
+    images.append(luminance_plate)
+
+    # dichromatic plates -- all observers but dis can see this
+
+    # trichromatic plates -- all tetra observers can see this
 
     landolt_symbols = ['landolt_up', 'landolt_down', 'landolt_left', 'landolt_right']
 
