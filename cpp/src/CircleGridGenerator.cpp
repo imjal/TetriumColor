@@ -85,6 +85,7 @@ CircleGridGenerator::~CircleGridGenerator()
 }
 
 std::vector<std::pair<int, int>> CircleGridGenerator::GetImages(
+    int metameric_axis,
     float luminance,
     float saturation,
     const std::vector<std::string>& filenames,
@@ -107,7 +108,8 @@ std::vector<std::pair<int, int>> CircleGridGenerator::GetImages(
     PyObject* pValue = PyObject_CallMethod(
         reinterpret_cast<PyObject*>(pInstance),
         "GetImages",
-        "ffOO",
+        "iffOO",
+        metameric_axis,
         luminance,
         saturation,
         pList,
