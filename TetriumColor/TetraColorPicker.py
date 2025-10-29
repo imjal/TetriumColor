@@ -145,9 +145,9 @@ class CircleGridGenerator:
         self.color_space = ColorSpace(Observer.tetrachromat(), cst_display_type='led', display_primaries=primaries)
         self.color_sampler = ColorSampler(self.color_space, cubemap_size=5)
 
-    def GetImages(self, luminance: float, saturation: float, filenames: List[str], output_space: ColorSpaceType = ColorSpaceType.DISP_6P) -> List[Tuple[int, int]]:
+    def GetImages(self, metameric_axis: int, luminance: float, saturation: float, filenames: List[str], output_space: ColorSpaceType = ColorSpaceType.DISP_6P) -> List[Tuple[int, int]]:
         image_tuples, idxs = self.color_sampler.get_hue_sphere_scramble(
-            luminance, saturation, 4, scramble_prob=self.scramble_prob, output_space=output_space)
+            luminance, saturation, 4, metameric_axis=metameric_axis, scramble_prob=self.scramble_prob, output_space=output_space)
 
         if output_space == ColorSpaceType.DISP_6P:
             for i, (rgb, ocv) in enumerate(image_tuples):
@@ -163,4 +163,4 @@ class CircleGridGenerator:
 if __name__ == "__main__":
     generator = CircleGridGenerator(
         primary_path="../measurements/2025-10-12/primaries", num_samples=10, scramble_prob=0.5)
-    generator.GetImages(1.0, 0.4, ["unscramble1", "unscramble2", "scramble"], output_space=ColorSpaceType.DISP_6P)
+    generator.GetImages(3, 1.0, 0.4, ["unscramble1", "unscramble2", "scramble"], output_space=ColorSpaceType.SRGB)

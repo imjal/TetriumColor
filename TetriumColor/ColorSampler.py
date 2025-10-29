@@ -752,6 +752,7 @@ class ColorSampler:
                                 cube_idx: int,
                                 scramble_prob: float = 0.5,
                                 seed: int = 42,
+                                metameric_axis: int = 2,
                                 lum_noise=0.0,
                                 s_cone_noise=0.0,
                                 output_space: ColorSpaceType = ColorSpaceType.DISP_6P,
@@ -771,7 +772,8 @@ class ColorSampler:
         np.random.seed(seed)
         from TetriumColor.Utils.ImageUtils import CreateCircleGridImages
         disp_points = self.output_cubemap_values(luminance, saturation, ColorSpaceType.DISP)[cube_idx]
-        metamer_dir_in_disp = self.color_space.get_metameric_axis_in(ColorSpaceType.DISP)
+        metamer_dir_in_disp = self.color_space.get_metameric_axis_in(
+            ColorSpaceType.DISP, metameric_axis_num=metameric_axis)
 
         metamers_in_disp = np.zeros((disp_points.shape[0], 2, self.color_space.dim))
         colors_in_cone = []
