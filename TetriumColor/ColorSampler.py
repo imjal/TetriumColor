@@ -134,7 +134,8 @@ class ColorSampler:
 
         # Process each face of the cube
         lut_dicts = []
-        for i in tqdm(range(6), desc="Generating cubemap", disable=self.disable):
+        iterator = range(6) if self.disable else tqdm(range(6), desc="Generating cubemap")
+        for i in iterator:
             # Convert UV to XYZ coordinates for this cube face
             xyz = Geometry.ConvertCubeUVToXYZ(i, cube_u, cube_v, 1).reshape(-1, 3)
             xyz = np.dot(invMetamericDirMat, xyz.T).T
@@ -485,7 +486,8 @@ class ColorSampler:
         # For every point, find the reflectance of maximum saturation
         generating_vecs = self.color_space.observer.get_normalized_sensor_matrix(wavelengths=np.arange(360, 831, 1)).T
         pts = []
-        for pt in tqdm(all_disp_points, disable=self.disable):
+        iterator = all_disp_points if self.disable else tqdm(all_disp_points)
+        for pt in iterator:
             res = FindMaximalSaturation(pt, generating_vecs=generating_vecs)
             if res is not None:
                 pts += [res]
@@ -563,7 +565,8 @@ class ColorSampler:
 
         # Process each face of the cube
         cubemap_images = []
-        for i in tqdm(range(6), desc="Generating cubemap", disable=self.disable):
+        iterator = range(6) if self.disable else tqdm(range(6), desc="Generating cubemap")
+        for i in iterator:
             # Convert UV to XYZ coordinates for this cube face
             xyz = Geometry.ConvertCubeUVToXYZ(i, cube_u, cube_v, 1).reshape(-1, 3)
             xyz = np.dot(invMetamericDirMat, xyz.T).T
@@ -713,7 +716,9 @@ class ColorSampler:
         metamers_in_disp = np.zeros((disp_points.shape[0], 2, self.color_space.dim))
         plates = []
         plate_generator = IshiharaPlateGenerator(seed=0)
-        for i in tqdm(range(metamers_in_disp.shape[0]), desc="Generating plates", disable=self.disable):
+        iterator = range(metamers_in_disp.shape[0]) if self.disable else tqdm(
+            range(metamers_in_disp.shape[0]), desc="Generating plates")
+        for i in iterator:
             # points in contention in disp space, bounded by unit cube scaled by vectors, direction is the metameric axis
             # Find metamers in unit cube space first, then scale to display space
             # metamers_unit_cube = np.array(FindMaximumIn1DimDirection(
