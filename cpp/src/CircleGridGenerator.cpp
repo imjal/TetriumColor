@@ -1,4 +1,6 @@
 #include "TetriumColor/TetriumColor.h"
+#include <cstdlib>
+#include <ctime>
 
 namespace TetriumColor
 {
@@ -89,7 +91,8 @@ std::vector<std::pair<int, int>> CircleGridGenerator::GetImages(
     float luminance,
     float saturation,
     const std::vector<std::string>& filenames,
-    ColorSpaceType output_space
+    ColorSpaceType output_space,
+    int seed
 )
 {
     std::vector<std::pair<int, int>> idxs;
@@ -105,15 +108,21 @@ std::vector<std::pair<int, int>> CircleGridGenerator::GetImages(
     if (!pOutputSpace)
         return idxs;
 
+    // If seed is -1, generate a random seed
+    if (seed == -1) {
+        seed = static_cast<int>(time(nullptr)) + rand();
+    }
+
     PyObject* pValue = PyObject_CallMethod(
         reinterpret_cast<PyObject*>(pInstance),
         "GetImages",
-        "iffOO",
+        "iffOOi",
         metameric_axis,
         luminance,
         saturation,
         pList,
-        pOutputSpace
+        pOutputSpace,
+        seed
     );
     Py_DECREF(pList);
     Py_DECREF(pOutputSpace);

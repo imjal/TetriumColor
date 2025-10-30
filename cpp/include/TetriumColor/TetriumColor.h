@@ -26,7 +26,8 @@ class CircleGridGenerator
         float luminance,
         float saturation,
         const std::vector<std::string>& filenames,
-        ColorSpaceType output_space = ColorSpaceType::DISP_6P
+        ColorSpaceType output_space = ColorSpaceType::DISP_6P,
+        int seed = -1 // -1 means random seed
     );
 
   private:
