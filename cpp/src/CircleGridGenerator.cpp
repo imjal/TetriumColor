@@ -42,9 +42,16 @@ static PyObject* ColorSpaceTypeToPython(ColorSpaceType space_type)
 }
 
 CircleGridGenerator::CircleGridGenerator(
-    const std::string& primary_path,
-    int num_samples,
-    float scramble_prob
+    float scramble_prob,
+    const std::string& sex,
+    float percentage_screened,
+    float peak_to_test,
+    float luminance,
+    float saturation,
+    const std::vector<int>& dimensions,
+    int seed,
+    const std::string& cst_display_type,
+    const std::string& display_primaries_path
 )
 {
     PyObject* pName = PyUnicode_DecodeFSDefault("TetriumColor.TetraColorPicker");
@@ -55,16 +62,59 @@ CircleGridGenerator::CircleGridGenerator(
             PyObject_GetAttrString(reinterpret_cast<PyObject*>(pModule), "CircleGridGenerator")
         );
         if (pClass && PyCallable_Check(reinterpret_cast<PyObject*>(pClass)) == 1) {
-            PyObject* pArgs = PyTuple_Pack(
-                3,
-                PyUnicode_FromString(primary_path.c_str()),
-                PyLong_FromLong(num_samples),
-                PyFloat_FromDouble(scramble_prob)
+            // Create dimensions list
+            PyObject* pDimensions = PyList_New(dimensions.size());
+            for (size_t i = 0; i < dimensions.size(); ++i) {
+                PyList_SetItem(pDimensions, i, PyLong_FromLong(dimensions[i]));
+            }
+
+            // Load primaries from path if provided
+            PyObject* pPrimaries = Py_None;
+            Py_INCREF(Py_None);
+            if (!display_primaries_path.empty()) {
+                PyObject* pMeasurementModule = PyImport_ImportModule("TetriumColor.Measurement");
+                if (pMeasurementModule) {
+                    PyObject* pLoadFunc
+                        = PyObject_GetAttrString(pMeasurementModule, "load_primaries_from_csv");
+                    if (pLoadFunc && PyCallable_Check(pLoadFunc)) {
+                        pPrimaries
+                            = PyObject_CallFunction(pLoadFunc, "s", display_primaries_path.c_str());
+                        Py_DECREF(pLoadFunc);
+                    }
+                    Py_DECREF(pMeasurementModule);
+                }
+            }
+
+            // Create keyword arguments
+            PyObject* pKwargs = PyDict_New();
+            PyDict_SetItemString(
+                pKwargs, "cst_display_type", PyUnicode_FromString(cst_display_type.c_str())
             );
+            if (pPrimaries != Py_None) {
+                PyDict_SetItemString(pKwargs, "display_primaries", pPrimaries);
+            }
+            Py_DECREF(pPrimaries);
+
+            // Create positional arguments
+            PyObject* pArgs = PyTuple_Pack(
+                7,
+                PyFloat_FromDouble(scramble_prob),
+                PyUnicode_FromString(sex.c_str()),
+                PyFloat_FromDouble(percentage_screened),
+                PyFloat_FromDouble(peak_to_test),
+                PyFloat_FromDouble(luminance),
+                PyFloat_FromDouble(saturation),
+                pDimensions
+            );
+
+            // Add seed to kwargs
+            PyDict_SetItemString(pKwargs, "seed", PyLong_FromLong(seed));
+
             pInstance = reinterpret_cast<PyObject*>(
-                PyObject_CallObject(reinterpret_cast<PyObject*>(pClass), pArgs)
+                PyObject_Call(reinterpret_cast<PyObject*>(pClass), pArgs, pKwargs)
             );
             Py_DECREF(pArgs);
+            Py_DECREF(pKwargs);
             if (!pInstance) {
                 PyErr_Print();
                 exit(-1);
@@ -86,18 +136,68 @@ CircleGridGenerator::~CircleGridGenerator()
     Py_XDECREF(reinterpret_cast<PyObject*>(pModule));
 }
 
+std::vector<std::string> CircleGridGenerator::GetGenotypes() const
+{
+    std::vector<std::string> genotypes;
+    if (!pInstance)
+        return genotypes;
+
+    PyObject* pMethod
+        = PyObject_GetAttrString(reinterpret_cast<PyObject*>(pInstance), "GetGenotypes");
+    if (!pMethod || !PyCallable_Check(pMethod)) {
+        Py_XDECREF(pMethod);
+        return genotypes;
+    }
+
+    PyObject* pResult = PyObject_CallObject(pMethod, nullptr);
+    Py_DECREF(pMethod);
+
+    if (!pResult) {
+        PyErr_Print();
+        return genotypes;
+    }
+
+    // Expect a list of tuples (genotypes are tuples of floats)
+    if (PyList_Check(pResult)) {
+        Py_ssize_t n = PyList_Size(pResult);
+        genotypes.reserve(n);
+        for (Py_ssize_t i = 0; i < n; ++i) {
+            PyObject* genotypeTuple = PyList_GetItem(pResult, i);
+            if (PyTuple_Check(genotypeTuple)) {
+                // Convert tuple to string representation "(peak1, peak2, ...)"
+                PyObject* strRepr = PyObject_Repr(genotypeTuple);
+                if (strRepr) {
+                    const char* strCStr = PyUnicode_AsUTF8(strRepr);
+                    if (strCStr) {
+                        genotypes.push_back(std::string(strCStr));
+                    }
+                    Py_DECREF(strRepr);
+                }
+            }
+        }
+    }
+    Py_DECREF(pResult);
+    return genotypes;
+}
+
 std::vector<std::pair<int, int>> CircleGridGenerator::GetImages(
+    const std::string& genotype,
     int metameric_axis,
-    float luminance,
-    float saturation,
     const std::vector<std::string>& filenames,
-    ColorSpaceType output_space,
-    int seed
+    ColorSpaceType output_space
 )
 {
     std::vector<std::pair<int, int>> idxs;
     if (!pInstance)
         return idxs;
+
+    // Parse genotype string to tuple
+    // Format is like "(558.9, 530.3)"
+    PyObject* pGenotype = PyRun_String(genotype.c_str(), Py_eval_input, PyDict_New(), PyDict_New());
+    if (!pGenotype) {
+        PyErr_Print();
+        return idxs;
+    }
 
     PyObject* pList = PyList_New(filenames.size());
     for (size_t i = 0; i < filenames.size(); ++i) {
@@ -105,25 +205,22 @@ std::vector<std::pair<int, int>> CircleGridGenerator::GetImages(
     }
 
     PyObject* pOutputSpace = ColorSpaceTypeToPython(output_space);
-    if (!pOutputSpace)
+    if (!pOutputSpace) {
+        Py_DECREF(pGenotype);
+        Py_DECREF(pList);
         return idxs;
-
-    // If seed is -1, generate a random seed
-    if (seed == -1) {
-        seed = static_cast<int>(time(nullptr)) + rand();
     }
 
     PyObject* pValue = PyObject_CallMethod(
         reinterpret_cast<PyObject*>(pInstance),
         "GetImages",
-        "iffOOi",
+        "OiOO",
+        pGenotype,
         metameric_axis,
-        luminance,
-        saturation,
         pList,
-        pOutputSpace,
-        seed
+        pOutputSpace
     );
+    Py_DECREF(pGenotype);
     Py_DECREF(pList);
     Py_DECREF(pOutputSpace);
 
