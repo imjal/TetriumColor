@@ -1,5 +1,13 @@
 #pragma once
+
+#include "ColorGenerator.h"
 #include "ColorSpaceType.h"
+#include "ColorTestResult.h"
+#include "GeneticColorPicker.h"
+#include "GeneticColorPickerPlateGenerator.h"
+#include "PseudoIsochromaticPlateGenerator.h"
+#include "SolidColorGenerator.h"
+
 #include <string>
 #include <vector>
 

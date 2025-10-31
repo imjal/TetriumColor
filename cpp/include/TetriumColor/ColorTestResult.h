@@ -1,3 +1,4 @@
+#pragma once
 // TODO: implement
 
 enum class ColorTestResult {

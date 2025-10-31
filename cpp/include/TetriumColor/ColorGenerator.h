@@ -25,7 +25,7 @@ class ColorGenerator
     void* pModule;
     void* pClass;
     void* pInstance;
-    
+
     friend class PseudoIsochromaticPlateGenerator;
 };
 } // namespace TetriumColor
