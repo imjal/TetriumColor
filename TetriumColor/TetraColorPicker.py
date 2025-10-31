@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Tuple, Optional, List
+from typing import Tuple, Optional, List, Dict
 
 import numpy as np
 import numpy.typing as npt
@@ -134,6 +134,85 @@ class GeneticCDFTestColorGenerator(ColorGenerator):
         # raise RuntimeError(f"Could not find valid metamer after {max_retries} attempts for genotype {self.current_idx}")
         print(f"Could not find valid metamer after {max_retries} attempts for genotype {self.current_idx}")
         return inside_cone, outside_cone, color_space, metamer_difference
+
+
+class GeneticColorPicker:
+    def __init__(self, sex: str, percentage_screened: float, peak_to_test: float = 547,
+                 luminance: float = 1.0, saturation: float = 0.5,
+                 dimensions: Optional[List[int]] = [1, 2], seed: int = 42, **kwargs):
+        """Color picker that samples from the most common trichromatic phenotypes.
+
+        Args:
+            sex (str): 'male' or 'female'
+            percentage_screened (float): Percentage of the population to screen
+            peak_to_test (float, optional): Peak to test for. Defaults to 547, the functional peak.
+            metameric_axis (int, optional): Metameric axis to use. Defaults to 2.
+            luminance (float, optional): Luminance level. Defaults to 1.0.
+            saturation (float, optional): Saturation level. Defaults to 0.5.
+            dimensions (Optional[List[int]], optional): Dimensions to screen. Defaults to [1, 2].
+            seed (int): Seed for the random number generator
+        """
+        self.observer_genotypes = ObserverGenotypes(dimensions=dimensions, seed=seed)
+        self.luminance = luminance
+        self.saturation = saturation
+
+        # Get genotypes covering the target probability
+        self.genotypes = self.observer_genotypes.get_genotypes_covering_probability(
+            target_probability=percentage_screened, sex=sex)
+
+        # Create mapping from genotype -> [color_space, color_sampler]
+        self.genotype_mapping: Dict[Tuple, Tuple[ColorSpace, List[npt.NDArray]]] = {}
+
+        for genotype in self.genotypes:
+            if peak_to_test not in genotype:
+                # Create color space with the peak to test added
+                color_space = self.observer_genotypes.get_color_space_for_peaks(
+                    genotype + (peak_to_test,), **kwargs)
+
+                # Create color sampler and get cubemap values
+                color_sampler_values = []
+                for metameric_axis in range(4):
+                    color_sampler_values.append(ColorSampler(color_space, cubemap_size=5).output_cubemap_values(
+                        luminance, saturation, ColorSpaceType.DISP, metameric_axis=metameric_axis)[4]
+                    )
+                self.genotype_mapping[genotype] = [color_space, color_sampler_values]
+
+        self.list_of_genotypes = list(self.genotype_mapping.keys())
+
+    def GetGenotypes(self) -> List[Tuple]:
+        """Get the list of genotypes.
+
+        Returns:
+            List[Tuple]: The list of genotypes.
+        """
+        return self.genotypes
+
+    def GetMetamericPair(self, genotype: Tuple, metameric_axis: int = None) -> Tuple[npt.NDArray, npt.NDArray, ColorSpace]:
+        """Get a metameric pair for a given genotype.
+
+        Args:
+            genotype (Tuple): The genotype to get a metameric pair for
+            metameric_axis (int, optional): Metameric axis to use. If None, uses the color space's default.
+
+        Returns:
+            Tuple[npt.NDArray, npt.NDArray, ColorSpace]: inside_cone, outside_cone, color_space
+        """
+        if genotype not in self.genotype_mapping:
+            raise ValueError(f"Genotype {genotype} not found in mapping")
+
+        color_space, color_sampler_values = self.genotype_mapping[genotype]
+
+        for retry in range(10):
+            random_idx = np.random.randint(0, len(color_sampler_values))
+            point = color_sampler_values[metameric_axis][random_idx]
+            inside_cone, outside_cone, _ = color_space.get_maximal_pair_in_disp_from_pt(
+                point, metameric_axis=metameric_axis)
+            if inside_cone[metameric_axis] - outside_cone[metameric_axis] > 0.03:
+                return inside_cone, outside_cone, color_space
+
+        print(
+            f"Could not find valid metamer after 10 retries for genotype {genotype} {metameric_axis}, but we need to return something.")
+        return inside_cone, outside_cone, color_space
 
 
 class CircleGridGenerator:

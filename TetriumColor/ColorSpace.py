@@ -384,7 +384,7 @@ class ColorSpace:
                              ColorSpaceType.DISP, ColorSpaceType.CONE).reshape(-1, 2, self.dim)
         return cones[0][0], cones[0][1]
 
-    def get_maximal_pair_in_disp_from_pt(self, pt: npt.NDArray) -> Optional[Tuple[npt.NDArray, npt.NDArray, float]]:
+    def get_maximal_pair_in_disp_from_pt(self, pt: npt.NDArray, metameric_axis: int = 2) -> Optional[Tuple[npt.NDArray, npt.NDArray, float]]:
         """Get Maximal Metameric Color Pairs from a Point
 
         Args:
@@ -394,7 +394,7 @@ class ColorSpace:
         Returns:
             Optional[Tuple[npt.NDArray, npt.NDArray, float]]: (cone1, cone2, metamer_difference) or None if rejected
         """
-        metamer_dir_in_disp = self.get_metameric_axis_in(ColorSpaceType.DISP)
+        metamer_dir_in_disp = self.get_metameric_axis_in(ColorSpaceType.DISP, metameric_axis_num=metameric_axis)
         disp_pts = np.clip(FindMaximumIn1DimDirection(
             pt,
             metamer_dir_in_disp,

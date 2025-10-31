@@ -208,14 +208,15 @@ class ColorSampler:
             self._lum_range, self._sat_range = ranges
             self._save_to_cache()
 
-    def _get_transform_chrom_to_metameric_dir(self) -> npt.NDArray:
+    def _get_transform_chrom_to_metameric_dir(self, metameric_axis: int = 2) -> npt.NDArray:
         """
         Get the transformation matrix from chromatic coordinates to metameric direction.
 
         Returns:
             npt.NDArray: Transformation matrix
         """
-        normalized_direction = self.color_space.get_metameric_axis_in(ColorSpaceType.HERING)
+        normalized_direction = self.color_space.get_metameric_axis_in(
+            ColorSpaceType.HERING, metameric_axis_num=metameric_axis)
         return Geometry.RotateToZAxis(normalized_direction[1:])
 
     def _angles_to_cube_uv(self, angles: tuple[float, float]):
@@ -604,7 +605,7 @@ class ColorSampler:
         return self._concatenate_cubemap(cubemap_images)
 
     def output_cubemap_values(self, luminance: float, saturation: float,
-                              display_color_space: ColorSpaceType = ColorSpaceType.SRGB) -> List[npt.NDArray]:
+                              display_color_space: ColorSpaceType = ColorSpaceType.SRGB, metameric_axis: int = 2) -> List[npt.NDArray]:
         """Generate a cubemap within the gamut boundaries
 
         Args:
@@ -622,7 +623,7 @@ class ColorSampler:
         cube_u, cube_v = np.meshgrid(all_us, all_vs)
 
         # Get metameric direction matrix
-        metamericDirMat = self._get_transform_chrom_to_metameric_dir()
+        metamericDirMat = self._get_transform_chrom_to_metameric_dir(metameric_axis)
         invMetamericDirMat = np.linalg.inv(metamericDirMat)
 
         # Process each face of the cube
@@ -649,20 +650,21 @@ class ColorSampler:
 
         return colors
 
-    def get_metameric_pairs(self, luminance: float, saturation: float, cube_idx: int) -> Tuple[npt.NDArray, npt.NDArray]:
+    def get_metameric_pairs(self, luminance: float, saturation: float, cube_idx: int, metameric_axis: int = 2) -> Tuple[npt.NDArray, npt.NDArray]:
         """ Get the metamer points for a given luminance and cube index
         Args:
             luminance (float): luminance value
             saturation (float): saturation value
             cube_idx (int): cube index
-            grid_size (int): grid size
-            color_space_transform (ColorSpaceTransform): color space transform object
+            metameric_axis (int): metameric axis to use
 
         Returns:
             npt.NDArray: The metamer points
         """
-        disp_points = self.output_cubemap_values(luminance, saturation, ColorSpaceType.DISP)[cube_idx]
-        metamer_dir_in_disp = self.color_space.get_metameric_axis_in(ColorSpaceType.DISP)
+        disp_points = self.output_cubemap_values(
+            luminance, saturation, ColorSpaceType.DISP, metameric_axis=metameric_axis)[cube_idx]
+        metamer_dir_in_disp = self.color_space.get_metameric_axis_in(
+            ColorSpaceType.DISP, metameric_axis_num=metameric_axis)
 
         vec = np.zeros(self.color_space.dim)
         vec[0] = luminance
@@ -776,7 +778,8 @@ class ColorSampler:
         """
         np.random.seed(seed)
         from TetriumColor.Utils.ImageUtils import CreateCircleGridImages
-        disp_points = self.output_cubemap_values(luminance, saturation, ColorSpaceType.DISP)[cube_idx]
+        disp_points = self.output_cubemap_values(
+            luminance, saturation, ColorSpaceType.DISP, metameric_axis=metameric_axis)[cube_idx]
         metamer_dir_in_disp = self.color_space.get_metameric_axis_in(
             ColorSpaceType.DISP, metameric_axis_num=metameric_axis)
 
@@ -813,7 +816,7 @@ class ColorSampler:
     def get_metameric_grid_plate(self, luminance: float, saturation: float,
                                  cube_idx: int, grid_idx: tuple[int, int],
                                  secret: Optional[int] = None, lum_noise: float = 0.0,
-                                 s_cone_noise: float = 0.0) -> Tuple[Image.Image, Image.Image]:
+                                 s_cone_noise: float = 0.0, metameric_axis: int = 2) -> Tuple[Image.Image, Image.Image]:
         """ Get the metamer points for a given luminance and cube index
         Args:
             luminance (float): luminance value
@@ -827,8 +830,10 @@ class ColorSampler:
         Returns:
             Tuple[Image.Image, Image.Image]: The metamer plates in RGB/OCV
         """
-        disp_points = self.output_cubemap_values(luminance, saturation, ColorSpaceType.DISP)[cube_idx]
-        metamer_dir_in_disp = self.color_space.get_metameric_axis_in(ColorSpaceType.DISP)
+        disp_points = self.output_cubemap_values(
+            luminance, saturation, ColorSpaceType.DISP, metameric_axis=metameric_axis)[cube_idx]
+        metamer_dir_in_disp = self.color_space.get_metameric_axis_in(
+            ColorSpaceType.DISP, metameric_axis_num=metameric_axis)
         if secret is None:
             secret = np.random.randint(10, 100)
 
