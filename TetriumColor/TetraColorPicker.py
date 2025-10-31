@@ -139,7 +139,7 @@ class GeneticCDFTestColorGenerator(ColorGenerator):
 class GeneticColorPicker:
     def __init__(self, sex: str, percentage_screened: float, peak_to_test: float = 547,
                  luminance: float = 1.0, saturation: float = 0.5,
-                 dimensions: Optional[List[int]] = [1, 2], seed: int = 42, **kwargs):
+                 dimensions: Optional[List[int]] = [2], seed: int = 42, **kwargs):
         """Color picker that samples from the most common trichromatic phenotypes.
 
         Args:
@@ -170,12 +170,11 @@ class GeneticColorPicker:
                     genotype + (peak_to_test,), **kwargs)
 
                 # Create color sampler and get cubemap values
-                color_sampler_values = []
+                color_samplers = []
                 for metameric_axis in range(4):
-                    color_sampler_values.append(ColorSampler(color_space, cubemap_size=5).output_cubemap_values(
-                        luminance, saturation, ColorSpaceType.DISP, metameric_axis=metameric_axis)[4]
-                    )
-                self.genotype_mapping[genotype] = [color_space, color_sampler_values]
+                    color_samplers.append(ColorSampler(color_space, cubemap_size=5)
+                                          )
+                self.genotype_mapping[genotype] = [color_space, color_samplers]
 
         self.list_of_genotypes = list(self.genotype_mapping.keys())
 
@@ -200,13 +199,15 @@ class GeneticColorPicker:
         if genotype not in self.genotype_mapping:
             raise ValueError(f"Genotype {genotype} not found in mapping")
 
-        color_space, color_sampler_values = self.genotype_mapping[genotype]
+        color_space, color_samplers = self.genotype_mapping[genotype]
 
+        grid_points = color_samplers[metameric_axis].output_cubemap_values(
+            self.luminance, self.saturation, ColorSpaceType.DISP, metameric_axis=metameric_axis)[4]
         max_diff = 0.0
         max_diff_idx = 0
         for retry in range(10):
-            random_idx = np.random.randint(0, len(color_sampler_values))
-            point = color_sampler_values[metameric_axis][random_idx]
+            random_idx = np.random.randint(0, len(grid_points))
+            point = grid_points[random_idx]
             inside_cone, outside_cone, _ = color_space.get_maximal_pair_in_disp_from_pt(
                 point, metameric_axis=metameric_axis)
             if inside_cone[metameric_axis] - outside_cone[metameric_axis] > 0.02:
@@ -216,7 +217,7 @@ class GeneticColorPicker:
                 max_diff_idx = random_idx
         print(
             f"Could not find valid metamer after 10 retries for genotype {genotype} {metameric_axis}, but we need to return something.")
-        point = color_sampler_values[metameric_axis][max_diff_idx]
+        point = grid_points[max_diff_idx]
         inside_cone, outside_cone, _ = color_space.get_maximal_pair_in_disp_from_pt(
             point, metameric_axis=metameric_axis)
 
@@ -224,17 +225,61 @@ class GeneticColorPicker:
 
 
 class CircleGridGenerator:
-    def __init__(self, primary_path: str, num_samples: int, scramble_prob: float = 0.5):
+    def __init__(self, scramble_prob: float, sex: str, percentage_screened: float, peak_to_test: float = 547,
+                 luminance: float = 1.0, saturation: float = 0.5,
+                 dimensions: Optional[List[int]] = [2], seed: int = 42, **kwargs):
+        """Color picker that samples from the most common trichromatic phenotypes.
+
+        Args:
+            scramble_prob (float): Probability of scrambling the color.
+            sex (str): 'male' or 'female'
+            percentage_screened (float): Percentage of the population to screen
+            peak_to_test (float, optional): Peak to test for. Defaults to 547, the functional peak.
+            metameric_axis (int, optional): Metameric axis to use. Defaults to 2.
+            luminance (float, optional): Luminance level. Defaults to 1.0.
+            saturation (float, optional): Saturation level. Defaults to 0.5.
+            dimensions (Optional[List[int]], optional): Dimensions to screen. Defaults to [1, 2].
+            seed (int): Seed for the random number generator
+        """
+        self.observer_genotypes = ObserverGenotypes(dimensions=dimensions, seed=seed)
+        self.luminance = luminance
+        self.saturation = saturation
         self.scramble_prob = scramble_prob
-        self.num_samples = num_samples
 
-        primaries = load_primaries_from_csv(primary_path)
-        self.color_space = ColorSpace(Observer.tetrachromat(), cst_display_type='led', display_primaries=primaries)
-        self.color_sampler = ColorSampler(self.color_space, cubemap_size=5)
+        # Get genotypes covering the target probability
+        self.genotypes = self.observer_genotypes.get_genotypes_covering_probability(
+            target_probability=percentage_screened, sex=sex)
 
-    def GetImages(self, metameric_axis: int, luminance: float, saturation: float, filenames: List[str], output_space: ColorSpaceType = ColorSpaceType.DISP_6P) -> List[Tuple[int, int]]:
-        image_tuples, idxs = self.color_sampler.get_hue_sphere_scramble(
-            luminance, saturation, 4, metameric_axis=metameric_axis, scramble_prob=self.scramble_prob, output_space=output_space)
+        # Create mapping from genotype -> [color_space, color_sampler]
+        self.genotype_mapping: Dict[Tuple, Tuple[ColorSpace, ColorSampler]] = {}
+
+        for genotype in self.genotypes:
+            if peak_to_test not in genotype:
+                # Create color space with the peak to test added
+                color_space = self.observer_genotypes.get_color_space_for_peaks(
+                    genotype + (peak_to_test,), **kwargs)
+
+                # Create color sampler and get cubemap values
+                self.genotype_mapping[genotype] = [color_space, ColorSampler(color_space, cubemap_size=5)]
+
+        self.list_of_genotypes = list(self.genotype_mapping.keys())
+
+    def GetGenotypes(self) -> List[Tuple]:
+        """Get the list of genotypes.
+
+        Returns:
+            List[Tuple]: The list of genotypes.
+        """
+        return self.genotypes
+
+    def GetImages(self, genotype: Tuple, metameric_axis: int, filenames: List[str], output_space: ColorSpaceType = ColorSpaceType.DISP_6P) -> List[Tuple[int, int]]:
+        if genotype not in self.genotype_mapping:
+            raise ValueError(f"Genotype {genotype} not found in mapping")
+
+        _, color_sampler = self.genotype_mapping[genotype]
+
+        image_tuples, idxs = color_sampler.get_hue_sphere_scramble(
+            self.luminance, self.saturation, 4, metameric_axis=metameric_axis, scramble_prob=self.scramble_prob, output_space=output_space)
 
         if output_space == ColorSpaceType.DISP_6P:
             for i, (rgb, ocv) in enumerate(image_tuples):
@@ -248,6 +293,19 @@ class CircleGridGenerator:
 
 
 if __name__ == "__main__":
-    generator = CircleGridGenerator(
-        primary_path="../measurements/2025-10-12/primaries", num_samples=10, scramble_prob=0.5)
-    generator.GetImages(3, 1.0, 0.4, ["unscramble1", "unscramble2", "scramble"], output_space=ColorSpaceType.SRGB)
+    from TetriumColor.Measurement import load_primaries_from_csv
+    import matplotlib.pyplot as plt
+    primaries = load_primaries_from_csv("./measurements/2025-10-12/primaries")
+    generator = CircleGridGenerator(scramble_prob=0.5,
+                                    sex="female", percentage_screened=0.999, peak_to_test=547,
+                                    luminance=1.0, saturation=0.5, dimensions=[2], seed=42,
+                                    cst_display_type='led', display_primaries=primaries)
+
+    genotypes = generator.GetGenotypes()
+
+    for genotype in genotypes:
+        for metameric_axis in range(4):
+            print(f"Generating images for genotype {genotype} metameric axis {metameric_axis}")
+            filenames = [f"genotype_{genotype}_metameric_axis_{metameric_axis}_unscramble1",
+                         f"genotype_{genotype}_metameric_axis_{metameric_axis}_unscramble2", f"genotype_{genotype}_metameric_axis_{metameric_axis}_scramble"]
+            generator.GetImages(genotype, metameric_axis, filenames, output_space=ColorSpaceType.SRGB)

@@ -647,7 +647,6 @@ class ColorSampler:
                 np.vstack((np.full(normalized_saturations.shape, saturation), normalized_saturations)), axis=0)
             remapped_points = self.remap_to_gamut(vshh)
             colors += [self.color_space.convert(remapped_points, ColorSpaceType.VSH, display_color_space)]
-
         return colors
 
     def get_metameric_pairs(self, luminance: float, saturation: float, cube_idx: int, metameric_axis: int = 2) -> Tuple[npt.NDArray, npt.NDArray]:
@@ -778,8 +777,8 @@ class ColorSampler:
         """
         np.random.seed(seed)
         from TetriumColor.Utils.ImageUtils import CreateCircleGridImages
-        disp_points = self.output_cubemap_values(
-            luminance, saturation, ColorSpaceType.DISP, metameric_axis=metameric_axis)[cube_idx]
+        disp_points = np.clip(self.output_cubemap_values(
+            luminance, saturation, ColorSpaceType.DISP, metameric_axis=metameric_axis)[cube_idx], 0, None)  # sketchy!!!
         metamer_dir_in_disp = self.color_space.get_metameric_axis_in(
             ColorSpaceType.DISP, metameric_axis_num=metameric_axis)
 
