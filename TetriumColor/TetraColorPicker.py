@@ -202,16 +202,24 @@ class GeneticColorPicker:
 
         color_space, color_sampler_values = self.genotype_mapping[genotype]
 
+        max_diff = 0.0
+        max_diff_idx = 0
         for retry in range(10):
             random_idx = np.random.randint(0, len(color_sampler_values))
             point = color_sampler_values[metameric_axis][random_idx]
             inside_cone, outside_cone, _ = color_space.get_maximal_pair_in_disp_from_pt(
                 point, metameric_axis=metameric_axis)
-            if inside_cone[metameric_axis] - outside_cone[metameric_axis] > 0.03:
+            if inside_cone[metameric_axis] - outside_cone[metameric_axis] > 0.02:
                 return inside_cone, outside_cone, color_space
-
+            else:
+                max_diff = max(max_diff, inside_cone[metameric_axis] - outside_cone[metameric_axis])
+                max_diff_idx = random_idx
         print(
             f"Could not find valid metamer after 10 retries for genotype {genotype} {metameric_axis}, but we need to return something.")
+        point = color_sampler_values[metameric_axis][max_diff_idx]
+        inside_cone, outside_cone, _ = color_space.get_maximal_pair_in_disp_from_pt(
+            point, metameric_axis=metameric_axis)
+
         return inside_cone, outside_cone, color_space
 
 
@@ -224,9 +232,9 @@ class CircleGridGenerator:
         self.color_space = ColorSpace(Observer.tetrachromat(), cst_display_type='led', display_primaries=primaries)
         self.color_sampler = ColorSampler(self.color_space, cubemap_size=5)
 
-    def GetImages(self, metameric_axis: int, luminance: float, saturation: float, filenames: List[str], output_space: ColorSpaceType = ColorSpaceType.DISP_6P, seed: int = 42) -> List[Tuple[int, int]]:
+    def GetImages(self, metameric_axis: int, luminance: float, saturation: float, filenames: List[str], output_space: ColorSpaceType = ColorSpaceType.DISP_6P) -> List[Tuple[int, int]]:
         image_tuples, idxs = self.color_sampler.get_hue_sphere_scramble(
-            luminance, saturation, 4, metameric_axis=metameric_axis, scramble_prob=self.scramble_prob, output_space=output_space, seed=seed)
+            luminance, saturation, 4, metameric_axis=metameric_axis, scramble_prob=self.scramble_prob, output_space=output_space)
 
         if output_space == ColorSpaceType.DISP_6P:
             for i, (rgb, ocv) in enumerate(image_tuples):
