@@ -117,7 +117,11 @@ void GeneticColorPickerPlateGenerator::GetPlate(
 
     // Parse genotype string to tuple
     // Format is like "(558.9, 530.3)"
-    PyObject* pGenotype = PyRun_String(genotype.c_str(), Py_eval_input, PyDict_New(), PyDict_New());
+    PyObject* pGlobals = PyDict_New();
+    PyObject* pLocals = PyDict_New();
+    PyObject* pGenotype = PyRun_String(genotype.c_str(), Py_eval_input, pGlobals, pLocals);
+    Py_DECREF(pGlobals);
+    Py_DECREF(pLocals);
     if (!pGenotype) {
         PyErr_Print();
         Py_DECREF(pGetPlate);
@@ -127,6 +131,8 @@ void GeneticColorPickerPlateGenerator::GetPlate(
     PyObject* pOutputSpace = ColorSpaceTypeToPython(output_space);
     if (!pOutputSpace) {
         printf("Failed to convert ColorSpaceType to Python\n");
+        Py_DECREF(pGenotype);
+        Py_DECREF(pGetPlate);
         return;
     }
 
@@ -140,15 +146,18 @@ void GeneticColorPickerPlateGenerator::GetPlate(
 
     // Create keyword arguments for optional parameters
     PyObject* pKwargs = PyDict_New();
-    PyDict_SetItemString(pKwargs, "lum_noise", PyFloat_FromDouble(lum_noise));
-    PyDict_SetItemString(pKwargs, "s_cone_noise", PyFloat_FromDouble(s_cone_noise));
+    PyObject* pLumNoise = PyFloat_FromDouble(lum_noise);
+    PyObject* pSConeNoise = PyFloat_FromDouble(s_cone_noise);
+    PyDict_SetItemString(pKwargs, "lum_noise", pLumNoise);
+    PyDict_SetItemString(pKwargs, "s_cone_noise", pSConeNoise);
+    Py_DECREF(pLumNoise);
+    Py_DECREF(pSConeNoise);
 
     // Call the method
     PyObject* pResult = PyObject_Call(pGetPlate, pArgs, pKwargs);
     Py_DECREF(pArgs);
     Py_DECREF(pKwargs);
     Py_DECREF(pGetPlate);
-    Py_DECREF(pOutputSpace);
 
     if (pResult == nullptr) {
         PyErr_Print();
@@ -175,7 +184,11 @@ void GeneticColorPickerPlateGenerator::GetPlate(
     }
 
     // Parse genotype string to tuple
-    PyObject* pGenotype = PyRun_String(genotype.c_str(), Py_eval_input, PyDict_New(), PyDict_New());
+    PyObject* pGlobals = PyDict_New();
+    PyObject* pLocals = PyDict_New();
+    PyObject* pGenotype = PyRun_String(genotype.c_str(), Py_eval_input, pGlobals, pLocals);
+    Py_DECREF(pGlobals);
+    Py_DECREF(pLocals);
     if (!pGenotype) {
         PyErr_Print();
         Py_DECREF(pGetPlate);
@@ -185,6 +198,8 @@ void GeneticColorPickerPlateGenerator::GetPlate(
     PyObject* pOutputSpace = ColorSpaceTypeToPython(output_space);
     if (!pOutputSpace) {
         printf("Failed to convert ColorSpaceType to Python\n");
+        Py_DECREF(pGenotype);
+        Py_DECREF(pGetPlate);
         return;
     }
 
@@ -198,15 +213,18 @@ void GeneticColorPickerPlateGenerator::GetPlate(
 
     // Create keyword arguments for optional parameters
     PyObject* pKwargs = PyDict_New();
-    PyDict_SetItemString(pKwargs, "lum_noise", PyFloat_FromDouble(lum_noise));
-    PyDict_SetItemString(pKwargs, "s_cone_noise", PyFloat_FromDouble(s_cone_noise));
+    PyObject* pLumNoise = PyFloat_FromDouble(lum_noise);
+    PyObject* pSConeNoise = PyFloat_FromDouble(s_cone_noise);
+    PyDict_SetItemString(pKwargs, "lum_noise", pLumNoise);
+    PyDict_SetItemString(pKwargs, "s_cone_noise", pSConeNoise);
+    Py_DECREF(pLumNoise);
+    Py_DECREF(pSConeNoise);
 
     // Call the method
     PyObject* pResult = PyObject_Call(pGetPlate, pArgs, pKwargs);
     Py_DECREF(pArgs);
     Py_DECREF(pKwargs);
     Py_DECREF(pGetPlate);
-    Py_DECREF(pOutputSpace);
 
     if (pResult == nullptr) {
         PyErr_Print();

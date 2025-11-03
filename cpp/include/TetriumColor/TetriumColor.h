@@ -20,22 +20,30 @@ class CircleGridGenerator
 {
   public:
     CircleGridGenerator(
-        const std::string& primary_path,
-        int num_samples,
-        float scramble_prob = 0.5f
+        float scramble_prob,
+        const std::string& sex,
+        float percentage_screened,
+        float peak_to_test = 547.0f,
+        float luminance = 1.0f,
+        float saturation = 0.5f,
+        const std::vector<int>& dimensions = {2},
+        int seed = 42,
+        const std::string& cst_display_type = "led",
+        const std::string& display_primaries_path = ""
     );
     ~CircleGridGenerator();
+
+    // Get the list of genotypes
+    std::vector<std::string> GetGenotypes() const;
 
     // Returns index list for correct/scramble mapping; writes images to filenames with suffixes
     // For SRGB: writes filenames[i] + ".png"
     // For DISP_6P: writes filenames[i] + "_RGB.png" and "_OCV.png"
     std::vector<std::pair<int, int>> GetImages(
+        const std::string& genotype,
         int metameric_axis,
-        float luminance,
-        float saturation,
         const std::vector<std::string>& filenames,
-        ColorSpaceType output_space = ColorSpaceType::DISP_6P,
-        int seed = -1 // -1 means random seed
+        ColorSpaceType output_space = ColorSpaceType::DISP_6P
     );
 
   private:
