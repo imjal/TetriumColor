@@ -16,7 +16,7 @@ def print_glm_format(matrix: np.ndarray):
 
 def generate_tetrium_matrices(observer, primaries):
 
-    cs = ColorSpace(observer, cst_display_type='led', display_primaries=primaries, metameric_axis=2)
+    cs = ColorSpace(observer, display_primaries=primaries, metameric_axis=2)
 
     rygb_to_rgb, rygb_to_ocv = cs.get_RYGB_to_DISP_6P()
 

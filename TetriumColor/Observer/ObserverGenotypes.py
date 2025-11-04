@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 
 from TetriumColor.Observer import Observer, Cone
-from TetriumColor.ColorSpace import ColorSpace, CSTDisplayType
+from TetriumColor.ColorSpace import ColorSpace
 
 
 class ObserverGenotypes:
@@ -358,13 +358,11 @@ class ObserverGenotypes:
         else:
             raise ValueError("Sex must be 'male', 'female', or 'both'")
 
-    def get_color_spaces_by_probability(self, cst_display_type: CSTDisplayType = CSTDisplayType.NONE,
-                                        sex: str = 'male', male_proportion: float = 0.5) -> List[ColorSpace]:
+    def get_color_spaces_by_probability(self, sex: str = 'male') -> List[ColorSpace]:
         """
         Get ColorSpace objects for each genotype ordered by probability (highest first).
 
         Args:
-            cst_display_type: Display type for ColorSpace construction
             sex: 'male', 'female', or 'both'
             male_proportion: When sex='both', proportion of males (default 0.5)
 
@@ -384,7 +382,7 @@ class ObserverGenotypes:
                 cones.append(cone)
 
             observer = Observer(cones, illuminant=None)
-            color_space = ColorSpace(observer, cst_display_type=cst_display_type)
+            color_space = ColorSpace(observer)
             color_spaces.append(color_space)
 
         return color_spaces
@@ -592,7 +590,6 @@ class ObserverGenotypes:
 
         Args:
             peaks: List of peak wavelengths
-            cst_display_type: Display type for ColorSpace construction
             **kwargs: Additional arguments to pass to ColorSpace constructor
 
         Returns:
@@ -635,18 +632,17 @@ class ObserverGenotypes:
         return self.get_observer_for_peaks(list(genotype))
 
     def get_color_space_for_genotype(self, genotype: Tuple[float, ...],
-                                     cst_display_type: CSTDisplayType = CSTDisplayType.NONE) -> ColorSpace:
+                                     **kwargs) -> ColorSpace:
         """
         Create a ColorSpace object for a specific genotype.
 
         Args:
             genotype: Genotype tuple
-            cst_display_type: Display type for ColorSpace construction
 
         Returns:
             ColorSpace object
         """
-        return self.get_color_space_for_peaks(list(genotype), cst_display_type)
+        return self.get_color_space_for_peaks(list(genotype), **kwargs)
 
     def get_peaks_for_genotype(self, genotype: Tuple[float, ...]) -> List[float]:
         """

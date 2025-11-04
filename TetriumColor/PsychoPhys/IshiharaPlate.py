@@ -255,9 +255,8 @@ def _draw_plate(
                 sample_noise = np.random.normal(0, lum_noise)
                 # Add luminance noise to all channels except metameric axis
                 noise_vector = np.ones(color_space.dim) * sample_noise
-
         circle_color = np.clip(circle_color + noise_vector, 0, None)
-        circle_color = color_space.convert(np.array([circle_color]), input_space, output_space)[0]
+        circle_color = color_space.convert(np.array([circle_color]), input_space, output_space)
 
         # Draw the ellipse
         bounding_box = [x-r, y-r, x+r, y+r]

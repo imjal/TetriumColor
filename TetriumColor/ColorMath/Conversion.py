@@ -2,48 +2,7 @@ from typing import List
 import numpy as np
 import numpy.typing as npt
 
-from TetriumColor.Utils.CustomTypes import ColorSpaceTransform, PlateColor, TetraColor
-
-
-def ConvertColorsToPlateColors(colors: npt.NDArray, prev_gray_point: npt.NDArray, transform: ColorSpaceTransform) -> List[PlateColor]:
-    """
-    Nx4 Array in Display Space Coordinates, transform into PlateColor
-
-    :param colors: Nx4 Array in Display Space Coordinates
-    :param transform: ColorSpaceTransform to use for the conversion to a Plate Color
-    """
-    mat: npt.NDArray = Map4DTo6D(colors, transform)
-    gray_point: npt.NDArray = Map4DTo6D(prev_gray_point, transform)[0]
-
-    plate_colors: List[PlateColor] = []
-    for i in range(mat.shape[0]):
-        plate_colors += [PlateColor(TetraColor(mat[i][:3], mat[i][3:]),
-                                    TetraColor(gray_point[:3], gray_point[3:]))]
-    return plate_colors
-
-
-def Convert6DArrayToPlateColors(colors: npt.NDArray) -> PlateColor:
-    metamer1 = TetraColor(colors[0, :3], colors[0, 3:])
-    metamer2 = TetraColor(colors[1, :3], colors[1, 3:])
-    return PlateColor(metamer1, metamer2)
-
-
-def ConvertPlateColorsToDisplayColors(plate_colors: List[PlateColor], transform: ColorSpaceTransform) -> npt.NDArray:
-    """
-    List of PlateColor, transform into Nx4 Array in Display Space Coordinates
-
-    :param plate_colors: List of PlateColor
-    :param transform: ColorSpaceTransform to use for the conversion to a Plate Color
-    """
-    colors: npt.NDArray = np.zeros((len(plate_colors), 2, 6))
-    for i, plate_color in enumerate(plate_colors):
-        colors[i][0][:3] = plate_color.shape.RGB
-        colors[i][1][:3] = plate_color.background.RGB
-        colors[i][0][3:] = plate_color.shape.OCV
-        colors[i][1][3:] = plate_color.background.OCV
-    colors = colors.reshape((len(plate_colors)*2, 6))
-    colors = Map6DTo4D(colors, transform)
-    return colors.reshape((len(plate_colors), 2, 4))
+from TetriumColor.Utils.CustomTypes import PlateColor, TetraColor
 
 
 def Map6DTo4D(colors: npt.NDArray, transform: ColorSpaceTransform) -> npt.NDArray:
@@ -74,20 +33,3 @@ def Map4DTo6D(colors: npt.NDArray, transform: ColorSpaceTransform) -> npt.NDArra
         # in their dynamic range -- need to double check that this is right theoretically!
         mat[:, i] = colors[:, mapped_idx] * transform.white_weights[mapped_idx]
     return mat
-
-
-def ConvertMetamersToPlateColors(colors: npt.NDArray, transform: ColorSpaceTransform) -> List[PlateColor]:
-    """
-    Nx4 Array in Display Space Coordinates, transform into PlateColor
-
-    :param colors: Nx4 Array in Display Space Coordinates
-    :param transform: ColorSpaceTransform to use for the conversion to a Plate Color
-    """
-    mat = Map4DTo6D(colors, transform)
-
-    six_color_array = mat.reshape((colors.shape[0]//2, 2, 6))
-    plate_colors: List[PlateColor] = []
-    for i in range(six_color_array.shape[0]):
-        plate_colors += [PlateColor(TetraColor(six_color_array[i][0][:3], six_color_array[i][0][3:]),
-                                    TetraColor(six_color_array[i][1][:3], six_color_array[i][1][3:]))]
-    return plate_colors

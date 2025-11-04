@@ -19,7 +19,7 @@ observer = Observer.custom_observer(wavelengths, args.od, args.dimension, args.s
 primaries = load_primaries_from_csv("../../measurements/2025-05-06/")
 
 for metameric_axis in range(2, 3):
-    cs_4d = ColorSpace(observer, cst_display_type='led',
+    cs_4d = ColorSpace(observer,
                        display_primaries=primaries, metameric_axis=metameric_axis)
     color_sampler = ColorSampler(cs_4d, cubemap_size=64)
 

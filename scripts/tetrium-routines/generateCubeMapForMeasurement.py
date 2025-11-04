@@ -49,7 +49,7 @@ metameric_axis = 2
 
 # plt.show()
 
-cs_4d = ColorSpace(observer, cst_display_type='led',
+cs_4d = ColorSpace(observer,
                    display_primaries=primaries, metameric_axis=metameric_axis)
 
 color_sampler = ColorSampler(cs_4d, cubemap_size=5)

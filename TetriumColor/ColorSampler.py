@@ -145,7 +145,7 @@ class ColorSampler:
             vxyz = np.hstack((lum_vector[np.newaxis, :].T, xyz))
 
             # Convert to VSH space
-            vshh = self.color_space._hering_to_vsh(vxyz)
+            vshh = self.color_space.convert(vxyz, ColorSpaceType.HERING, ColorSpaceType.VSH)
 
             # Generate gamut LUT for this face
             face_dict = {}
@@ -153,11 +153,13 @@ class ColorSampler:
                 u, v = flattened_v[j], flattened_u[j]
                 angle = tuple(vshh[j, 2:])
                 # Find cusp point for this hue angle
-                hue_cartesian = self.color_space._vsh_to_hering(np.array([[0, 1, *angle]]))
+                hue_cartesian = self.color_space.convert(
+                    np.array([[0, 1, *angle]]), ColorSpaceType.VSH, ColorSpaceType.HERING)
                 max_sat_point = self._find_maximal_saturation(
-                    (self.color_space.transform.hering_to_disp @ hue_cartesian.T).T[0])
-                max_sat_hering = np.linalg.inv(self.color_space.transform.hering_to_disp) @ max_sat_point
-                max_sat_vsh = self.color_space._hering_to_vsh(max_sat_hering[np.newaxis, :])[0]
+                    (self.color_space._get_hering_to_disp() @ hue_cartesian.T).T[0])
+                max_sat_hering = np.linalg.inv(self.color_space._get_hering_to_disp()) @ max_sat_point
+                max_sat_vsh = self.color_space.convert(
+                    max_sat_hering[np.newaxis, :], ColorSpaceType.HERING, ColorSpaceType.VSH)[0]
                 lum_cusp, sat_cusp = max_sat_vsh[0], max_sat_vsh[1]
                 face_dict[(u, v)] = (lum_cusp, sat_cusp)
 
@@ -307,12 +309,13 @@ class ColorSampler:
             float: Maximum saturation at the given luminance and angle
         """
         # Find the cusp point for this hue angle
-        hue_cartesian = self.color_space._vsh_to_hering(np.array([[0, 1, *angle]]))
+        hue_cartesian = self.color_space.convert(np.array([[0, 1, *angle]]), ColorSpaceType.VSH, ColorSpaceType.HERING)
         max_sat_point = self._find_maximal_saturation(
-            (self.color_space.transform.hering_to_disp @ hue_cartesian.T).T[0]
+            (self.color_space._get_hering_to_disp() @ hue_cartesian.T).T[0]
         )
-        max_sat_hering = np.linalg.inv(self.color_space.transform.hering_to_disp) @ max_sat_point
-        max_sat_vsh = self.color_space._hering_to_vsh(max_sat_hering[np.newaxis, :])[0]
+        max_sat_hering = np.linalg.inv(self.color_space._get_hering_to_disp()) @ max_sat_point
+        max_sat_vsh = self.color_space.convert(
+            max_sat_hering[np.newaxis, :], ColorSpaceType.HERING, ColorSpaceType.VSH)[0]
         lum_cusp, sat_cusp = max_sat_vsh[0], max_sat_vsh[1]
 
         # Calculate the maximum saturation at the given luminance

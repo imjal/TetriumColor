@@ -142,18 +142,18 @@ if __name__ == "__main__":
         primaries = load_primaries_from_csv("./measurements/2025-10-10/primaries/")
 
         color_generator = GeneticCDFTestColorGenerator(
-            sex='female', percentage_screened=0.999, cst_display_type='led', display_primaries=primaries, dimensions=[2])
+            sex='female', percentage_screened=0.999, dimensions=[2], display_primaries=primaries)
 
         print("Number of Genotypes: ", color_generator.get_num_samples())
         number_of_tests = color_generator.get_num_samples()
         plate_generator = PseudoIsochromaticPlateGenerator(color_generator)
 
-        lum_noise = 0.1
-        s_cone_noise = 0.0
+        lum_noise = 0.0
+        s_cone_noise = 0.1
         output_space = ColorSpaceType.DISP_6P
         output_filename = "metamer_difference_noise_all"
 
-        dirname = f"./measurements/2025-10-16/tests_noise_{lum_noise}_scone_noise_{s_cone_noise}"
+        dirname = f"./measurements/2025-11-4/tests_noise_{lum_noise}_scone_noise_{s_cone_noise}"
         os.makedirs(dirname, exist_ok=True)
 
         # Get the list of uppercase alphabet letters (A-Z)
@@ -191,17 +191,17 @@ if __name__ == "__main__":
         primaries = load_primaries_from_csv("./measurements/2025-10-10/primaries/")
 
         color_generator = GeneticColorPicker(
-            sex='female', percentage_screened=0.999, cst_display_type='led', display_primaries=primaries, dimensions=[2])
+            sex='female', percentage_screened=0.999, display_primaries=primaries, dimensions=[2])
 
         genotypes = color_generator.GetGenotypes()
         plate_generator = GeneticColorPickerPlateGenerator(color_generator)
 
         lum_noise = 0.0
         s_cone_noise = 0.1
-        output_space = ColorSpaceType.SRGB
+        output_space = ColorSpaceType.DISP_6P
         output_filename = "genetic_color_picker_scone_noise"
 
-        dirname = f"./measurements/2025-10-16/tests_noise_{lum_noise}_scone_noise_{s_cone_noise}"
+        dirname = f"./measurements/2025-11-4/tests_noise_{lum_noise}_scone_noise_{s_cone_noise}"
         os.makedirs(dirname, exist_ok=True)
 
         # Get the list of uppercase alphabet letters (A-Z)

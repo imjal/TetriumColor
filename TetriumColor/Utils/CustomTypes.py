@@ -10,15 +10,6 @@ class ColorTestResult(Enum):
     Failure = 0
 
 
-class CSTDisplayType(Enum):
-    LED = 0
-    SRGB = 1
-    NONE = 2
-
-    def __str__(self):
-        return self.name
-
-
 class TestType(Enum):
     """
     Three Different Types of Screening Tests Exist.
@@ -52,30 +43,3 @@ class PlateColor:
     """
     shape: TetraColor
     background: TetraColor
-
-# TODO: maybe implement this in a different module and have some general functions to compute on this data structure
-
-
-@dataclass
-class ColorSpaceTransform:
-    """
-    A class to hold the color space transform data.
-
-        cone_to_disp (npt.NDArray): The cone to display transform matrix.
-        maxbasis_to_disp (npt.NDArray): The maxbasis to display transform matrix.
-        hering_to_disp (npt.NDArray): The hering to display transform matrix.
-        metameric_axis (int): The axis of the metameric transform.
-        display_basis (List): The indices of the LED in RGVOCV order.
-        white_point (npt.NDArray): The white point of the display.
-    """
-    dim: int
-    cone_to_disp: npt.NDArray
-    maxbasis_to_disp: npt.NDArray
-    maxbasis_243_to_disp: npt.NDArray
-    maxbasis_3_to_disp: npt.NDArray
-    hering_to_disp: npt.NDArray
-    hering_to_cone: npt.NDArray
-    metameric_axis: int
-    led_mapping: List[int]
-    white_weights: npt.NDArray
-    cone_to_XYZ: npt.NDArray

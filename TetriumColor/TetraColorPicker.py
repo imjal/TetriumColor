@@ -47,7 +47,7 @@ class TestColorGenerator(ColorGenerator):
 
 
 class GeneticCDFTestColorGenerator(ColorGenerator):
-    def __init__(self, sex: str, percentage_screened: float,  peak_to_test: float = 547, metameric_axis: int = 2, luminance: float = 1.0, saturation: float = 0.5, dimensions: Optional[List[int]] = [2], seed: int = 42, extra_first_genotype: int = 4, **kwargs):
+    def __init__(self, sex: str, percentage_screened: float, peak_to_test: float = 547, metameric_axis: int = 2, luminance: float = 1.0, saturation: float = 0.5, dimensions: Optional[List[int]] = [2], seed: int = 42, extra_first_genotype: int = 4, **kwargs):
         """Color Generator that samples from the most common trichromatic phenotypes, and tests for the presence of a given peak.
 
         Args:
@@ -299,7 +299,7 @@ if __name__ == "__main__":
     generator = CircleGridGenerator(scramble_prob=0.5,
                                     sex="female", percentage_screened=0.999, peak_to_test=547,
                                     luminance=1.0, saturation=0.5, dimensions=[2], seed=42,
-                                    cst_display_type='led', display_primaries=primaries)
+                                    display_primaries=primaries)
 
     genotypes = generator.GetGenotypes()
 
