@@ -79,13 +79,18 @@ class SolidColorGenerator:
         )
         
         # Save images
-        rgb_path = filename_base + "_RGB.png"
-        ocv_path = filename_base + "_OCV.png"
-        
-        rgb_img.save(rgb_path)
-        ocv_img.save(ocv_path)
-        
-        return rgb_path, ocv_path
+        if output_space == ColorSpaceType.SRGB:
+            # For SRGB output, save as _SRGB.png (both RGB and OCV are the same)
+            srgb_path = filename_base + "_SRGB.png"
+            rgb_img.save(srgb_path)
+            return srgb_path, srgb_path
+        else:
+            # For DISP_6P output, save separate RGB and OCV files
+            rgb_path = filename_base + "_RGB.png"
+            ocv_path = filename_base + "_OCV.png"
+            rgb_img.save(rgb_path)
+            ocv_img.save(ocv_path)
+            return rgb_path, ocv_path
     
     def _create_circle_image(
         self,
