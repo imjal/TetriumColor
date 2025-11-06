@@ -8,6 +8,7 @@ from TetriumColor.Utils.CustomTypes import *
 from TetriumColor import ColorSpace, ColorSampler, ColorSpaceType
 from TetriumColor.Observer.ObserverGenotypes import ObserverGenotypes, Observer
 from TetriumColor.Measurement import load_primaries_from_csv
+from TetriumColor.PsychoPhys.Quest import Quest
 
 
 class ColorGenerator(ABC):
@@ -44,6 +45,369 @@ class TestColorGenerator(ColorGenerator):
         dummy_color_space = None  # This will need to be handled by callers
         dummy_difference = 0.1  # Dummy metamer difference
         return dummy_cone, dummy_cone, dummy_color_space, dummy_difference
+
+
+class QuestColorGenerator(ColorGenerator):
+    """Adaptive threshold color generator using Quest in DISP space.
+
+    This generator samples thresholds in different chromatic directions using
+    the Quest adaptive algorithm. It can operate in two modes:
+    1. Cone-shift-based: Sample metameric axes for top observer genotypes
+    2. Full-sphere: Fibonacci sphere in DISP space + cone-shift directions
+    """
+
+    def __init__(self, color_space: ColorSpace,
+                 background_luminance: float = 0.5,
+                 mode: str = 'cone_shift',
+                 num_genotypes: int = 8,
+                 trials_per_direction: int = 20,
+                 sex: str = 'both',
+                 quest_params: Optional[Dict] = None):
+        """Initialize Quest-based color generator.
+
+        Args:
+            color_space: ColorSpace object for the observer being tested
+            background_luminance: Background luminance level in VSH space (0-1)
+            mode: 'cone_shift' for genotype-based directions or 'full_sphere' for uniform + genotype sampling
+            num_genotypes: Number of top genotypes to use (default 8, gives 32 directions for 4D)
+            trials_per_direction: Number of trials per direction
+            sex: Population to sample genotypes from ('male', 'female', or 'both')
+            quest_params: Optional dictionary of Quest parameters (tGuess, tGuessSd, pThreshold, beta, delta, gamma)
+        """
+        self.color_space = color_space
+        self.background_luminance = background_luminance
+        self.mode = mode
+        self.num_genotypes = num_genotypes
+        self.trials_per_direction = trials_per_direction
+        self.sex = sex
+
+        # Default Quest parameters
+        default_quest_params = {
+            'tGuess': -1.5,  # log10 of initial threshold guess (around 3% saturation)
+            'tGuessSd': 0.5,  # standard deviation of initial guess
+            'pThreshold': 0.75,  # threshold criterion (75% correct)
+            'beta': 3.5,  # steepness of psychometric function
+            'delta': 0.01,  # lapse rate
+            'gamma': 0.5  # guess rate (2AFC)
+        }
+        if quest_params:
+            default_quest_params.update(quest_params)
+        self.quest_params = default_quest_params
+
+        # Initialize ObserverGenotypes for direction generation
+        self.observer_genotypes = ObserverGenotypes(
+            dimensions=[self.color_space.dim - 1],
+            seed=42
+        )
+
+        # Generate sampling directions
+        self.directions, self.direction_metadata = self._generate_directions()
+
+        # Initialize Quest objects for each direction
+        self.quest_objects = [
+            Quest(**self.quest_params) for _ in range(len(self.directions))
+        ]
+
+        # Track current direction and trial counts
+        self.current_direction_idx = 0
+        self.trials_completed = [0] * len(self.directions)
+        self.total_trials = 0
+
+        # Store threshold estimates
+        self.thresholds = {}
+
+        # Get background color in DISP space (middle gray)
+        self.background_disp = np.ones(self.color_space.dim) * 0.5
+
+    def _generate_directions(self) -> Tuple[List[npt.NDArray], List[Dict]]:
+        """Generate chromatic sampling directions based on mode.
+
+        Returns:
+            Tuple of (directions, metadata) where directions are in DISP space
+            and metadata contains genotype and metameric_axis info
+        """
+        if self.mode == 'cone_shift':
+            return self._generate_cone_shift_directions()
+        elif self.mode == 'full_sphere':
+            return self._generate_full_sphere_directions()
+        else:
+            raise ValueError(f"Unknown mode: {self.mode}")
+
+    def _generate_cone_shift_directions(self) -> Tuple[List[npt.NDArray], List[Dict]]:
+        """Generate directions based on metameric axes of top observer genotypes.
+
+        For each of the top N genotypes, generates a direction for each metameric axis.
+        E.g., 8 genotypes × 4 dimensions = 32 directions
+
+        Returns:
+            Tuple of (directions, metadata)
+        """
+        # Get top genotypes by probability
+        genotypes = self.observer_genotypes.get_genotypes_covering_probability(
+            target_probability=0.95, sex=self.sex
+        )[:self.num_genotypes]
+
+        print(f"Using {len(genotypes)} top genotypes for direction generation")
+
+        directions = []
+        metadata = []
+
+        for genotype in genotypes:
+            # Create color space for this genotype
+            genotype_cs = self.observer_genotypes.get_color_space_for_peaks(
+                genotype,
+                display_primaries=self.color_space.display_primaries
+            )
+
+            # For each metameric axis (each cone dimension)
+            for metameric_axis in range(self.color_space.dim):
+                # Get metameric direction in DISP space
+                direction = genotype_cs.get_metameric_axis_in(
+                    ColorSpaceType.DISP,
+                    metameric_axis_num=metameric_axis
+                )
+
+                # Normalize
+                direction = direction / np.linalg.norm(direction)
+
+                directions.append(direction)
+                metadata.append({
+                    'genotype': genotype,
+                    'metameric_axis': metameric_axis,
+                    'type': 'cone_shift'
+                })
+
+        print(f"Generated {len(directions)} directions from cone shifts")
+        return directions, metadata
+
+    def _generate_full_sphere_directions(self) -> Tuple[List[npt.NDArray], List[Dict]]:
+        """Generate Fibonacci sphere in DISP space + cone-shift directions.
+
+        Returns:
+            Tuple of (directions, metadata)
+        """
+        # First, get all cone-shift directions
+        cone_directions, cone_metadata = self._generate_cone_shift_directions()
+
+        # Then add Fibonacci sphere directions in DISP space
+        dim = self.color_space.dim
+        num_sphere_points = 50  # Maximum sphere points
+
+        sphere_directions = []
+        sphere_metadata = []
+
+        if dim == 3:
+            # 2D sphere (circle) for trichromats
+            angles = np.linspace(0, 2*np.pi, num_sphere_points, endpoint=False)
+            for i, angle in enumerate(angles):
+                direction = np.array([np.cos(angle), np.sin(angle), 0])
+                direction = direction / np.linalg.norm(direction)
+                sphere_directions.append(direction)
+                sphere_metadata.append({
+                    'genotype': None,
+                    'metameric_axis': None,
+                    'type': 'sphere',
+                    'index': i
+                })
+
+        elif dim == 4:
+            # 3D sphere (Fibonacci) for tetrachromats
+            phi = np.pi * (3. - np.sqrt(5.))  # golden angle
+
+            for i in range(num_sphere_points):
+                y = 1 - (i / float(num_sphere_points - 1)) * 2
+                radius = np.sqrt(1 - y * y)
+                theta = phi * i
+
+                x = np.cos(theta) * radius
+                z = np.sin(theta) * radius
+                w = y
+
+                direction = np.array([x, z, w, 0])  # Leave one dimension as 0
+                direction = direction / np.linalg.norm(direction)
+                sphere_directions.append(direction)
+                sphere_metadata.append({
+                    'genotype': None,
+                    'metameric_axis': None,
+                    'type': 'sphere',
+                    'index': i
+                })
+        else:
+            # Higher dimensions: random sampling
+            for i in range(num_sphere_points):
+                direction = np.random.randn(dim)
+                direction = direction / np.linalg.norm(direction)
+                sphere_directions.append(direction)
+                sphere_metadata.append({
+                    'genotype': None,
+                    'metameric_axis': None,
+                    'type': 'sphere',
+                    'index': i
+                })
+
+        # Combine cone-shift and sphere directions
+        all_directions = cone_directions + sphere_directions
+        all_metadata = cone_metadata + sphere_metadata
+
+        print(
+            f"Generated {len(cone_directions)} cone-shift + {len(sphere_directions)} sphere = {len(all_directions)} total directions")
+
+        return all_directions, all_metadata
+
+    def get_num_samples(self) -> int:
+        """Get total number of samples (directions × trials per direction)."""
+        return len(self.directions) * self.trials_per_direction
+
+    def _select_next_direction(self) -> int:
+        """Select next direction to sample (interleaved sampling)."""
+        # Find directions that still need trials
+        incomplete_directions = [
+            i for i, count in enumerate(self.trials_completed)
+            if count < self.trials_per_direction
+        ]
+
+        if not incomplete_directions:
+            return -1  # All directions complete
+
+        # Interleave: cycle through incomplete directions
+        return incomplete_directions[self.total_trials % len(incomplete_directions)]
+
+    def _disp_direction_to_point(self, disp_direction: npt.NDArray, distance: float) -> npt.NDArray:
+        """Convert DISP direction + distance to DISP point.
+
+        Args:
+            disp_direction: Normalized direction in DISP space
+            distance: Distance from background in DISP space
+
+        Returns:
+            DISP coordinates
+        """
+        # Move from background in the direction by the distance
+        disp_point = self.background_disp + disp_direction * distance
+
+        # Clip to valid DISP range [0, 1]
+        disp_point = np.clip(disp_point, 0, 1)
+
+        return disp_point
+
+    def NewColor(self) -> Tuple[npt.NDArray, npt.NDArray, ColorSpace, float]:
+        """Get first color stimulus."""
+        self.current_direction_idx = 0
+        return self._get_color_for_direction(self.current_direction_idx)
+
+    def GetColor(self, previous_result: ColorTestResult) -> Tuple[npt.NDArray, npt.NDArray, ColorSpace, float] | None:
+        """Get next color based on previous result.
+
+        Args:
+            previous_result: Result from previous trial
+
+        Returns:
+            Tuple of (background_cone, test_cone, color_space, saturation) or None if done
+        """
+        if self.current_direction_idx < 0 or self.current_direction_idx >= len(self.directions):
+            return None
+
+        # Update Quest with previous response
+        quest = self.quest_objects[self.current_direction_idx]
+
+        # Convert response to Quest format (0=incorrect, 1=correct)
+        # Assuming previous_result has a 'correct' or 'detected' field
+        response = 1 if getattr(previous_result, 'correct', False) else 0
+
+        # Get the intensity that was tested (stored in previous trial)
+        if hasattr(self, '_last_intensity'):
+            quest.update(self._last_intensity, response)
+
+        # Update trial counter
+        self.trials_completed[self.current_direction_idx] += 1
+        self.total_trials += 1
+
+        # Select next direction
+        next_direction_idx = self._select_next_direction()
+
+        if next_direction_idx < 0:
+            # All trials complete, compute final thresholds
+            self._compute_final_thresholds()
+            return None
+
+        self.current_direction_idx = next_direction_idx
+        return self._get_color_for_direction(self.current_direction_idx)
+
+    def _get_color_for_direction(self, direction_idx: int) -> Tuple[npt.NDArray, npt.NDArray, ColorSpace, float]:
+        """Get color stimulus for a specific direction."""
+        direction = self.directions[direction_idx]
+        quest = self.quest_objects[direction_idx]
+
+        # Get recommended intensity from Quest (in log10 space)
+        log_distance = quest.quantile()
+        distance = 10 ** log_distance
+
+        # Store for next update
+        self._last_intensity = log_distance
+
+        # Get test point in DISP space
+        test_disp = self._disp_direction_to_point(direction, distance)
+
+        # Convert both to cone space
+        background_cone = self.color_space.convert(
+            np.array([self.background_disp]), ColorSpaceType.DISP, ColorSpaceType.CONE)[0]
+        test_cone = self.color_space.convert(
+            np.array([test_disp]), ColorSpaceType.DISP, ColorSpaceType.CONE)[0]
+
+        return background_cone, test_cone, self.color_space, distance
+
+    def _compute_final_thresholds(self):
+        """Compute final threshold estimates for all directions."""
+        for i, (direction, quest, metadata) in enumerate(zip(self.directions, self.quest_objects, self.direction_metadata)):
+            threshold_log = quest.mean()
+            threshold = 10 ** threshold_log
+            sd_log = quest.sd()
+
+            self.thresholds[i] = {
+                'direction': direction,
+                'threshold': threshold,
+                'threshold_log': threshold_log,
+                'sd_log': sd_log,
+                'trials': self.trials_completed[i],
+                'genotype': metadata.get('genotype'),
+                'metameric_axis': metadata.get('metameric_axis'),
+                'type': metadata.get('type')
+            }
+
+    def get_thresholds(self) -> Dict:
+        """Get dictionary of threshold estimates for all directions."""
+        if not self.thresholds:
+            self._compute_final_thresholds()
+        return self.thresholds
+
+    def export_thresholds(self, filename: str):
+        """Export thresholds to CSV file."""
+        import csv
+
+        thresholds = self.get_thresholds()
+
+        with open(filename, 'w', newline='') as f:
+            writer = csv.writer(f)
+
+            # Header
+            dim = self.color_space.dim
+            direction_cols = [f'dir_{i}' for i in range(dim)]
+            writer.writerow(['direction_idx'] + direction_cols +
+                            ['threshold', 'threshold_log', 'sd_log', 'trials',
+                             'genotype', 'metameric_axis', 'type'])
+
+            # Data
+            for idx in sorted(thresholds.keys()):
+                data = thresholds[idx]
+                genotype_str = ','.join(map(str, data['genotype'])) if data['genotype'] else 'None'
+                row = [idx] + list(data['direction']) + [
+                    data['threshold'], data['threshold_log'],
+                    data['sd_log'], data['trials'],
+                    genotype_str, data['metameric_axis'], data['type']
+                ]
+                writer.writerow(row)
+
+        print(f"Thresholds exported to {filename}")
 
 
 class GeneticCDFTestColorGenerator(ColorGenerator):
