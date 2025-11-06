@@ -50,7 +50,6 @@ CircleGridGenerator::CircleGridGenerator(
     float saturation,
     const std::vector<int>& dimensions,
     int seed,
-    const std::string& cst_display_type,
     const std::string& display_primaries_path
 )
 {
@@ -87,9 +86,6 @@ CircleGridGenerator::CircleGridGenerator(
 
             // Create keyword arguments
             PyObject* pKwargs = PyDict_New();
-            PyDict_SetItemString(
-                pKwargs, "cst_display_type", PyUnicode_FromString(cst_display_type.c_str())
-            );
             if (pPrimaries != Py_None) {
                 PyDict_SetItemString(pKwargs, "display_primaries", pPrimaries);
             }

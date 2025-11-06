@@ -16,7 +16,6 @@ class GeneticColorPicker
         float saturation = 0.5f,
         const std::vector<int>& dimensions = {1, 2},
         int seed = 42,
-        const std::string& cst_display_type = "led",
         const std::string& display_primaries_path = ""
     );
 
@@ -37,4 +36,3 @@ class GeneticColorPicker
     void* pInstance;
 };
 } // namespace TetriumColor
-

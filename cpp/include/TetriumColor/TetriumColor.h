@@ -6,6 +6,8 @@
 #include "GeneticColorPicker.h"
 #include "GeneticColorPickerPlateGenerator.h"
 #include "PseudoIsochromaticPlateGenerator.h"
+#include "QuestColorPicker.h"
+#include "QuestColorPickerPlateGenerator.h"
 #include "SolidColorGenerator.h"
 
 #include <string>
@@ -28,7 +30,6 @@ class CircleGridGenerator
         float saturation = 0.5f,
         const std::vector<int>& dimensions = {2},
         int seed = 42,
-        const std::string& cst_display_type = "led",
         const std::string& display_primaries_path = ""
     );
     ~CircleGridGenerator();

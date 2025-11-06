@@ -1,0 +1,261 @@
+#include "TetriumColor/QuestColorPicker.h"
+#include <Python.h>
+#include <iostream>
+#include <stdexcept>
+
+namespace TetriumColor
+{
+
+QuestColorPicker::QuestColorPicker(
+    const std::string& mode,
+    int num_genotypes,
+    int trials_per_direction,
+    const std::string& sex,
+    float background_luminance,
+    int seed,
+    const std::string& display_primaries_path,
+    const std::vector<int>& metameric_axes
+)
+    : pModule(nullptr), pClass(nullptr), pInstance(nullptr)
+{
+    // Load display primaries if provided
+    PyObject* pPrimaries = nullptr;
+    if (!display_primaries_path.empty()) {
+        PyObject* pMeasurementModule = PyImport_ImportModule("TetriumColor.Measurement");
+        if (!pMeasurementModule) {
+            PyErr_Print();
+            throw std::runtime_error("Failed to import TetriumColor.Measurement module");
+        }
+
+        PyObject* pLoadFunc = PyObject_GetAttrString(pMeasurementModule, "load_primaries_from_csv");
+        if (pLoadFunc && PyCallable_Check(pLoadFunc)) {
+            PyObject* pPrimariesArgs = PyTuple_New(1);
+            PyTuple_SetItem(
+                pPrimariesArgs, 0, PyUnicode_FromString(display_primaries_path.c_str())
+            );
+            pPrimaries = PyObject_CallObject(pLoadFunc, pPrimariesArgs);
+            Py_DECREF(pPrimariesArgs);
+            Py_DECREF(pLoadFunc);
+        }
+        Py_DECREF(pMeasurementModule);
+
+        if (!pPrimaries) {
+            PyErr_Print();
+            throw std::runtime_error("Failed to load primaries from path");
+        }
+    }
+
+    // Create Observer (tetrachromat)
+    PyObject* pObserverModule = PyImport_ImportModule("TetriumColor.Observer");
+    if (!pObserverModule) {
+        Py_XDECREF(pPrimaries);
+        PyErr_Print();
+        throw std::runtime_error("Failed to import TetriumColor.Observer module");
+    }
+
+    PyObject* pObserverClass = PyObject_GetAttrString(pObserverModule, "Observer");
+    PyObject* pTetrachromatMethod = PyObject_GetAttrString(pObserverClass, "tetrachromat");
+    PyObject* pObserver = PyObject_CallObject(pTetrachromatMethod, nullptr);
+
+    Py_DECREF(pTetrachromatMethod);
+    Py_DECREF(pObserverClass);
+    Py_DECREF(pObserverModule);
+
+    if (!pObserver) {
+        Py_XDECREF(pPrimaries);
+        PyErr_Print();
+        throw std::runtime_error("Failed to create Observer");
+    }
+
+    // Create ColorSpace instance with observer
+    PyObject* pColorSpaceModule = PyImport_ImportModule("TetriumColor.ColorSpace");
+    if (!pColorSpaceModule) {
+        Py_DECREF(pObserver);
+        Py_XDECREF(pPrimaries);
+        PyErr_Print();
+        throw std::runtime_error("Failed to import TetriumColor.ColorSpace module");
+    }
+
+    PyObject* pColorSpaceClass = PyObject_GetAttrString(pColorSpaceModule, "ColorSpace");
+    Py_DECREF(pColorSpaceModule);
+
+    if (!pColorSpaceClass || !PyCallable_Check(pColorSpaceClass)) {
+        Py_XDECREF(pColorSpaceClass);
+        Py_DECREF(pObserver);
+        Py_XDECREF(pPrimaries);
+        throw std::runtime_error("Cannot find ColorSpace class");
+    }
+
+    // ColorSpace(observer, display_primaries=...)
+    PyObject* pCSArgs = PyTuple_New(1);
+    PyTuple_SetItem(pCSArgs, 0, pObserver); // steals reference to pObserver
+
+    PyObject* pCSKwargs = PyDict_New();
+    if (pPrimaries) {
+        PyDict_SetItemString(pCSKwargs, "display_primaries", pPrimaries);
+        Py_DECREF(pPrimaries);
+    }
+
+    PyObject* pColorSpaceInstance = PyObject_Call(pColorSpaceClass, pCSArgs, pCSKwargs);
+    Py_DECREF(pCSArgs);
+    Py_DECREF(pCSKwargs);
+    Py_DECREF(pColorSpaceClass);
+
+    if (!pColorSpaceInstance) {
+        PyErr_Print();
+        throw std::runtime_error("Failed to create ColorSpace instance");
+    }
+
+    // Import the TetriumColor.TetraColorPicker module
+    PyObject* pModuleName = PyUnicode_FromString("TetriumColor.TetraColorPicker");
+    pModule = PyImport_Import(pModuleName);
+    Py_DECREF(pModuleName);
+
+    if (pModule == nullptr) {
+        Py_DECREF(pColorSpaceInstance);
+        PyErr_Print();
+        throw std::runtime_error("Failed to import TetriumColor.TetraColorPicker module");
+    }
+
+    // Get the QuestColorGenerator class
+    pClass = PyObject_GetAttrString((PyObject*)pModule, "QuestColorGenerator");
+    if (pClass == nullptr || !PyCallable_Check((PyObject*)pClass)) {
+        Py_XDECREF((PyObject*)pClass);
+        Py_DECREF((PyObject*)pModule);
+        Py_DECREF(pColorSpaceInstance);
+        throw std::runtime_error("Cannot find QuestColorGenerator class");
+    }
+
+    // Create arguments tuple
+    PyObject* pArgs = PyTuple_New(1);
+    PyTuple_SetItem(pArgs, 0, pColorSpaceInstance); // steals reference
+
+    PyObject* pKwargs = PyDict_New();
+
+    // Add keyword arguments
+    PyDict_SetItemString(pKwargs, "mode", PyUnicode_FromString(mode.c_str()));
+    PyDict_SetItemString(pKwargs, "num_genotypes", PyLong_FromLong(num_genotypes));
+    PyDict_SetItemString(pKwargs, "trials_per_direction", PyLong_FromLong(trials_per_direction));
+    PyDict_SetItemString(pKwargs, "sex", PyUnicode_FromString(sex.c_str()));
+    PyDict_SetItemString(pKwargs, "background_luminance", PyFloat_FromDouble(background_luminance));
+
+    // Add metameric_axes if specified
+    if (!metameric_axes.empty()) {
+        PyObject* pAxesList = PyList_New(metameric_axes.size());
+        for (size_t i = 0; i < metameric_axes.size(); i++) {
+            PyList_SetItem(pAxesList, i, PyLong_FromLong(metameric_axes[i]));
+        }
+        PyDict_SetItemString(pKwargs, "metameric_axes", pAxesList);
+        Py_DECREF(pAxesList);
+    }
+
+    // Create the instance
+    pInstance = PyObject_Call((PyObject*)pClass, pArgs, pKwargs);
+    Py_DECREF(pArgs);
+    Py_DECREF(pKwargs);
+
+    if (pInstance == nullptr) {
+        PyErr_Print();
+        Py_DECREF((PyObject*)pClass);
+        Py_DECREF((PyObject*)pModule);
+        throw std::runtime_error("Failed to create QuestColorGenerator instance");
+    }
+}
+
+QuestColorPicker::~QuestColorPicker()
+{
+    Py_XDECREF((PyObject*)pInstance);
+    Py_XDECREF((PyObject*)pClass);
+    Py_XDECREF((PyObject*)pModule);
+}
+
+std::map<int, std::pair<std::string, int>> QuestColorPicker::GetDirectionsMetadata() const
+{
+    std::map<int, std::pair<std::string, int>> result;
+
+    PyObject* pDirectionMetadata
+        = PyObject_GetAttrString((PyObject*)pInstance, "direction_metadata");
+    if (pDirectionMetadata == nullptr || !PyList_Check(pDirectionMetadata)) {
+        Py_XDECREF(pDirectionMetadata);
+        return result;
+    }
+
+    Py_ssize_t size = PyList_Size(pDirectionMetadata);
+    for (Py_ssize_t i = 0; i < size; i++) {
+        PyObject* pMetadata = PyList_GetItem(pDirectionMetadata, i); // borrowed reference
+        if (!PyDict_Check(pMetadata)) {
+            continue;
+        }
+
+        // Get genotype (if exists)
+        PyObject* pGenotype = PyDict_GetItemString(pMetadata, "genotype");            // borrowed
+        PyObject* pMetamericAxis = PyDict_GetItemString(pMetadata, "metameric_axis"); // borrowed
+
+        if (pGenotype != nullptr && pGenotype != Py_None && pMetamericAxis != nullptr
+            && pMetamericAxis != Py_None) {
+            // Convert genotype tuple to string
+            std::string genotype_str = "(";
+            if (PyTuple_Check(pGenotype)) {
+                Py_ssize_t genotype_size = PyTuple_Size(pGenotype);
+                for (Py_ssize_t j = 0; j < genotype_size; j++) {
+                    PyObject* pPeak = PyTuple_GetItem(pGenotype, j); // borrowed
+                    if (PyFloat_Check(pPeak)) {
+                        if (j > 0)
+                            genotype_str += ",";
+                        int peak_int = (int)PyFloat_AsDouble(pPeak);
+                        genotype_str += std::to_string(peak_int);
+                    } else if (PyLong_Check(pPeak)) {
+                        if (j > 0)
+                            genotype_str += ",";
+                        genotype_str += std::to_string(PyLong_AsLong(pPeak));
+                    }
+                }
+            }
+            genotype_str += ")";
+
+            int metameric_axis = PyLong_AsLong(pMetamericAxis);
+            result[i] = std::make_pair(genotype_str, metameric_axis);
+        }
+    }
+
+    Py_DECREF(pDirectionMetadata);
+    return result;
+}
+
+size_t QuestColorPicker::GetNumDirections() const
+{
+    PyObject* pDirections = PyObject_GetAttrString((PyObject*)pInstance, "directions");
+    if (pDirections == nullptr || !PyList_Check(pDirections)) {
+        Py_XDECREF(pDirections);
+        return 0;
+    }
+
+    Py_ssize_t size = PyList_Size(pDirections);
+    Py_DECREF(pDirections);
+    return (size_t)size;
+}
+
+void QuestColorPicker::ExportThresholds(const std::string& filename)
+{
+    PyObject* pMethod = PyObject_GetAttrString((PyObject*)pInstance, "export_thresholds");
+    if (pMethod == nullptr || !PyCallable_Check(pMethod)) {
+        Py_XDECREF(pMethod);
+        throw std::runtime_error("export_thresholds method not found");
+    }
+
+    PyObject* pArgs = PyTuple_New(1);
+    PyTuple_SetItem(pArgs, 0, PyUnicode_FromString(filename.c_str()));
+
+    PyObject* pResult = PyObject_CallObject(pMethod, pArgs);
+    Py_DECREF(pArgs);
+    Py_DECREF(pMethod);
+
+    if (pResult == nullptr) {
+        PyErr_Print();
+        throw std::runtime_error("Failed to export thresholds");
+    }
+
+    Py_DECREF(pResult);
+}
+
+} // namespace TetriumColor

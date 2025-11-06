@@ -44,6 +44,8 @@ set(SOURCES
     cpp/src/GeneticColorPicker.cpp
     cpp/src/GeneticColorPickerPlateGenerator.cpp
     cpp/src/PseudoIsochromaticPlateGenerator.cpp
+    cpp/src/QuestColorPicker.cpp
+    cpp/src/QuestColorPickerPlateGenerator.cpp
     cpp/src/TetriumColor.cpp
     cpp/src/CircleGridGenerator.cpp
     cpp/src/SolidColorGenerator.cpp

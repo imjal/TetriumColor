@@ -14,7 +14,6 @@ GeneticColorPicker::GeneticColorPicker(
     float saturation,
     const std::vector<int>& dimensions,
     int seed,
-    const std::string& cst_display_type,
     const std::string& display_primaries_path
 )
     : pModule(nullptr), pClass(nullptr), pInstance(nullptr)
@@ -48,9 +47,6 @@ GeneticColorPicker::GeneticColorPicker(
     PyDict_SetItemString(pKwargs, "luminance", PyFloat_FromDouble(luminance));
     PyDict_SetItemString(pKwargs, "saturation", PyFloat_FromDouble(saturation));
     PyDict_SetItemString(pKwargs, "seed", PyLong_FromLong(seed));
-    PyDict_SetItemString(
-        pKwargs, "cst_display_type", PyUnicode_FromString(cst_display_type.c_str())
-    );
 
     // Add dimensions list
     PyObject* pDimensions = PyList_New(dimensions.size());

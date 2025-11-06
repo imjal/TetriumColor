@@ -56,7 +56,7 @@ SolidColorGenerator::SolidColorGenerator(const std::string& primary_path)
         exit(-1);
     }
 
-    // Create ColorSpace with observer, display_primaries, and cst_display_type
+    // Create ColorSpace with observer and display_primaries
     PyObject* pColorSpaceClass = PyObject_GetAttrString(pColorSpaceModule, "ColorSpace");
     Py_DECREF(pColorSpaceModule);
 
@@ -65,7 +65,6 @@ SolidColorGenerator::SolidColorGenerator(const std::string& primary_path)
 
     PyObject* pKwargs = PyDict_New();
     PyDict_SetItemString(pKwargs, "display_primaries", pPrimaries);
-    PyDict_SetItemString(pKwargs, "cst_display_type", PyUnicode_FromString("led"));
 
     PyObject* pColorSpace = PyObject_Call(pColorSpaceClass, pArgs, pKwargs);
 
