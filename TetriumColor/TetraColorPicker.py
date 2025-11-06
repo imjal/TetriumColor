@@ -288,7 +288,7 @@ class CircleGridGenerator:
             return idxs
         else:
             for i, im in enumerate(image_tuples):
-                im.save(filenames[i] + ".png")
+                im.save(filenames[i] + "_SRGB.png")
             return idxs
 
 

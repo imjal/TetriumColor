@@ -32,7 +32,7 @@ class PlateGenerator(ABC):
         if output_space == ColorSpaceType.DISP_6P:
             self.plate_generator.ExportPlateTo6P(image, filename)
         else:
-            image[0].save(f"{filename}_srgb.png")
+            image[0].save(f"{filename}_SRGB.png")
         return image
 
     def GetLuminancePlate(self, filename: str, hidden_symbol: Union[int, str], color_space: ColorSpace, lum_noise: float = 0, s_cone_noise: float = 0, output_space: ColorSpaceType = ColorSpaceType.SRGB, corner_label: str = None):
@@ -47,7 +47,7 @@ class PlateGenerator(ABC):
         if output_space == ColorSpaceType.DISP_6P:
             self.plate_generator.ExportPlateTo6P(image, filename)
         else:
-            image[0].save(f"{filename}_srgb.png")
+            image[0].save(f"{filename}_SRGB.png")
         return image
 
 
@@ -109,7 +109,7 @@ class PseudoIsochromaticPlateGenerator(PlateGenerator):
         if output_space == ColorSpaceType.DISP_6P:
             self.plate_generator.ExportPlateTo6P(image, filename)
         else:
-            image[0].save(f"{filename}_srgb.png")
+            image[0].save(f"{filename}_SRGB.png")
 
         return image
 
@@ -127,7 +127,7 @@ class GeneticColorPickerPlateGenerator(PlateGenerator):
         if output_space == ColorSpaceType.DISP_6P:
             self.plate_generator.ExportPlateTo6P(image, filename)
         else:
-            image[0].save(f"{filename}_srgb.png")
+            image[0].save(f"{filename}_SRGB.png")
         return image
 
 
