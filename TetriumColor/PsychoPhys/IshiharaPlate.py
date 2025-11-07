@@ -274,7 +274,7 @@ def _draw_plate(
             for i in range(len(channel_draws)):
                 channel_draws[i].ellipse(bounding_box, fill=tuple(circle_color[3*i:3*i + 3]), width=0)
         else:  # should match the rgb/cmyk length
-            channel_draws[0].ellipse(bounding_box, fill=tuple(circle_color), width=0)
+            channel_draws[0].ellipse(bounding_box, fill=tuple(circle_color[0].tolist()), width=0)
 
 
 def generate_ishihara_plate(

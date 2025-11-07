@@ -63,7 +63,8 @@ class QuestColorGenerator(ColorGenerator):
                  num_genotypes: int = 8,
                  trials_per_direction: int = 20,
                  sex: str = 'both',
-                 quest_params: Optional[Dict] = None):
+                 quest_params: Optional[Dict] = None,
+                 metameric_axes: Optional[List[int]] = [2]):
         """Initialize Quest-based color generator.
 
         Args:
@@ -74,6 +75,7 @@ class QuestColorGenerator(ColorGenerator):
             trials_per_direction: Number of trials per direction
             sex: Population to sample genotypes from ('male', 'female', or 'both')
             quest_params: Optional dictionary of Quest parameters (tGuess, tGuessSd, pThreshold, beta, delta, gamma)
+            metameric_axes: Optional list of metameric axes to test (e.g., [1] for only testing 547nm cone). If None, tests all axes.
         """
         self.color_space = color_space
         self.background_luminance = background_luminance
@@ -81,6 +83,7 @@ class QuestColorGenerator(ColorGenerator):
         self.num_genotypes = num_genotypes
         self.trials_per_direction = trials_per_direction
         self.sex = sex
+        self.metameric_axes = metameric_axes if metameric_axes is not None else list(range(color_space.dim))
 
         # Default Quest parameters
         default_quest_params = {

@@ -9,7 +9,6 @@ ColorGenerator::ColorGenerator(
     float percentage_screened,
     float peak_to_test,
     const std::vector<int>& dimensions,
-    const std::string& cst_display_type,
     const std::string& display_primaries_path
 )
 {
@@ -63,9 +62,6 @@ ColorGenerator::ColorGenerator(
             );
             PyDict_SetItemString(pKwargs, "peak_to_test", PyFloat_FromDouble(peak_to_test));
             PyDict_SetItemString(pKwargs, "dimensions", py_dimensions);
-            PyDict_SetItemString(
-                pKwargs, "cst_display_type", PyUnicode_FromString(cst_display_type.c_str())
-            );
             PyDict_SetItemString(pKwargs, "display_primaries", pPrimaries);
 
             pInstance = reinterpret_cast<PyObject*>(
