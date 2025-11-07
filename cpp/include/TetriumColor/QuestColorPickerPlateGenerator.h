@@ -20,7 +20,8 @@ class QuestColorPickerPlateGenerator
         int hidden_number,
         ColorSpaceType output_space = ColorSpaceType::DISP_6P,
         float lum_noise = 0.0f,
-        float s_cone_noise = 0.0f
+        float s_cone_noise = 0.0f,
+        double intensity = 1.0 // Quest intensity/proportion [0, 1]
     );
 
     void GetPlate(
@@ -29,7 +30,8 @@ class QuestColorPickerPlateGenerator
         const std::string& hidden_symbol,
         ColorSpaceType output_space = ColorSpaceType::DISP_6P,
         float lum_noise = 0.0f,
-        float s_cone_noise = 0.0f
+        float s_cone_noise = 0.0f,
+        double intensity = 1.0 // Quest intensity/proportion [0, 1]
     );
 
   private:

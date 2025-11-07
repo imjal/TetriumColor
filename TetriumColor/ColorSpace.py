@@ -278,12 +278,13 @@ class ColorSpace:
                               ColorSpaceType.DISP, output_space).reshape(-1, 2, self.dim)
         return points[0][0], points[0][1]
 
-    def get_maximal_pair_in_disp_from_pt(self, pt: npt.NDArray, metameric_axis: int = 2, output_space: ColorSpaceType = ColorSpaceType.CONE) -> Optional[Tuple[npt.NDArray, npt.NDArray, float]]:
+    def get_maximal_pair_in_disp_from_pt(self, pt: npt.NDArray, metameric_axis: int = 2, output_space: ColorSpaceType = ColorSpaceType.CONE, proportion: float = 1.0) -> Optional[Tuple[npt.NDArray, npt.NDArray, float]]:
         """Get Maximal Metameric Color Pairs from a Point
 
         Args:
             pt: Point in display space
             metameric_axis: Metameric axis to use
+            proportion: Proportion of maximum distance to use (0.0 to 1.0). Default is 1.0 (maximum).
 
         Returns:
             Optional[Tuple[npt.NDArray, npt.NDArray, float]]: (cone1, cone2, metamer_difference) or None if rejected
@@ -294,6 +295,11 @@ class ColorSpace:
             pt,
             metamer_dir_in_disp,
             np.eye(self.dim)), 0, 1)
+
+        # Scale by proportion if not using full distance
+        if proportion < 1.0:
+            # Interpolate between center point and maximal points
+            disp_pts = pt + (disp_pts - pt) * proportion
 
         cones = self.convert(disp_pts, ColorSpaceType.DISP, ColorSpaceType.CONE)
 

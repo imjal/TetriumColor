@@ -1,5 +1,6 @@
 #include "TetriumColor/QuestColorPicker.h"
 #include <Python.h>
+#include <cmath>
 #include <iostream>
 #include <stdexcept>
 
@@ -233,6 +234,170 @@ size_t QuestColorPicker::GetNumDirections() const
     Py_ssize_t size = PyList_Size(pDirections);
     Py_DECREF(pDirections);
     return (size_t)size;
+}
+
+QuestColorResult QuestColorPicker::NewColor()
+{
+    // Call Python NewColor() method
+    PyObject* pNewColorMethod = PyObject_GetAttrString((PyObject*)pInstance, "NewColor");
+    if (pNewColorMethod == nullptr || !PyCallable_Check(pNewColorMethod)) {
+        Py_XDECREF(pNewColorMethod);
+        throw std::runtime_error("NewColor method not found");
+    }
+
+    PyObject* pResult = PyObject_CallObject(pNewColorMethod, nullptr);
+    Py_DECREF(pNewColorMethod);
+
+    if (pResult == nullptr) {
+        PyErr_Print();
+        throw std::runtime_error("Failed to call NewColor");
+    }
+
+    // Result is (background_cone, test_cone, color_space, distance)
+    // We just need to extract the current direction and intensity
+    Py_DECREF(pResult);
+
+    // Get current direction index
+    PyObject* pCurrentDir = PyObject_GetAttrString((PyObject*)pInstance, "current_direction_idx");
+    if (pCurrentDir == nullptr) {
+        PyErr_Print();
+        throw std::runtime_error("Failed to get current_direction_idx");
+    }
+    current_direction_idx = PyLong_AsLong(pCurrentDir);
+    Py_DECREF(pCurrentDir);
+
+    // Get _last_intensity (the intensity that was used)
+    PyObject* pLastIntensity = PyObject_GetAttrString((PyObject*)pInstance, "_last_intensity");
+    if (pLastIntensity == nullptr) {
+        PyErr_Print();
+        throw std::runtime_error("Failed to get _last_intensity");
+    }
+    double log_intensity = PyFloat_AsDouble(pLastIntensity);
+    Py_DECREF(pLastIntensity);
+
+    // Convert from log10 to actual proportion
+    double intensity = pow(10.0, log_intensity);
+    intensity = std::max(0.0, std::min(1.0, intensity));
+
+    // Get metadata for this direction
+    auto metadata = GetDirectionsMetadata();
+    auto it = metadata.find(current_direction_idx);
+    if (it == metadata.end()) {
+        // Debug: print available keys
+        std::string available_keys = "";
+        for (const auto& [key, value] : metadata) {
+            available_keys += std::to_string(key) + " ";
+        }
+        throw std::runtime_error(
+            "NewColor: Direction metadata not found for direction_idx "
+            + std::to_string(current_direction_idx) + ". Available direction indices: ["
+            + available_keys + "]"
+        );
+    }
+
+    QuestColorResult result;
+    result.direction_idx = current_direction_idx;
+    result.genotype = it->second.first;
+    result.metameric_axis = it->second.second;
+    result.intensity = intensity;
+    result.is_done = false;
+
+    return result;
+}
+
+QuestColorResult QuestColorPicker::GetColor(bool correct)
+{
+    // Import ColorTestResult enum
+    PyObject* pUtilsModule = PyImport_ImportModule("TetriumColor.Utils.CustomTypes");
+    if (!pUtilsModule) {
+        PyErr_Print();
+        throw std::runtime_error("Failed to import TetriumColor.Utils.CustomTypes");
+    }
+
+    PyObject* pColorTestResult = PyObject_GetAttrString(pUtilsModule, "ColorTestResult");
+    Py_DECREF(pUtilsModule);
+    if (!pColorTestResult) {
+        PyErr_Print();
+        throw std::runtime_error("Failed to get ColorTestResult enum");
+    }
+
+    // Get Success or Failure enum value
+    const char* result_name = correct ? "Success" : "Failure";
+    PyObject* pResultValue = PyObject_GetAttrString(pColorTestResult, result_name);
+    Py_DECREF(pColorTestResult);
+    if (!pResultValue) {
+        PyErr_Print();
+        throw std::runtime_error("Failed to get ColorTestResult value");
+    }
+
+    // Call Python GetColor(previous_result) method
+    PyObject* pGetColorMethod = PyObject_GetAttrString((PyObject*)pInstance, "GetColor");
+    if (pGetColorMethod == nullptr || !PyCallable_Check(pGetColorMethod)) {
+        Py_XDECREF(pGetColorMethod);
+        Py_DECREF(pResultValue);
+        throw std::runtime_error("GetColor method not found");
+    }
+
+    PyObject* pArgs = PyTuple_New(1);
+    PyTuple_SetItem(pArgs, 0, pResultValue); // steals reference
+
+    PyObject* pResult = PyObject_CallObject(pGetColorMethod, pArgs);
+    Py_DECREF(pArgs);
+    Py_DECREF(pGetColorMethod);
+
+    if (pResult == nullptr) {
+        PyErr_Print();
+        throw std::runtime_error("Failed to call GetColor");
+    }
+
+    QuestColorResult result;
+
+    // Check if result is None (all trials complete)
+    if (pResult == Py_None) {
+        Py_DECREF(pResult);
+        result.is_done = true;
+        return result;
+    }
+
+    // Result is (background_cone, test_cone, color_space, distance)
+    Py_DECREF(pResult);
+
+    // Get current direction index
+    PyObject* pCurrentDir = PyObject_GetAttrString((PyObject*)pInstance, "current_direction_idx");
+    if (pCurrentDir == nullptr) {
+        PyErr_Print();
+        throw std::runtime_error("Failed to get current_direction_idx");
+    }
+    current_direction_idx = PyLong_AsLong(pCurrentDir);
+    Py_DECREF(pCurrentDir);
+
+    // Get _last_intensity (the intensity that was used)
+    PyObject* pLastIntensity = PyObject_GetAttrString((PyObject*)pInstance, "_last_intensity");
+    if (pLastIntensity == nullptr) {
+        PyErr_Print();
+        throw std::runtime_error("Failed to get _last_intensity");
+    }
+    double log_intensity = PyFloat_AsDouble(pLastIntensity);
+    Py_DECREF(pLastIntensity);
+
+    // Convert from log10 to actual proportion
+    double intensity = pow(10.0, log_intensity);
+    intensity = std::max(0.0, std::min(1.0, intensity));
+
+    // Get metadata for this direction
+    auto metadata = GetDirectionsMetadata();
+    auto it = metadata.find(current_direction_idx);
+    if (it == metadata.end()) {
+        throw std::runtime_error("Direction metadata not found");
+    }
+
+    result.direction_idx = current_direction_idx;
+    result.genotype = it->second.first;
+    result.metameric_axis = it->second.second;
+    result.intensity = intensity;
+    result.is_done = false;
+
+    return result;
 }
 
 void QuestColorPicker::ExportThresholds(const std::string& filename)

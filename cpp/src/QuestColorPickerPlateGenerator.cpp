@@ -101,7 +101,8 @@ void QuestColorPickerPlateGenerator::GetPlate(
     int hidden_number,
     ColorSpaceType output_space,
     float lum_noise,
-    float s_cone_noise
+    float s_cone_noise,
+    double intensity
 )
 {
     // Get the genotype and metameric axis for this direction
@@ -251,6 +252,7 @@ void QuestColorPickerPlateGenerator::GetPlate(
     PyTuple_SetItem(pPairArgs, 0, pPoint); // steals reference
     PyObject* pPairKwargs = PyDict_New();
     PyDict_SetItemString(pPairKwargs, "metameric_axis", PyLong_FromLong(metameric_axis));
+    PyDict_SetItemString(pPairKwargs, "proportion", PyFloat_FromDouble(intensity));
 
     PyObject* pPairResult = PyObject_Call(pGetPairMethod, pPairArgs, pPairKwargs);
     Py_DECREF(pPairArgs);
@@ -359,7 +361,8 @@ void QuestColorPickerPlateGenerator::GetPlate(
     const std::string& hidden_symbol,
     ColorSpaceType output_space,
     float lum_noise,
-    float s_cone_noise
+    float s_cone_noise,
+    double intensity
 )
 {
     // Get the genotype and metameric axis for this direction
@@ -509,6 +512,7 @@ void QuestColorPickerPlateGenerator::GetPlate(
     PyTuple_SetItem(pPairArgs, 0, pPoint); // steals reference
     PyObject* pPairKwargs = PyDict_New();
     PyDict_SetItemString(pPairKwargs, "metameric_axis", PyLong_FromLong(metameric_axis));
+    PyDict_SetItemString(pPairKwargs, "proportion", PyFloat_FromDouble(intensity));
 
     PyObject* pPairResult = PyObject_Call(pGetPairMethod, pPairArgs, pPairKwargs);
     Py_DECREF(pPairArgs);

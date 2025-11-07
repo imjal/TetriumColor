@@ -2,10 +2,22 @@
 
 #include <map>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace TetriumColor
 {
+
+// Result from Quest GetColor
+struct QuestColorResult
+{
+    int direction_idx;
+    std::string genotype;
+    int metameric_axis;
+    double intensity; // Quest's recommended intensity [0, 1]
+    bool is_done;     // true if all trials complete
+};
+
 class QuestColorPicker
 {
   public:
@@ -29,6 +41,13 @@ class QuestColorPicker
     // Get the number of directions
     size_t GetNumDirections() const;
 
+    // Get the first trial (calls Python NewColor())
+    QuestColorResult NewColor();
+
+    // Get next trial and update Quest with previous response (calls Python GetColor())
+    // correct: true if observer correctly identified the previous stimulus
+    QuestColorResult GetColor(bool correct);
+
     // Export thresholds to CSV
     void ExportThresholds(const std::string& filename);
 
@@ -39,5 +58,7 @@ class QuestColorPicker
     void* pModule;
     void* pClass;
     void* pInstance;
+
+    int current_direction_idx = -1;
 };
 } // namespace TetriumColor
