@@ -9,6 +9,7 @@ from TetriumColor import ColorSpace, ColorSampler, ColorSpaceType
 from TetriumColor.Observer.ObserverGenotypes import ObserverGenotypes, Observer
 from TetriumColor.Measurement import load_primaries_from_csv
 from TetriumColor.PsychoPhys.Quest import Quest
+from TetriumColor.ColorMath.SubSpaceIntersection import FindMaximumWidthAlongDirection
 
 
 class ColorGenerator(ABC):
@@ -95,12 +96,15 @@ class QuestColorGenerator(ColorGenerator):
         self.quest_params = default_quest_params
 
         # Initialize ObserverGenotypes for direction generation
+        # Note: dimensions is M/L cones only (S cone added automatically)
         self.observer_genotypes = ObserverGenotypes(
             dimensions=[self.color_space.dim - 1],
             seed=42
         )
 
-        # Generate sampling directions
+        self.background = np.ones(self.color_space.dim) * 0.5
+
+        # Generate sampling directions (which include max points)
         self.directions, self.direction_metadata = self._generate_directions()
 
         # Initialize Quest objects for each direction
@@ -115,9 +119,6 @@ class QuestColorGenerator(ColorGenerator):
 
         # Store threshold estimates
         self.thresholds = {}
-
-        # Get background color in DISP space (middle gray)
-        self.background_disp = np.ones(self.color_space.dim) * 0.5
 
     def _generate_directions(self) -> Tuple[List[npt.NDArray], List[Dict]]:
         """Generate chromatic sampling directions based on mode.
@@ -160,21 +161,25 @@ class QuestColorGenerator(ColorGenerator):
             )
 
             # For each metameric axis (each cone dimension)
-            for metameric_axis in range(self.color_space.dim):
+            for metameric_axis in [2]:
                 # Get metameric direction in DISP space
                 direction = genotype_cs.get_metameric_axis_in(
                     ColorSpaceType.DISP,
                     metameric_axis_num=metameric_axis
                 )
 
-                # Normalize
+                max_point_in_DISP, _, _ = genotype_cs.get_maximal_pair_in_disp_from_pt(
+                    self.background, metameric_axis=metameric_axis, output_space=ColorSpaceType.DISP)
+
+                max_distance = np.linalg.norm(max_point_in_DISP - self.background)
+
                 direction = direction / np.linalg.norm(direction)
 
-                directions.append(direction)
+                directions.append(direction * max_distance)
                 metadata.append({
                     'genotype': genotype,
                     'metameric_axis': metameric_axis,
-                    'type': 'cone_shift'
+                    'type': 'cone_shift',
                 })
 
         print(f"Generated {len(directions)} directions from cone shifts")
@@ -202,12 +207,14 @@ class QuestColorGenerator(ColorGenerator):
             for i, angle in enumerate(angles):
                 direction = np.array([np.cos(angle), np.sin(angle), 0])
                 direction = direction / np.linalg.norm(direction)
-                sphere_directions.append(direction)
+                max_point_in_DISP, _ = np.array(FindMaximumWidthAlongDirection(direction, np.eye(self.dim)))
+                max_distance = np.linalg.norm(max_point_in_DISP - self.background)
+                sphere_directions.append(direction * max_distance)
                 sphere_metadata.append({
                     'genotype': None,
                     'metameric_axis': None,
                     'type': 'sphere',
-                    'index': i
+                    'index': i,
                 })
 
         elif dim == 4:
@@ -226,23 +233,29 @@ class QuestColorGenerator(ColorGenerator):
                 direction = np.array([x, z, w, 0])  # Leave one dimension as 0
                 direction = direction / np.linalg.norm(direction)
                 sphere_directions.append(direction)
+                max_point_in_DISP, _ = np.array(FindMaximumWidthAlongDirection(direction, np.eye(self.dim)))
+                max_distance = np.linalg.norm(max_point_in_DISP - self.background)
                 sphere_metadata.append({
                     'genotype': None,
                     'metameric_axis': None,
                     'type': 'sphere',
-                    'index': i
+                    'index': i,
+                    'max_distance': max_distance
                 })
         else:
             # Higher dimensions: random sampling
             for i in range(num_sphere_points):
                 direction = np.random.randn(dim)
                 direction = direction / np.linalg.norm(direction)
+                max_point_in_DISP, _ = np.array(FindMaximumWidthAlongDirection(direction, np.eye(self.dim)))
+                max_distance = np.linalg.norm(max_point_in_DISP - self.background)
                 sphere_directions.append(direction)
                 sphere_metadata.append({
                     'genotype': None,
                     'metameric_axis': None,
                     'type': 'sphere',
-                    'index': i
+                    'index': i,
+                    'max_distance': max_distance
                 })
 
         # Combine cone-shift and sphere directions
@@ -272,10 +285,11 @@ class QuestColorGenerator(ColorGenerator):
         # Interleave: cycle through incomplete directions
         return incomplete_directions[self.total_trials % len(incomplete_directions)]
 
-    def _disp_direction_to_point(self, disp_direction: npt.NDArray, distance: float) -> npt.NDArray:
+    def _disp_direction_to_point(self, background_disp: npt.NDArray, disp_direction: npt.NDArray, distance: float) -> npt.NDArray:
         """Convert DISP direction + distance to DISP point.
 
         Args:
+            background_disp: Background point in DISP space
             disp_direction: Normalized direction in DISP space
             distance: Distance from background in DISP space
 
@@ -283,7 +297,7 @@ class QuestColorGenerator(ColorGenerator):
             DISP coordinates
         """
         # Move from background in the direction by the distance
-        disp_point = self.background_disp + disp_direction * distance
+        disp_point = background_disp + disp_direction * distance
 
         # Clip to valid DISP range [0, 1]
         disp_point = np.clip(disp_point, 0, 1)
@@ -311,8 +325,8 @@ class QuestColorGenerator(ColorGenerator):
         quest = self.quest_objects[self.current_direction_idx]
 
         # Convert response to Quest format (0=incorrect, 1=correct)
-        # Assuming previous_result has a 'correct' or 'detected' field
-        response = 1 if getattr(previous_result, 'correct', False) else 0
+        # ColorTestResult.Success = 1, ColorTestResult.Failure = 0
+        response = previous_result.value
 
         # Get the intensity that was tested (stored in previous trial)
         if hasattr(self, '_last_intensity'):
@@ -335,38 +349,57 @@ class QuestColorGenerator(ColorGenerator):
 
     def _get_color_for_direction(self, direction_idx: int) -> Tuple[npt.NDArray, npt.NDArray, ColorSpace, float]:
         """Get color stimulus for a specific direction."""
-        direction = self.directions[direction_idx]
+        direction_vec = self.directions[direction_idx]  # This is already scaled to max_distance
+        background_disp = self.background
         quest = self.quest_objects[direction_idx]
 
         # Get recommended intensity from Quest (in log10 space)
-        log_distance = quest.quantile()
-        distance = 10 ** log_distance
+        # Quest returns log10 of proportion of maximum
+        log_proportion = quest.quantile()
+        proportion = 10 ** log_proportion
 
-        # Store for next update
-        self._last_intensity = log_distance
+        # CRITICAL: Clip proportion to [0, 1] since directions are already scaled to max_distance
+        proportion = np.clip(proportion, 0.0, 1.0)
+
+        # Store the CLIPPED log proportion for Quest update (so Quest knows what we actually tested)
+        self._last_intensity = np.log10(np.maximum(proportion, 1e-10))  # Avoid log(0)
 
         # Get test point in DISP space
-        test_disp = self._disp_direction_to_point(direction, distance)
+        # direction_vec is already scaled by max_distance, so proportion directly scales it
+        test_disp = self._disp_direction_to_point(background_disp, direction_vec, proportion)
 
         # Convert both to cone space
         background_cone = self.color_space.convert(
-            np.array([self.background_disp]), ColorSpaceType.DISP, ColorSpaceType.CONE)[0]
+            np.array([background_disp]), ColorSpaceType.DISP, ColorSpaceType.CONE)[0]
         test_cone = self.color_space.convert(
             np.array([test_disp]), ColorSpaceType.DISP, ColorSpaceType.CONE)[0]
 
-        return background_cone, test_cone, self.color_space, distance
+        # Compute DISP distance from background (this is what we're thresholding)
+        disp_distance = np.linalg.norm(test_disp - background_disp)
+
+        return background_cone, test_cone, self.color_space, disp_distance
 
     def _compute_final_thresholds(self):
         """Compute final threshold estimates for all directions."""
-        for i, (direction, quest, metadata) in enumerate(zip(self.directions, self.quest_objects, self.direction_metadata)):
-            threshold_log = quest.mean()
-            threshold = 10 ** threshold_log
+        for i, (direction_vec, quest, metadata) in enumerate(
+                zip(self.directions, self.quest_objects, self.direction_metadata)):
+
+            # Quest threshold is log10 of proportion
+            threshold_log_proportion = quest.mean()
+            threshold_proportion = 10 ** threshold_log_proportion
+
+            # Scale to actual distance
+            threshold_distance = threshold_proportion * np.linalg.norm(direction_vec)
+
             sd_log = quest.sd()
 
             self.thresholds[i] = {
-                'direction': direction,
-                'threshold': threshold,
-                'threshold_log': threshold_log,
+                'direction': direction_vec,  # Normalized direction vector
+                'background': self.background,  # Background point (origin)
+                'threshold_distance': threshold_distance,  # Actual distance in DISP space
+                'threshold_proportion': threshold_proportion,  # Proportion of max distance
+                'threshold_log_proportion': threshold_log_proportion,  # Log10 of proportion
+                'max_distance': np.linalg.norm(direction_vec),  # Maximum displayable distance
                 'sd_log': sd_log,
                 'trials': self.trials_completed[i],
                 'genotype': metadata.get('genotype'),
@@ -391,17 +424,21 @@ class QuestColorGenerator(ColorGenerator):
 
             # Header
             dim = self.color_space.dim
+            max_point_cols = [f'max_pt_{i}' for i in range(dim)]
             direction_cols = [f'dir_{i}' for i in range(dim)]
-            writer.writerow(['direction_idx'] + direction_cols +
-                            ['threshold', 'threshold_log', 'sd_log', 'trials',
+            background_cols = [f'bg_{i}' for i in range(dim)]
+            writer.writerow(['direction_idx'] + max_point_cols + direction_cols + background_cols +
+                            ['threshold_distance', 'threshold_proportion', 'threshold_log_proportion',
+                             'max_distance', 'sd_log', 'trials',
                              'genotype', 'metameric_axis', 'type'])
 
             # Data
             for idx in sorted(thresholds.keys()):
                 data = thresholds[idx]
                 genotype_str = ','.join(map(str, data['genotype'])) if data['genotype'] else 'None'
-                row = [idx] + list(data['direction']) + [
-                    data['threshold'], data['threshold_log'],
+                row = [idx] + list(data['direction']) + list(data['background']) + [
+                    data['threshold_distance'], data['threshold_proportion'],
+                    data['threshold_log_proportion'], data['max_distance'],
                     data['sd_log'], data['trials'],
                     genotype_str, data['metameric_axis'], data['type']
                 ]
@@ -411,7 +448,7 @@ class QuestColorGenerator(ColorGenerator):
 
 
 class GeneticCDFTestColorGenerator(ColorGenerator):
-    def __init__(self, sex: str, percentage_screened: float, peak_to_test: float = 547, metameric_axis: int = 2, luminance: float = 1.0, saturation: float = 0.5, dimensions: Optional[List[int]] = [2], seed: int = 42, extra_first_genotype: int = 4, **kwargs):
+    def __init__(self, sex: str, percentage_screened: float, peak_to_test: float = 547, metameric_axis: int = 2, luminance: float = 1.0, saturation: float = 0.5, dimensions: Optional[List[int]] = [3], seed: int = 42, extra_first_genotype: int = 4, **kwargs):
         """Color Generator that samples from the most common trichromatic phenotypes, and tests for the presence of a given peak.
 
         Args:
@@ -503,7 +540,7 @@ class GeneticCDFTestColorGenerator(ColorGenerator):
 class GeneticColorPicker:
     def __init__(self, sex: str, percentage_screened: float, peak_to_test: float = 547,
                  luminance: float = 1.0, saturation: float = 0.5,
-                 dimensions: Optional[List[int]] = [2], seed: int = 42, **kwargs):
+                 dimensions: Optional[List[int]] = [3], seed: int = 42, **kwargs):
         """Color picker that samples from the most common trichromatic phenotypes.
 
         Args:
@@ -591,7 +628,7 @@ class GeneticColorPicker:
 class CircleGridGenerator:
     def __init__(self, scramble_prob: float, sex: str, percentage_screened: float, peak_to_test: float = 547,
                  luminance: float = 1.0, saturation: float = 0.5,
-                 dimensions: Optional[List[int]] = [2], seed: int = 42, **kwargs):
+                 dimensions: Optional[List[int]] = [3], seed: int = 42, **kwargs):
         """Color picker that samples from the most common trichromatic phenotypes.
 
         Args:

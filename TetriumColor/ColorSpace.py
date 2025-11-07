@@ -264,7 +264,7 @@ class ColorSpace:
             normalized_direction = direction / np.linalg.norm(direction)
         return normalized_direction
 
-    def get_maximal_metamer_pair_in_disp(self, metameric_axis: int) -> Tuple[npt.NDArray, npt.NDArray]:
+    def get_maximal_metamer_pair_in_disp(self, metameric_axis: int, output_space: ColorSpaceType = ColorSpaceType.CONE) -> Tuple[npt.NDArray, npt.NDArray]:
         """Get Maximal Metameric Color Pairs
 
         Returns:
@@ -274,11 +274,11 @@ class ColorSpace:
 
         metamers_in_disp = np.array(FindMaximumWidthAlongDirection(metamer_dir_in_disp, np.eye(self.dim)))
 
-        cones = self.convert(metamers_in_disp.reshape(-1, self.dim),
-                             ColorSpaceType.DISP, ColorSpaceType.CONE).reshape(-1, 2, self.dim)
-        return cones[0][0], cones[0][1]
+        points = self.convert(metamers_in_disp.reshape(-1, self.dim),
+                              ColorSpaceType.DISP, output_space).reshape(-1, 2, self.dim)
+        return points[0][0], points[0][1]
 
-    def get_maximal_pair_in_disp_from_pt(self, pt: npt.NDArray, metameric_axis: int = 2) -> Optional[Tuple[npt.NDArray, npt.NDArray, float]]:
+    def get_maximal_pair_in_disp_from_pt(self, pt: npt.NDArray, metameric_axis: int = 2, output_space: ColorSpaceType = ColorSpaceType.CONE) -> Optional[Tuple[npt.NDArray, npt.NDArray, float]]:
         """Get Maximal Metameric Color Pairs from a Point
 
         Args:
@@ -289,6 +289,7 @@ class ColorSpace:
             Optional[Tuple[npt.NDArray, npt.NDArray, float]]: (cone1, cone2, metamer_difference) or None if rejected
         """
         metamer_dir_in_disp = self.get_metameric_axis_in(ColorSpaceType.DISP, metameric_axis_num=metameric_axis)
+
         disp_pts = np.clip(FindMaximumIn1DimDirection(
             pt,
             metamer_dir_in_disp,
@@ -299,7 +300,9 @@ class ColorSpace:
         # Calculate metamer difference in the metameric channel
         metamer_difference = abs(cones[0][self.metameric_axis] - cones[1][self.metameric_axis])
 
-        return cones[0], cones[1], metamer_difference
+        output = self.convert(cones, ColorSpaceType.CONE, output_space)
+
+        return output[0], output[1], metamer_difference
 
     def convert(self, points: npt.NDArray,
                 from_space: str | ColorSpaceType,

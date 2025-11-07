@@ -90,13 +90,13 @@ class ObserverGenotypes:
         (False, False, False): 559
     }
 
-    def __init__(self, wavelengths: Optional[np.ndarray] = None, dimensions: Optional[List[int]] = None, seed: int = 42):
+    def __init__(self, wavelengths: Optional[np.ndarray] = None, dimensions: Optional[List[int]] = [3], seed: int = 42):
         """
         Initialize ObserverGenotypes with a list of peak wavelengths.
 
         Args:
             wavelengths: Optional wavelength array, defaults to 360-830nm in 1nm steps
-            dimensions: Optional list of dimensions to filter (e.g., [2] for trichromats only).
+            dimensions: Optional list of dimensions to filter (e.g., [3] for trichromats only).
                        If None, includes all dimensions.
         """
         self.seed = seed
@@ -121,7 +121,7 @@ class ObserverGenotypes:
         self.both_cdf = self._build_cdf(self.both_pdf_sorted)
 
         # Store dimension filter
-        self.dimensions = dimensions
+        self.dimensions = [d - 1 for d in dimensions]
 
         # Apply dimension filtering if specified
         if dimensions is not None:
