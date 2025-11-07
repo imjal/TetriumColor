@@ -1,14 +1,12 @@
 #pragma once
 
 #include "ColorGenerator.h"
+#include "ColorGeneratorFactory.h"
 #include "ColorSpaceType.h"
 #include "ColorTestResult.h"
-#include "GeneticColorPicker.h"
-#include "GeneticColorPickerPlateGenerator.h"
-#include "PseudoIsochromaticPlateGenerator.h"
-#include "QuestColorPicker.h"
-#include "QuestColorPickerPlateGenerator.h"
 #include "SolidColorGenerator.h"
+#include "TestGenerator.h"
+#include "TrialData.h"
 
 #include <string>
 #include <vector>

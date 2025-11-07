@@ -1,7 +1,8 @@
 #pragma once
-// TODO: implement
 
-enum class ColorTestResult {
-    OK,
-    ERROR
+// Matches Python ColorTestResult enum in TetriumColor/Utils/CustomTypes.py
+enum class ColorTestResult
+{
+    Success = 1,
+    Failure = 0
 };

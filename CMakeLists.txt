@@ -41,11 +41,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED True)
 # Add the source files
 set(SOURCES
     cpp/src/ColorGenerator.cpp
-    cpp/src/GeneticColorPicker.cpp
-    cpp/src/GeneticColorPickerPlateGenerator.cpp
-    cpp/src/PseudoIsochromaticPlateGenerator.cpp
-    cpp/src/QuestColorPicker.cpp
-    cpp/src/QuestColorPickerPlateGenerator.cpp
+    cpp/src/ColorGeneratorFactory.cpp
+    cpp/src/TestGenerator.cpp
     cpp/src/TetriumColor.cpp
     cpp/src/CircleGridGenerator.cpp
     cpp/src/SolidColorGenerator.cpp

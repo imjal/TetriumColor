@@ -124,10 +124,10 @@ class ObserverGenotypes:
         self.dimensions = [d - 1 for d in dimensions]
 
         # Apply dimension filtering if specified
-        if dimensions is not None:
-            self.male_pdf_sorted = self._filter_pdf_by_dimension(self.male_pdf_sorted, dimensions)
-            self.female_pdf_sorted = self._filter_pdf_by_dimension(self.female_pdf_sorted, dimensions)
-            self.both_pdf_sorted = self._filter_pdf_by_dimension(self.both_pdf_sorted, dimensions)
+        if self.dimensions is not None:
+            self.male_pdf_sorted = self._filter_pdf_by_dimension(self.male_pdf_sorted, self.dimensions)
+            self.female_pdf_sorted = self._filter_pdf_by_dimension(self.female_pdf_sorted, self.dimensions)
+            self.both_pdf_sorted = self._filter_pdf_by_dimension(self.both_pdf_sorted, self.dimensions)
             # Rebuild CDFs with filtered PDFs
             self.male_cdf = self._build_cdf(self.male_pdf_sorted)
             self.female_cdf = self._build_cdf(self.female_pdf_sorted)

@@ -57,33 +57,43 @@ class QuestColorGenerator(ColorGenerator):
     2. Full-sphere: Fibonacci sphere in DISP space + cone-shift directions
     """
 
-    def __init__(self, color_space: ColorSpace,
-                 background_luminance: float = 0.5,
+    def __init__(self, sex: str = 'female',
+                 percentage_screened: float = 0.999,
+                 peak_to_test: float = 547,
+                 luminance: float = 0.5,
+                 saturation: float = 0.5,
+                 dimensions: Optional[List[int]] = [3],
+                 seed: int = 42,
                  mode: str = 'cone_shift',
                  num_genotypes: int = 8,
                  trials_per_direction: int = 20,
-                 sex: str = 'both',
                  quest_params: Optional[Dict] = None,
-                 metameric_axes: Optional[List[int]] = [2]):
+                 metameric_axes: Optional[List[int]] = [2],
+                 **kwargs):
         """Initialize Quest-based color generator.
 
         Args:
-            color_space: ColorSpace object for the observer being tested
-            background_luminance: Background luminance level in VSH space (0-1)
+            sex: 'male', 'female', or 'both' for population to sample genotypes from
+            percentage_screened: Percentage of population to screen (not used for Quest, kept for API compatibility)
+            peak_to_test: Peak wavelength to test (not used for Quest, kept for API compatibility)
+            luminance: Background luminance level (0-1)
+            saturation: Saturation level (not used for Quest, kept for API compatibility)
+            dimensions: Dimensions to use (e.g., [2] for trichromats)
+            seed: Random seed
             mode: 'cone_shift' for genotype-based directions or 'full_sphere' for uniform + genotype sampling
             num_genotypes: Number of top genotypes to use (default 8, gives 32 directions for 4D)
             trials_per_direction: Number of trials per direction
-            sex: Population to sample genotypes from ('male', 'female', or 'both')
             quest_params: Optional dictionary of Quest parameters (tGuess, tGuessSd, pThreshold, beta, delta, gamma)
-            metameric_axes: Optional list of metameric axes to test (e.g., [1] for only testing 547nm cone). If None, tests all axes.
+            metameric_axes: Optional list of metameric axes to test (e.g., [2] for only testing 547nm cone). If None, tests all axes.
+            **kwargs: Additional arguments including display_primaries
         """
-        self.color_space = color_space
-        self.background_luminance = background_luminance
+        self.background_luminance = luminance
         self.mode = mode
         self.num_genotypes = num_genotypes
         self.trials_per_direction = trials_per_direction
         self.sex = sex
-        self.metameric_axes = metameric_axes if metameric_axes is not None else list(range(color_space.dim))
+        self.metameric_axes = metameric_axes if metameric_axes is not None else list(range(4))
+        self.dim = 4
 
         # Default Quest parameters
         default_quest_params = {
@@ -101,11 +111,27 @@ class QuestColorGenerator(ColorGenerator):
         # Initialize ObserverGenotypes for direction generation
         # Note: dimensions is M/L cones only (S cone added automatically)
         self.observer_genotypes = ObserverGenotypes(
-            dimensions=[self.color_space.dim - 1],
-            seed=42
+            dimensions=dimensions,
+            seed=seed
         )
 
-        self.background = np.ones(self.color_space.dim) * 0.5
+        genotypes = self.observer_genotypes.get_genotypes_covering_probability(
+            target_probability=percentage_screened, sex=self.sex
+        )[:self.num_genotypes]
+
+        self.genotype_mapping = {}
+
+        print(f"Using {len(genotypes)} top genotypes for direction generation")
+
+        for genotype in genotypes:
+            # Create color space for this genotype
+            genotype_cs = self.observer_genotypes.get_color_space_for_peaks(
+                genotype + (peak_to_test,),
+                **kwargs
+            )
+            self.genotype_mapping[genotype] = genotype_cs
+
+        self.background = np.ones(dimensions[0] + 1) * 0.5
 
         # Generate sampling directions (which include max points)
         self.directions, self.direction_metadata = self._generate_directions()
@@ -146,25 +172,13 @@ class QuestColorGenerator(ColorGenerator):
         Returns:
             Tuple of (directions, metadata)
         """
-        # Get top genotypes by probability
-        genotypes = self.observer_genotypes.get_genotypes_covering_probability(
-            target_probability=0.95, sex=self.sex
-        )[:self.num_genotypes]
-
-        print(f"Using {len(genotypes)} top genotypes for direction generation")
-
         directions = []
         metadata = []
 
-        for genotype in genotypes:
-            # Create color space for this genotype
-            genotype_cs = self.observer_genotypes.get_color_space_for_peaks(
-                genotype,
-                display_primaries=self.color_space.display_primaries
-            )
+        for genotype, genotype_cs in self.genotype_mapping.items():
 
             # For each metameric axis (each cone dimension)
-            for metameric_axis in [2]:
+            for metameric_axis in self.metameric_axes:
                 # Get metameric direction in DISP space
                 direction = genotype_cs.get_metameric_axis_in(
                     ColorSpaceType.DISP,
@@ -198,7 +212,7 @@ class QuestColorGenerator(ColorGenerator):
         cone_directions, cone_metadata = self._generate_cone_shift_directions()
 
         # Then add Fibonacci sphere directions in DISP space
-        dim = self.color_space.dim
+        dim = self.dim
         num_sphere_points = 50  # Maximum sphere points
 
         sphere_directions = []
@@ -371,16 +385,18 @@ class QuestColorGenerator(ColorGenerator):
         # direction_vec is already scaled by max_distance, so proportion directly scales it
         test_disp = self._disp_direction_to_point(background_disp, direction_vec, proportion)
 
+        genotype_cs = self.genotype_mapping[self.direction_metadata[direction_idx]['genotype']]
+
         # Convert both to cone space
-        background_cone = self.color_space.convert(
+        background_cone = genotype_cs.convert(
             np.array([background_disp]), ColorSpaceType.DISP, ColorSpaceType.CONE)[0]
-        test_cone = self.color_space.convert(
+        test_cone = genotype_cs.convert(
             np.array([test_disp]), ColorSpaceType.DISP, ColorSpaceType.CONE)[0]
 
         # Compute DISP distance from background (this is what we're thresholding)
         disp_distance = np.linalg.norm(test_disp - background_disp)
 
-        return background_cone, test_cone, self.color_space, disp_distance
+        return background_cone, test_cone, genotype_cs, disp_distance
 
     def _compute_final_thresholds(self):
         """Compute final threshold estimates for all directions."""
@@ -426,7 +442,7 @@ class QuestColorGenerator(ColorGenerator):
             writer = csv.writer(f)
 
             # Header
-            dim = self.color_space.dim
+            dim = self.dim
             max_point_cols = [f'max_pt_{i}' for i in range(dim)]
             direction_cols = [f'dir_{i}' for i in range(dim)]
             background_cols = [f'bg_{i}' for i in range(dim)]
@@ -540,21 +556,24 @@ class GeneticCDFTestColorGenerator(ColorGenerator):
         return inside_cone, outside_cone, color_space, metamer_difference
 
 
-class GeneticColorPicker:
+class GeneticColorGenerator(ColorGenerator):
     def __init__(self, sex: str, percentage_screened: float, peak_to_test: float = 547,
                  luminance: float = 1.0, saturation: float = 0.5,
-                 dimensions: Optional[List[int]] = [3], seed: int = 42, **kwargs):
+                 dimensions: Optional[List[int]] = [3], seed: int = 42,
+                 trials_per_direction: int = 20, metameric_axes: List[int] = [1, 2, 3], **kwargs):
         """Color picker that samples from the most common trichromatic phenotypes.
 
         Args:
             sex (str): 'male' or 'female'
             percentage_screened (float): Percentage of the population to screen
             peak_to_test (float, optional): Peak to test for. Defaults to 547, the functional peak.
-            metameric_axis (int, optional): Metameric axis to use. Defaults to 2.
             luminance (float, optional): Luminance level. Defaults to 1.0.
             saturation (float, optional): Saturation level. Defaults to 0.5.
             dimensions (Optional[List[int]], optional): Dimensions to screen. Defaults to [1, 2].
             seed (int): Seed for the random number generator
+            trials_per_direction (int, optional): Number of trials per direction. Defaults to 20.
+            metameric_axes (List[int], optional): Metameric axes to use. Defaults to [2].
+            **kwargs: Additional arguments including display_primaries
         """
         self.observer_genotypes = ObserverGenotypes(dimensions=dimensions, seed=seed)
         self.luminance = luminance
@@ -574,13 +593,48 @@ class GeneticColorPicker:
                     genotype + (peak_to_test,), **kwargs)
 
                 # Create color sampler and get cubemap values
-                color_samplers = []
-                for metameric_axis in range(4):
-                    color_samplers.append(ColorSampler(color_space, cubemap_size=5)
-                                          )
-                self.genotype_mapping[genotype] = [color_space, color_samplers]
+                color_sampler = ColorSampler(color_space, cubemap_size=5)
+                self.genotype_mapping[genotype] = [color_space, color_sampler]
 
         self.list_of_genotypes = list(self.genotype_mapping.keys())
+
+        self.trials_per_direction = trials_per_direction
+        self.metameric_axes = metameric_axes
+
+    def _generate_trials(self):
+        """Generate all (genotype, metameric_axis) pairs, repeated for the number of trials per direction, and shuffle them."""
+        trial_list = []
+        for genotype in self.list_of_genotypes:
+            for metameric_axis in self.metameric_axes:
+                for i in range(self.trials_per_direction):
+                    trial_list.append((genotype, metameric_axis))
+        np.random.shuffle(trial_list)
+        self._trial_list = trial_list
+        self._trial_idx = 0
+
+    def NewColor(self):
+        """Return the cone, axis, etc. for the next trial (for first use or after reset)."""
+        if not hasattr(self, "_trial_list") or self._trial_idx >= len(self._trial_list):
+            self._generate_trials()
+        genotype, metameric_axis = self._trial_list[self._trial_idx]
+        self._trial_idx += 1
+        return self.GetMetamericPair(genotype, metameric_axis)
+
+    def GetColor(self, previous_result: ColorTestResult):
+        """Return the cone, axis, etc. for the next trial (for adaptive test routines)."""
+        return self.NewColor()
+
+    def GetDirection(self) -> Tuple[npt.NDArray, int]:
+        """Get the direction for the next trial (for adaptive test routines)."""
+        if not hasattr(self, "_trial_list") or self._trial_idx >= len(self._trial_list):
+            self._generate_trials()
+        genotype, metameric_axis = self._trial_list[self._trial_idx]
+        self._trial_idx += 1
+        return genotype, metameric_axis
+
+    def get_num_samples(self):
+        """Returns the total number of trials in the pool."""
+        return len(self.list_of_genotypes) * len(self.metameric_axes) * self.trials_per_direction
 
     def GetGenotypes(self) -> List[Tuple]:
         """Get the list of genotypes.
@@ -603,9 +657,9 @@ class GeneticColorPicker:
         if genotype not in self.genotype_mapping:
             raise ValueError(f"Genotype {genotype} not found in mapping")
 
-        color_space, color_samplers = self.genotype_mapping[genotype]
+        color_space, color_sampler = self.genotype_mapping[genotype]
 
-        grid_points = color_samplers[metameric_axis].output_cubemap_values(
+        grid_points = color_sampler.output_cubemap_values(
             self.luminance, self.saturation, ColorSpaceType.DISP, metameric_axis=metameric_axis)[4]
         max_diff = 0.0
         max_diff_idx = 0
@@ -615,7 +669,7 @@ class GeneticColorPicker:
             inside_cone, outside_cone, _ = color_space.get_maximal_pair_in_disp_from_pt(
                 point, metameric_axis=metameric_axis)
             if inside_cone[metameric_axis] - outside_cone[metameric_axis] > 0.02:
-                return inside_cone, outside_cone, color_space
+                return inside_cone, outside_cone, color_space, inside_cone[metameric_axis] - outside_cone[metameric_axis]
             else:
                 max_diff = max(max_diff, inside_cone[metameric_axis] - outside_cone[metameric_axis])
                 max_diff_idx = random_idx
@@ -625,7 +679,7 @@ class GeneticColorPicker:
         inside_cone, outside_cone, _ = color_space.get_maximal_pair_in_disp_from_pt(
             point, metameric_axis=metameric_axis)
 
-        return inside_cone, outside_cone, color_space
+        return inside_cone, outside_cone, color_space, max_diff
 
 
 class CircleGridGenerator:
@@ -639,10 +693,11 @@ class CircleGridGenerator:
             sex (str): 'male' or 'female'
             percentage_screened (float): Percentage of the population to screen
             peak_to_test (float, optional): Peak to test for. Defaults to 547, the functional peak.
-            metameric_axis (int, optional): Metameric axis to use. Defaults to 2.
             luminance (float, optional): Luminance level. Defaults to 1.0.
             saturation (float, optional): Saturation level. Defaults to 0.5.
             dimensions (Optional[List[int]], optional): Dimensions to screen. Defaults to [1, 2].
+            trials_per_direction (int, optional): Number of trials per direction. Defaults to 20.
+            metameric_axes (List[int], optional): Metameric axes to use. Defaults to [2].
             seed (int): Seed for the random number generator
         """
         self.observer_genotypes = ObserverGenotypes(dimensions=dimensions, seed=seed)
@@ -675,25 +730,6 @@ class CircleGridGenerator:
             List[Tuple]: The list of genotypes.
         """
         return self.genotypes
-
-    def GetImages(self, genotype: Tuple, metameric_axis: int, filenames: List[str], output_space: ColorSpaceType = ColorSpaceType.DISP_6P) -> List[Tuple[int, int]]:
-        if genotype not in self.genotype_mapping:
-            raise ValueError(f"Genotype {genotype} not found in mapping")
-
-        _, color_sampler = self.genotype_mapping[genotype]
-
-        image_tuples, idxs = color_sampler.get_hue_sphere_scramble(
-            self.luminance, self.saturation, 4, metameric_axis=metameric_axis, scramble_prob=self.scramble_prob, output_space=output_space)
-
-        if output_space == ColorSpaceType.DISP_6P:
-            for i, (rgb, ocv) in enumerate(image_tuples):
-                rgb.save(filenames[i] + "_RGB.png")
-                ocv.save(filenames[i] + "_OCV.png")
-            return idxs
-        else:
-            for i, im in enumerate(image_tuples):
-                im.save(filenames[i] + "_SRGB.png")
-            return idxs
 
 
 if __name__ == "__main__":
