@@ -1,5 +1,6 @@
 #include "TetriumColor/TestGenerator.h"
 #include <iostream>
+#include <map>
 #include <stdexcept>
 
 namespace TetriumColor
@@ -412,6 +413,165 @@ std::vector<std::string> TestGenerator::GetGenotypes()
     }
     Py_DECREF(pResult);
     return genotypes;
+}
+
+int TestGenerator::GetTotalTrials()
+{
+    if (!pInstance) {
+        return -1;
+    }
+
+    // Try to get color_generator from TestGenerator instance
+    PyObject* pColorGenerator = PyObject_GetAttrString(pInstance, "color_generator");
+    if (!pColorGenerator) {
+        PyErr_Clear();
+        return -1;
+    }
+
+    // Try to call get_num_samples() on color generator
+    PyObject* pMethod = PyObject_GetAttrString(pColorGenerator, "get_num_samples");
+    Py_DECREF(pColorGenerator);
+
+    if (!pMethod || !PyCallable_Check(pMethod)) {
+        Py_XDECREF(pMethod);
+        return -1;
+    }
+
+    PyObject* pResult = PyObject_CallObject(pMethod, nullptr);
+    Py_DECREF(pMethod);
+
+    if (!pResult) {
+        PyErr_Clear();
+        return -1;
+    }
+
+    int totalTrials = -1;
+    if (PyLong_Check(pResult)) {
+        totalTrials = PyLong_AsLong(pResult);
+    }
+    Py_DECREF(pResult);
+    return totalTrials;
+}
+
+std::map<int, std::map<std::string, std::string>> TestGenerator::GetThresholds()
+{
+    std::map<int, std::map<std::string, std::string>> thresholds;
+    if (!pInstance) {
+        return thresholds;
+    }
+
+    // Try to get color_generator from TestGenerator instance
+    PyObject* pColorGenerator = PyObject_GetAttrString(pInstance, "color_generator");
+    if (!pColorGenerator) {
+        PyErr_Clear();
+        return thresholds;
+    }
+
+    // Try to call get_thresholds() on color generator
+    PyObject* pMethod = PyObject_GetAttrString(pColorGenerator, "get_thresholds");
+    Py_DECREF(pColorGenerator);
+
+    if (!pMethod || !PyCallable_Check(pMethod)) {
+        Py_XDECREF(pMethod);
+        return thresholds;
+    }
+
+    PyObject* pResult = PyObject_CallObject(pMethod, nullptr);
+    Py_DECREF(pMethod);
+
+    if (!pResult) {
+        PyErr_Clear();
+        return thresholds;
+    }
+
+    // Parse the returned dict
+    if (PyDict_Check(pResult)) {
+        PyObject *key, *value;
+        Py_ssize_t pos = 0;
+        while (PyDict_Next(pResult, &pos, &key, &value)) {
+            if (PyLong_Check(key) && PyDict_Check(value)) {
+                int directionIdx = PyLong_AsLong(key);
+                std::map<std::string, std::string> directionData;
+
+                // Parse nested dict
+                PyObject *innerKey, *innerValue;
+                Py_ssize_t innerPos = 0;
+                while (PyDict_Next(value, &innerPos, &innerKey, &innerValue)) {
+                    if (PyUnicode_Check(innerKey)) {
+                        const char* keyStr = PyUnicode_AsUTF8(innerKey);
+                        std::string valStr;
+
+                        // Convert value to string
+                        if (PyUnicode_Check(innerValue)) {
+                            valStr = PyUnicode_AsUTF8(innerValue);
+                        } else if (PyFloat_Check(innerValue)) {
+                            valStr = std::to_string(PyFloat_AsDouble(innerValue));
+                        } else if (PyLong_Check(innerValue)) {
+                            valStr = std::to_string(PyLong_AsLong(innerValue));
+                        } else if (PyList_Check(innerValue) || PyTuple_Check(innerValue)) {
+                            // Convert list/tuple to string representation
+                            PyObject* strObj = PyObject_Str(innerValue);
+                            if (strObj) {
+                                valStr = PyUnicode_AsUTF8(strObj);
+                                Py_DECREF(strObj);
+                            }
+                        } else {
+                            PyObject* strObj = PyObject_Str(innerValue);
+                            if (strObj) {
+                                valStr = PyUnicode_AsUTF8(strObj);
+                                Py_DECREF(strObj);
+                            }
+                        }
+
+                        if (keyStr) {
+                            directionData[keyStr] = valStr;
+                        }
+                    }
+                }
+                thresholds[directionIdx] = directionData;
+            }
+        }
+    }
+    Py_DECREF(pResult);
+    return thresholds;
+}
+
+bool TestGenerator::ExportThresholds(const std::string& filename)
+{
+    if (!pInstance) {
+        return false;
+    }
+
+    // Try to get color_generator from TestGenerator instance
+    PyObject* pColorGenerator = PyObject_GetAttrString(pInstance, "color_generator");
+    if (!pColorGenerator) {
+        PyErr_Clear();
+        return false;
+    }
+
+    // Try to call export_thresholds() on color generator
+    PyObject* pMethod = PyObject_GetAttrString(pColorGenerator, "export_thresholds");
+    Py_DECREF(pColorGenerator);
+
+    if (!pMethod || !PyCallable_Check(pMethod)) {
+        Py_XDECREF(pMethod);
+        return false;
+    }
+
+    PyObject* pArgs = PyTuple_New(1);
+    PyTuple_SetItem(pArgs, 0, PyUnicode_FromString(filename.c_str()));
+
+    PyObject* pResult = PyObject_CallObject(pMethod, pArgs);
+    Py_DECREF(pMethod);
+    Py_DECREF(pArgs);
+
+    bool success = (pResult != nullptr);
+    if (pResult) {
+        Py_DECREF(pResult);
+    } else {
+        PyErr_Clear();
+    }
+    return success;
 }
 
 } // namespace TetriumColor

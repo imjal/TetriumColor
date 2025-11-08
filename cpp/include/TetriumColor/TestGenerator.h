@@ -45,6 +45,18 @@ class TestGenerator
     // Returns empty vector if method doesn't exist
     std::vector<std::string> GetGenotypes();
 
+    // Get total number of trials (if available from color generator)
+    // Returns -1 if not available
+    int GetTotalTrials();
+
+    // Get thresholds dictionary (for QuestColorGenerator)
+    // Returns empty map if not available or not Quest
+    std::map<int, std::map<std::string, std::string>> GetThresholds();
+
+    // Export thresholds to CSV file (for QuestColorGenerator)
+    // Returns true if successful, false otherwise
+    bool ExportThresholds(const std::string& filename);
+
   private:
     PyObject* pInstance; // Python TestGenerator instance
 

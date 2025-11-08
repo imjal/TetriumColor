@@ -441,25 +441,20 @@ class QuestColorGenerator(ColorGenerator):
         with open(filename, 'w', newline='') as f:
             writer = csv.writer(f)
 
-            # Header
-            dim = self.dim
-            max_point_cols = [f'max_pt_{i}' for i in range(dim)]
-            direction_cols = [f'dir_{i}' for i in range(dim)]
-            background_cols = [f'bg_{i}' for i in range(dim)]
-            writer.writerow(['direction_idx'] + max_point_cols + direction_cols + background_cols +
-                            ['threshold_distance', 'threshold_proportion', 'threshold_log_proportion',
-                             'max_distance', 'sd_log', 'trials',
-                             'genotype', 'metameric_axis', 'type'])
+            # Header - simplified to only essential columns
+            writer.writerow(['direction_idx', 'threshold_distance', 'threshold_proportion',
+                            'genotype', 'metameric_axis'])
 
             # Data
             for idx in sorted(thresholds.keys()):
                 data = thresholds[idx]
                 genotype_str = ','.join(map(str, data['genotype'])) if data['genotype'] else 'None'
-                row = [idx] + list(data['direction']) + list(data['background']) + [
-                    data['threshold_distance'], data['threshold_proportion'],
-                    data['threshold_log_proportion'], data['max_distance'],
-                    data['sd_log'], data['trials'],
-                    genotype_str, data['metameric_axis'], data['type']
+                row = [
+                    idx,
+                    data['threshold_distance'],
+                    data['threshold_proportion'],
+                    genotype_str,
+                    data['metameric_axis']
                 ]
                 writer.writerow(row)
 
