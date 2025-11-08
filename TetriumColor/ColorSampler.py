@@ -32,44 +32,46 @@ class ColorSampler:
 
         Parameters:
             color_space (ColorSpace): The color space to sample from
+            cubemap_size (int): Size of the lookup table (cubemap size for 4D, circle resolution for 3D)
+            disable (bool): Whether to disable progress bars
         """
         self.color_space = color_space
         self.disable = disable
-        self._gamut_cubemap = None
+        self._gamut_lut = None
         self._lum_range = None
         self._sat_range = None
-        self._cubemap_size = cubemap_size  # Default size for the cubemap
+        self._cubemap_size = cubemap_size  # For 4D: cubemap size, for 3D: circle resolution
         self._max_L = color_space.max_L
 
-        # Try to load cubemap from cache during initialization
+        # Try to load LUT from cache during initialization
         if not self._load_from_cache():
-            print("Failed to load cubemap from cache, generating new cubemap")
+            print("Failed to load LUT from cache, generating new LUT")
             self.get_gamut_lut()
 
     def _get_cache_filename(self) -> str:
         """
-        Generate a unique filename for caching the cubemap based on the color space.
+        Generate a unique filename for caching the LUT based on the color space.
 
         Returns:
             str: Cache filename
         """
-        # Add cubemap size to the hash input
-        hash_input = f"{str(self.color_space)}|cubemap_size:{self._cubemap_size}"
+        # Add LUT size to the hash input
+        hash_input = f"{str(self.color_space)}|lut_size:{self._cubemap_size}"
 
         # Create MD5 hash
         hash_obj = hashlib.md5(hash_input.encode())
         hash_str = hash_obj.hexdigest()
 
-        return f"cubemap_{hash_str}.pkl"
+        return f"gamut_lut_{hash_str}.pkl"
 
     def _save_to_cache(self) -> None:
-        """Save cubemap and range data to cache."""
-        if self._gamut_cubemap is None:
+        """Save LUT and range data to cache."""
+        if self._gamut_lut is None:
             return
 
         # Save data
         cache_data = {
-            'cubemap': self._gamut_cubemap,
+            'lut': self._gamut_lut,
             'lum_range': self._lum_range,
             'sat_range': self._sat_range
         }
@@ -79,13 +81,13 @@ class ColorSampler:
             with resources.path("TetriumColor.Assets.Cache", _cache_file) as path:
                 with open(path, "wb") as f:
                     pickle.dump(cache_data, f)
-            print(f"Saved cubemap cache to {_cache_file}")
+            print(f"Saved LUT cache to {_cache_file}")
         except Exception as e:
-            print(f"Failed to save cubemap cache: {e}")
+            print(f"Failed to save LUT cache: {e}")
 
     def _load_from_cache(self) -> bool:
         """
-        Load cubemap and range data from cache.
+        Load LUT and range data from cache.
 
         Returns:
             bool: True if data was successfully loaded, False otherwise
@@ -97,31 +99,48 @@ class ColorSampler:
                 try:
                     with open(path, "rb") as f:
                         cache_data = pickle.load(f)
-                    self._gamut_cubemap = cache_data['cubemap']
+                    self._gamut_lut = cache_data['lut']
                     self._lum_range = cache_data['lum_range']
                     self._sat_range = cache_data['sat_range']
                     return True
                 except Exception as e:
-                    print(f"Failed to load cubemap from cache: {e}")
+                    print(f"Failed to load LUT from cache: {e}")
                     return False
             else:
                 return False
 
-    def _generate_gamut_cubemap(self, cubemap_size: Optional[int] = None) -> Tuple[Dict, Tuple[Tuple[float, float], Tuple[float, float]]]:
+    def _generate_gamut_lut(self, lut_size: Optional[int] = None) -> Tuple[Union[Dict, npt.NDArray], Tuple[Tuple[float, float], Tuple[float, float]]]:
         """
-        Generate a cubemap representation of the gamut boundaries.
+        Generate a lookup table representation of the gamut boundaries.
 
         Parameters:
-            cubemap_size (int, optional): Size of the cubemap images
+            lut_size (int, optional): Size of the lookup table
 
         Returns:
             Tuple containing:
-                - Dict of cubemap images
+                - LUT data (Dict of 6 images for 4D, NDArray for 3D)
                 - Tuple of luminance and saturation ranges
         """
-        if cubemap_size:
-            self._cubemap_size = cubemap_size
+        if lut_size:
+            self._cubemap_size = lut_size
 
+        if self.color_space.dim == 4:
+            return self._generate_gamut_cubemap()
+        elif self.color_space.dim == 3:
+            return self._generate_gamut_circle()
+        else:
+            raise ValueError(
+                f"ColorSampler not implemented for {self.color_space.dim}D color spaces. Only 3D and 4D are supported.")
+
+    def _generate_gamut_cubemap(self) -> Tuple[Dict, Tuple[Tuple[float, float], Tuple[float, float]]]:
+        """
+        Generate a cubemap representation of the gamut boundaries (for 4D color spaces).
+
+        Returns:
+            Tuple containing:
+                - Dict of cubemap images (6 faces)
+                - Tuple of luminance and saturation ranges
+        """
         # Generate grid of UV coordinates
         all_us = (np.arange(self._cubemap_size) + 0.5) / self._cubemap_size
         all_vs = (np.arange(self._cubemap_size) + 0.5) / self._cubemap_size
@@ -188,45 +207,67 @@ class ColorSampler:
 
         return cubemap_images, ((lum_min, lum_max), (sat_min, sat_max))
 
-    def get_gamut_lut(self, force_recompute: bool = False) -> None:
+    def _generate_gamut_circle(self) -> Tuple[npt.NDArray, Tuple[Tuple[float, float], Tuple[float, float]]]:
         """
-        Get the gamut lookup table, represented as a cubemap.
-
-        Tries to load from cache first, or computes and caches if not available.
-
-        Parameters:
-            force_recompute (bool): Whether to force recomputation
-        """
-        if force_recompute:
-            # Skip cache if forced to recompute
-            self._gamut_cubemap, ranges = self._generate_gamut_cubemap()
-            self._lum_range, self._sat_range = ranges
-            # Save to cache for future use
-            self._save_to_cache()
-        elif self._gamut_cubemap is None:
-            # Try loading from cache first (already tried during init)
-            # If not loaded, generate and save
-            self._gamut_cubemap, ranges = self._generate_gamut_cubemap()
-            self._lum_range, self._sat_range = ranges
-            self._save_to_cache()
-
-    def _get_transform_chrom_to_metameric_dir(self, metameric_axis: int = 2) -> npt.NDArray:
-        """
-        Get the transformation matrix from chromatic coordinates to metameric direction.
+        Generate a circle-based representation of the gamut boundaries (for 3D color spaces).
 
         Returns:
-            npt.NDArray: Transformation matrix
+            Tuple containing:
+                - 1D array of (lum_cusp, sat_cusp) pairs indexed by theta
+                - Tuple of luminance and saturation ranges
         """
-        normalized_direction = self.color_space.get_metameric_axis_in(
-            ColorSpaceType.HERING, metameric_axis_num=metameric_axis)
-        return Geometry.RotateToZAxis(normalized_direction[1:])
+        # Sample angles uniformly around the circle
+        all_angles = Geometry.SampleCircle(self._cubemap_size)
+        all_thetas = all_angles.flatten()
 
-    def _angles_to_cube_uv(self, angles: tuple[float, float]):
+        # For each angle, find the cusp point
+        lut_data = []
+        iterator = range(len(all_thetas)) if self.disable else tqdm(
+            range(len(all_thetas)), desc="Generating circle LUT")
+        for i in iterator:
+            theta = all_thetas[i]
+            # Find cusp point for this hue angle
+            hue_cartesian = self.color_space.convert(
+                np.array([[0, 1, theta]]), ColorSpaceType.VSH, ColorSpaceType.HERING)
+            max_sat_point = self._find_maximal_saturation(
+                (self.color_space._get_hering_to_disp() @ hue_cartesian.T).T[0])
+            max_sat_hering = np.linalg.inv(self.color_space._get_hering_to_disp()) @ max_sat_point
+            max_sat_vsh = self.color_space.convert(
+                max_sat_hering[np.newaxis, :], ColorSpaceType.HERING, ColorSpaceType.VSH)[0]
+            lum_cusp, sat_cusp = max_sat_vsh[0], max_sat_vsh[1]
+            lut_data.append((lum_cusp, sat_cusp))
+
+        lut_array = np.array(lut_data)
+
+        # Compute overall ranges for normalization
+        lum_min, lum_max = np.min(lut_array[:, 0]), np.max(lut_array[:, 0])
+        sat_min, sat_max = np.min(lut_array[:, 1]), np.max(lut_array[:, 1])
+
+        return lut_array, ((lum_min, lum_max), (sat_min, sat_max))
+
+    def _angles_to_lut_coords(self, angles: tuple) -> Union[Tuple[int, float, float], float]:
         """
-        Convert angles to cube face index and UV coordinates.
+        Convert angles to LUT coordinates.
 
         Parameters:
-            angles (tuple): Angles to convert
+            angles (tuple): Angles to convert (theta, phi) for 4D or (theta,) for 3D
+
+        Returns:
+            LUT coordinates: (face_idx, u, v) for 4D, float for 3D
+        """
+        if self.color_space.dim == 4:
+            return self._angles_to_cube_uv(angles)
+        elif self.color_space.dim == 3:
+            return self._angle_to_circle_coord(angles)
+        else:
+            raise ValueError(f"ColorSampler not implemented for {self.color_space.dim}D color spaces.")
+
+    def _angles_to_cube_uv(self, angles: tuple[float, float]) -> Tuple[int, float, float]:
+        """
+        Convert angles to cube face index and UV coordinates (for 4D).
+
+        Parameters:
+            angles (tuple): Angles (theta, phi) to convert
 
         Returns:
             Tuple[int, float, float]: Cube face index and UV coordinates
@@ -236,9 +277,26 @@ class ColorSampler:
         face_id, u, v = Geometry.ConvertXYZToCubeUV(x, y, z)
         return int(face_id), float(u), float(v)
 
-    def _interpolate_from_cubemap(self, angles: tuple) -> Tuple[float, float]:
+    def _angle_to_circle_coord(self, angles: tuple[float]) -> float:
         """
-        Interpolate luminance and saturation values from the cubemap for given angles.
+        Convert angle to LUT coordinate (for 3D).
+
+        Parameters:
+            angles (tuple): Single angle (theta) to convert
+
+        Returns:
+            float: Coordinate in [0, circle_size) for interpolation
+        """
+        theta = angles[0]
+        # Normalize theta to [0, 2π)
+        theta = theta % (2 * np.pi)
+        # Convert to index coordinate [0, cubemap_size)
+        coord = (theta / (2 * np.pi)) * self._cubemap_size
+        return coord
+
+    def _interpolate_from_lut(self, angles: tuple) -> Tuple[float, float]:
+        """
+        Interpolate luminance and saturation values from the LUT for given angles.
 
         Parameters:
             angles (tuple): Angles for which to interpolate values
@@ -246,7 +304,24 @@ class ColorSampler:
         Returns:
             Tuple[float, float]: Interpolated luminance and saturation values
         """
-        if self._gamut_cubemap is None:
+        if self.color_space.dim == 4:
+            return self._interpolate_from_cubemap(angles)
+        elif self.color_space.dim == 3:
+            return self._interpolate_from_circle(angles)
+        else:
+            raise ValueError(f"ColorSampler not implemented for {self.color_space.dim}D color spaces.")
+
+    def _interpolate_from_cubemap(self, angles: tuple) -> Tuple[float, float]:
+        """
+        Interpolate luminance and saturation values from the cubemap for given angles (for 4D).
+
+        Parameters:
+            angles (tuple): Angles (theta, phi) for which to interpolate values
+
+        Returns:
+            Tuple[float, float]: Interpolated luminance and saturation values
+        """
+        if self._gamut_lut is None:
             self.get_gamut_lut()  # Initialize the cubemap if not already done
 
         face_idx, u, v = self._angles_to_cube_uv(angles)
@@ -254,7 +329,7 @@ class ColorSampler:
         lum_min, lum_max = self._lum_range
         sat_min, sat_max = self._sat_range
 
-        img = self._gamut_cubemap[face_idx]
+        img = self._gamut_lut[face_idx]
         # Convert UV to pixel coordinates
         x, y = u * img.width, v * img.height
 
@@ -278,6 +353,65 @@ class ColorSampler:
         sat = (g / 255.0) * (sat_max - sat_min) + sat_min
 
         return lum, sat
+
+    def _interpolate_from_circle(self, angles: tuple) -> Tuple[float, float]:
+        """
+        Interpolate luminance and saturation values from the circle LUT for given angle (for 3D).
+
+        Parameters:
+            angles (tuple): Single angle (theta) for which to interpolate values
+
+        Returns:
+            Tuple[float, float]: Interpolated luminance and saturation values
+        """
+        if self._gamut_lut is None:
+            self.get_gamut_lut()  # Initialize the LUT if not already done
+
+        coord = self._angle_to_circle_coord(angles)
+
+        # Get integer indices and fractional part for linear interpolation
+        idx0 = int(coord) % self._cubemap_size
+        idx1 = (idx0 + 1) % self._cubemap_size
+        t = coord - int(coord)
+
+        # Linear interpolation
+        lum_cusp = (1 - t) * self._gamut_lut[idx0, 0] + t * self._gamut_lut[idx1, 0]
+        sat_cusp = (1 - t) * self._gamut_lut[idx0, 1] + t * self._gamut_lut[idx1, 1]
+
+        return lum_cusp, sat_cusp
+
+    def get_gamut_lut(self, force_recompute: bool = False) -> None:
+        """
+        Get the gamut lookup table.
+
+        Tries to load from cache first, or computes and caches if not available.
+
+        Parameters:
+            force_recompute (bool): Whether to force recomputation
+        """
+        if force_recompute:
+            # Skip cache if forced to recompute
+            self._gamut_lut, ranges = self._generate_gamut_lut()
+            self._lum_range, self._sat_range = ranges
+            # Save to cache for future use
+            self._save_to_cache()
+        elif self._gamut_lut is None:
+            # Try loading from cache first (already tried during init)
+            # If not loaded, generate and save
+            self._gamut_lut, ranges = self._generate_gamut_lut()
+            self._lum_range, self._sat_range = ranges
+            self._save_to_cache()
+
+    def _get_transform_chrom_to_metameric_dir(self, metameric_axis: int = 2) -> npt.NDArray:
+        """
+        Get the transformation matrix from chromatic coordinates to metameric direction.
+
+        Returns:
+            npt.NDArray: Transformation matrix
+        """
+        normalized_direction = self.color_space.get_metameric_axis_in(
+            ColorSpaceType.HERING, metameric_axis_num=metameric_axis)
+        return Geometry.RotateToZAxis(normalized_direction[1:])
 
     def _find_maximal_saturation(self, hue_direction: npt.NDArray) -> npt.NDArray:
         """
@@ -359,11 +493,11 @@ class ColorSampler:
         is_single = isinstance(angles, tuple)
         angle_list = [angles] if is_single else angles
 
-        # If cubemap is available, use interpolation (faster)
-        if self._gamut_cubemap is not None:
+        # If LUT is available, use interpolation (faster)
+        if self._gamut_lut is not None:
             sat_maxes = []
             for angle in angle_list:
-                lum_cusp, sat_cusp = self._interpolate_from_cubemap(angle)
+                lum_cusp, sat_cusp = self._interpolate_from_lut(angle)
                 sat_max = self._solve_for_boundary(luminance, self._max_L, lum_cusp, sat_cusp)
                 sat_maxes.append(sat_max)
         # Otherwise compute directly (more accurate)
@@ -518,8 +652,10 @@ class ColorSampler:
         Concatenate cubemap textures into a single cross-layout image with correct orientation.
 
         Parameters:
-            basename (str): The base name of the input files, e.g., "texture". Files are assumed to follow the format "<basename>_i.png".
-                        `i` corresponds to the index: 0 (+X), 1 (-X), 2 (+Y), 3 (-Y), 4 (+Z), 5 (-Z).
+            faces: List of 6 cubemap face images
+
+        Returns:
+            PIL.Image: Concatenated cubemap image
         """
         # Assume all faces are the same size
         face_width, face_height = faces[0].size
@@ -542,12 +678,11 @@ class ColorSampler:
         # -Z (5) flipped horizontally
         cubemap_image.paste(faces[5], (3 * face_width, face_height))
 
-        # Save the concatenated image
         return cubemap_image
 
     def generate_cubemap(self, luminance: float, saturation: float,
-                         display_color_space: ColorSpaceType = ColorSpaceType.SRGB) -> List[Image.Image]:
-        """Generate a cubemap within the gamut boundaries
+                         display_color_space: ColorSpaceType = ColorSpaceType.SRGB) -> Union[List[Image.Image], Image.Image]:
+        """Generate a cubemap (4D) or circle map (3D) within the gamut boundaries
 
         Args:
             luminance (float): luminance
@@ -555,9 +690,19 @@ class ColorSampler:
             display_color_space (ColorSpaceType, optional): color space that you want to transform to. Defaults to ColorSpaceType.SRGB.
 
         Returns:
-            PIL.Image.Image: Image of the cubemap
+            List[PIL.Image.Image] for 4D: List of 6 cubemap face images
+            PIL.Image.Image for 3D: Single circle map image
         """
+        if self.color_space.dim == 4:
+            return self._generate_cubemap_4d(luminance, saturation, display_color_space)
+        elif self.color_space.dim == 3:
+            return self._generate_circle_map_3d(luminance, saturation, display_color_space)
+        else:
+            raise ValueError(f"generate_cubemap not implemented for {self.color_space.dim}D color spaces.")
 
+    def _generate_cubemap_4d(self, luminance: float, saturation: float,
+                             display_color_space: ColorSpaceType) -> List[Image.Image]:
+        """Generate a cubemap within the gamut boundaries (4D only)"""
         # Generate grid of UV coordinates
         all_us = (np.arange(self._cubemap_size) + 0.5) / self._cubemap_size
         all_vs = (np.arange(self._cubemap_size) + 0.5) / self._cubemap_size
@@ -575,7 +720,7 @@ class ColorSampler:
             xyz = Geometry.ConvertCubeUVToXYZ(i, cube_u, cube_v, 1).reshape(-1, 3)
             xyz = np.dot(invMetamericDirMat, xyz.T).T
 
-            max_saturations = np.array(self._gamut_cubemap[i]).reshape(-1, 3)[:, 1]/255
+            max_saturations = np.array(self._gamut_lut[i]).reshape(-1, 3)[:, 1]/255
             normalized_saturations = (
                 max_saturations * (self._sat_range[1] - self._sat_range[0])) + self._sat_range[0]
 
@@ -600,26 +745,75 @@ class ColorSampler:
 
         return cubemap_images
 
+    def _generate_circle_map_3d(self, luminance: float, saturation: float,
+                                display_color_space: ColorSpaceType) -> Image.Image:
+        """Generate a circle map within the gamut boundaries (3D only)"""
+        # Sample angles uniformly
+        all_angles = Geometry.SampleCircle(self._cubemap_size)
+        all_thetas = all_angles.flatten()
+
+        # Get max saturations from LUT
+        max_saturations = self._gamut_lut[:, 1]
+        normalized_saturations = max_saturations
+
+        # Create VSH points
+        vshh = np.zeros((len(all_thetas), 3))
+        vshh[:, 0] = luminance
+        vshh[:, 1] = np.minimum(saturation, normalized_saturations)
+        vshh[:, 2] = all_thetas
+
+        # Remap to gamut
+        remapped_points = self.remap_to_gamut(vshh)
+        corresponding_colors = self.color_space.convert(remapped_points, ColorSpaceType.VSH, display_color_space)
+
+        # Convert colors to 8-bit format
+        corresponding_colors = np.clip(corresponding_colors, 0, 1) * 255
+        corresponding_colors = corresponding_colors.astype(np.uint8)
+
+        # Create a square image (we'll arrange colors in a square grid for visualization)
+        side_length = int(np.ceil(np.sqrt(self._cubemap_size)))
+        img_array = np.zeros((side_length, side_length, 3), dtype=np.uint8)
+
+        for i, color in enumerate(corresponding_colors):
+            row = i // side_length
+            col = i % side_length
+            if row < side_length and col < side_length:
+                img_array[row, col] = color
+
+        return Image.fromarray(img_array, 'RGB')
+
     def generate_concatenated_cubemap(self, luminance: float, saturation: float,
                                       display_color_space: ColorSpaceType = ColorSpaceType.SRGB) -> Image.Image:
-        """Generate a cubemap and return it concatenated"""
-
-        cubemap_images = self.generate_cubemap(luminance, saturation, display_color_space)
+        """Generate a cubemap and return it concatenated (4D only)"""
+        if self.color_space.dim != 4:
+            raise ValueError("generate_concatenated_cubemap only works for 4D color spaces")
+        cubemap_images = self._generate_cubemap_4d(luminance, saturation, display_color_space)
         return self._concatenate_cubemap(cubemap_images)
 
     def output_cubemap_values(self, luminance: float, saturation: float,
-                              display_color_space: ColorSpaceType = ColorSpaceType.SRGB, metameric_axis: int = 2) -> List[npt.NDArray]:
-        """Generate a cubemap within the gamut boundaries
+                              display_color_space: ColorSpaceType = ColorSpaceType.SRGB, metameric_axis: int = 2) -> Union[List[npt.NDArray], npt.NDArray]:
+        """Generate cubemap values (4D) or circle values (3D) within the gamut boundaries
 
         Args:
             luminance (float): luminance
             saturation (float): saturation
             display_color_space (ColorSpaceType, optional): color space that you want to transform to. Defaults to ColorSpaceType.SRGB.
+            metameric_axis (int): metameric axis to use (4D only)
 
         Returns:
-            PIL.Image.Image: Image of the cubemap
+            List[npt.NDArray] for 4D: List of 6 arrays, one for each cubemap face
+            npt.NDArray for 3D: Array of colors in display_color_space
         """
+        if self.color_space.dim == 4:
+            return self._output_cubemap_values_4d(luminance, saturation, display_color_space, metameric_axis)
+        elif self.color_space.dim == 3:
+            return self._output_circle_values_3d(luminance, saturation, display_color_space)
+        else:
+            raise ValueError(f"output_cubemap_values not implemented for {self.color_space.dim}D color spaces.")
 
+    def _output_cubemap_values_4d(self, luminance: float, saturation: float,
+                                  display_color_space: ColorSpaceType, metameric_axis: int) -> List[npt.NDArray]:
+        """Generate cubemap values within the gamut boundaries (4D only)"""
         # Generate grid of UV coordinates
         all_us = (np.arange(self._cubemap_size) + 0.5) / self._cubemap_size
         all_vs = (np.arange(self._cubemap_size) + 0.5) / self._cubemap_size
@@ -636,7 +830,7 @@ class ColorSampler:
             xyz = Geometry.ConvertCubeUVToXYZ(i, cube_u, cube_v, 1).reshape(-1, 3)
             xyz = np.dot(invMetamericDirMat, xyz.T).T
 
-            max_saturations = np.array(self._gamut_cubemap[i]).reshape(-1, 3)[:, 1]/255
+            max_saturations = np.array(self._gamut_lut[i]).reshape(-1, 3)[:, 1]/255
             normalized_saturations = (
                 max_saturations * (self._sat_range[1] - self._sat_range[0])) + self._sat_range[0]
 
@@ -652,34 +846,27 @@ class ColorSampler:
             colors += [self.color_space.convert(remapped_points, ColorSpaceType.VSH, display_color_space)]
         return colors
 
-    def get_metameric_pairs(self, luminance: float, saturation: float, cube_idx: int, metameric_axis: int = 2) -> Tuple[npt.NDArray, npt.NDArray]:
-        """ Get the metamer points for a given luminance and cube index
-        Args:
-            luminance (float): luminance value
-            saturation (float): saturation value
-            cube_idx (int): cube index
-            metameric_axis (int): metameric axis to use
+    def _output_circle_values_3d(self, luminance: float, saturation: float,
+                                 display_color_space: ColorSpaceType) -> npt.NDArray:
+        """Generate circle values within the gamut boundaries (3D only)"""
+        # Sample angles uniformly
+        all_angles = Geometry.SampleCircle(self._cubemap_size)
+        all_thetas = all_angles.flatten()
 
-        Returns:
-            npt.NDArray: The metamer points
-        """
-        disp_points = self.output_cubemap_values(
-            luminance, saturation, ColorSpaceType.DISP, metameric_axis=metameric_axis)[cube_idx]
-        metamer_dir_in_disp = self.color_space.get_metameric_axis_in(
-            ColorSpaceType.DISP, metameric_axis_num=metameric_axis)
+        # Get max saturations from LUT
+        max_saturations = self._gamut_lut[:, 1]
+        normalized_saturations = max_saturations
 
-        vec = np.zeros(self.color_space.dim)
-        vec[0] = luminance
+        # Create VSH points
+        vshh = np.zeros((len(all_thetas), 3))
+        vshh[:, 0] = luminance
+        vshh[:, 1] = np.minimum(saturation, normalized_saturations)
+        vshh[:, 2] = all_thetas
 
-        metamers_in_disp = np.zeros((disp_points.shape[0], 2, self.color_space.dim))
-        for i in range(metamers_in_disp.shape[0]):
-            # points in contention in disp space, bounded by unit cube scaled by vectors, direction is the metameric axis
-            metamers_in_disp[i] = np.array(FindMaximumIn1DimDirection(
-                disp_points[i], metamer_dir_in_disp, np.eye(self.color_space.dim)))
-
-        cones = self.color_space.convert(metamers_in_disp.reshape(-1, self.color_space.dim),
-                                         ColorSpaceType.DISP, ColorSpaceType.CONE)
-        return metamers_in_disp, cones.reshape(-1, 2, self.color_space.dim)
+        # Remap to gamut
+        remapped_points = self.remap_to_gamut(vshh)
+        colors = self.color_space.convert(remapped_points, ColorSpaceType.VSH, display_color_space)
+        return colors
 
     def get_maximal_metameric_pairs(self) -> Tuple[npt.NDArray, npt.NDArray]:
         """Get Maximal Metameric Color Pairs
@@ -692,167 +879,6 @@ class ColorSampler:
         cones = self.color_space.convert(metamers_in_disp.reshape(-1, self.color_space.dim),
                                          ColorSpaceType.DISP, ColorSpaceType.CONE)
         return metamers_in_disp, cones.reshape(-1, 2, self.color_space.dim)
-
-    def get_metameric_grid_plates(self, luminance: float, saturation: float,
-                                  cube_idx: int, secrets: Optional[List[int]] = None,
-                                  lum_noise=0.0,
-                                  s_cone_noise=0.0,
-                                  output_space: ColorSpaceType = ColorSpaceType.DISP_6P,
-                                  background_color: None | npt.NDArray = None,
-                                  isSRGB: bool = False) -> List[Tuple[Image.Image, Image.Image]]:
-        """ Get the metamer points for a given luminance and cube index
-        Args:
-            luminance (float): luminance value
-            saturation (float): saturation value
-            cube_idx (int): cube index
-            grid_size (int): grid size
-            color_space_transform (ColorSpaceTransform): color space transform object
-            background_color (None | npt.NDArray): background color in output space
-
-        Returns:
-            npt.NDArray: The metamer points
-        """
-        disp_points = self.output_cubemap_values(luminance, saturation, ColorSpaceType.DISP)[cube_idx]
-        metamer_dir_in_disp = self.color_space.get_metameric_axis_in(ColorSpaceType.DISP)
-        if secrets is None:
-            secrets = np.random.randint(10, 100, size=len(disp_points)).tolist()
-
-        metamers_in_disp = np.zeros((disp_points.shape[0], 2, self.color_space.dim))
-        plates = []
-        plate_generator = IshiharaPlateGenerator(seed=0)
-        iterator = range(metamers_in_disp.shape[0]) if self.disable else tqdm(
-            range(metamers_in_disp.shape[0]), desc="Generating plates")
-        for i in iterator:
-            # points in contention in disp space, bounded by unit cube scaled by vectors, direction is the metameric axis
-            # Find metamers in unit cube space first, then scale to display space
-            # metamers_unit_cube = np.array(FindMaximumIn1DimDirection(
-            #     disp_points[i] / self.color_space.transform.white_weights,
-            #     metamer_dir_in_disp / self.color_space.transform.white_weights,
-            #     np.eye(self.color_space.dim)))
-            metamers_in_disp[i] = np.clip(FindMaximumIn1DimDirection(
-                disp_points[i],
-                metamer_dir_in_disp,
-                np.eye(self.color_space.dim)), 0, 1)
-
-            # Scale back to display space
-            # metamers_in_disp[i] = metamers_unit_cube * self.color_space.transform.white_weights
-            colors = self.color_space.convert(metamers_in_disp[i], ColorSpaceType.DISP, ColorSpaceType.CONE)
-            # Output as a copyable numpy array
-
-            if False:
-                primaries = load_primaries_from_csv("../../measurements/2025-10-11/primaries")
-
-                bgor = self.color_space.convert(colors, ColorSpaceType.CONE, ColorSpaceType.DISP)
-                metamers = [Spectra.add(Spectra.multiply(primaries, bgor[0])),
-                            Spectra.add(Spectra.multiply(primaries, bgor[1]))]
-                cones = self.color_space.observer.observe_spectras(metamers)
-                print(cones)
-                print("Q diff: ", np.abs(cones[0][self.color_space.metameric_axis] -
-                      cones[1][self.color_space.metameric_axis]))
-                assert np.all((metamers_in_disp[i] >= 0) & (metamers_in_disp[i] <= 1)
-                              ), f"metamer_vals values not in [0, 1]: {metamers_in_disp[i]}"
-
-            plates += [plate_generator.GeneratePlate(colors[0], colors[1], self.color_space, secrets[i], output_space,
-                                                     lum_noise=lum_noise, s_cone_noise=s_cone_noise, background_color=background_color)]
-
-        return plates
-
-    def get_hue_sphere_scramble(self, luminance: float, saturation: float,
-                                cube_idx: int,
-                                scramble_prob: float = 0.5,
-                                seed: int = 42,
-                                metameric_axis: int = 2,
-                                lum_noise=0.0,
-                                s_cone_noise=0.0,
-                                output_space: ColorSpaceType = ColorSpaceType.DISP_6P,
-                                background_color: None | npt.NDArray = None) -> Tuple[List[Tuple[Image.Image, ...]], List[Tuple[int, int]]]:
-        """ Get the metamer points for a given luminance and cube index
-        Args:
-            luminance (float): luminance value
-            saturation (float): saturation value
-            cube_idx (int): cube index
-            grid_size (int): grid size
-            color_space_transform (ColorSpaceTransform): color space transform object
-            background_color (None | npt.NDArray): background color in output space
-
-        Returns:
-            npt.NDArray: The metamer points
-        """
-        np.random.seed(seed)
-        from TetriumColor.Utils.ImageUtils import CreateCircleGridImages
-        disp_points = np.clip(self.output_cubemap_values(
-            luminance, saturation, ColorSpaceType.DISP, metameric_axis=metameric_axis)[cube_idx], 0, None)  # sketchy!!!
-        metamer_dir_in_disp = self.color_space.get_metameric_axis_in(
-            ColorSpaceType.DISP, metameric_axis_num=metameric_axis)
-
-        metamers_in_disp = np.zeros((disp_points.shape[0], 2, self.color_space.dim))
-        colors_in_cone = []
-        for i in range(metamers_in_disp.shape[0]):
-            metamers_in_disp[i] = np.clip(FindMaximumIn1DimDirection(
-                disp_points[i],
-                metamer_dir_in_disp,
-                np.eye(self.color_space.dim)), 0, 1)
-            colors_in_cone.append(self.color_space.convert(
-                metamers_in_disp[i], ColorSpaceType.DISP, ColorSpaceType.CONE))
-
-        colors_in_cone = np.array(colors_in_cone)
-        face1 = colors_in_cone[:, 0, :]
-        face2 = colors_in_cone[:, 1, :]
-        face1_colors = np.round(self.color_space.convert(face1, ColorSpaceType.CONE, output_space) * 255).astype(int)
-        face2_colors = np.round(self.color_space.convert(face2, ColorSpaceType.CONE, output_space) * 255).astype(int)
-
-        face1_unscrambled = CreateCircleGridImages(face1_colors)
-        face2_unscrambled = CreateCircleGridImages(face2_colors)
-
-        # Choose indices to scramble according to scramble_prob
-        num_to_scramble = int(np.round(scramble_prob * len(face1_colors)))
-        idxs = np.random.choice(len(face1_colors), size=num_to_scramble, replace=False)
-
-        # Copy face1_colors for scrambled face
-        scrambled_face_colors = face1_colors.copy()
-        # Replace the scrambled indices' colors with face2_colors at the same indices
-        scrambled_face_colors[idxs] = face2_colors[idxs]
-        scrambled_face = CreateCircleGridImages(scrambled_face_colors)
-        return [face1_unscrambled, face2_unscrambled, scrambled_face], idxs
-
-    def get_metameric_grid_plate(self, luminance: float, saturation: float,
-                                 cube_idx: int, grid_idx: tuple[int, int],
-                                 secret: Optional[int] = None, lum_noise: float = 0.0,
-                                 s_cone_noise: float = 0.0, metameric_axis: int = 2) -> Tuple[Image.Image, Image.Image]:
-        """ Get the metamer points for a given luminance and cube index
-        Args:
-            luminance (float): luminance value
-            saturation (float): saturation value
-            cube_idx (int): cube index
-            grid_idx (int): grid index into the cubemap (out of six)
-            secret (Optional[int]): secret number for the plate
-            lum_noise (float): noise to add to the luminance channel
-            s_cone_noise (float): noise to add to the S-cone channel
-
-        Returns:
-            Tuple[Image.Image, Image.Image]: The metamer plates in RGB/OCV
-        """
-        disp_points = self.output_cubemap_values(
-            luminance, saturation, ColorSpaceType.DISP, metameric_axis=metameric_axis)[cube_idx]
-        metamer_dir_in_disp = self.color_space.get_metameric_axis_in(
-            ColorSpaceType.DISP, metameric_axis_num=metameric_axis)
-        if secret is None:
-            secret = np.random.randint(10, 100)
-
-        vec = np.zeros(self.color_space.dim)
-        vec[0] = luminance
-        background = self.color_space.convert(vec, ColorSpaceType.VSH, ColorSpaceType.DISP_6P)
-
-        metamers_in_disp = np.zeros((disp_points.shape[0], 2, self.color_space.dim))
-        plates = []
-        i = grid_idx[0] * self._cubemap_size + grid_idx[1]
-
-        metamers_in_disp[i] = np.array(FindMaximumIn1DimDirection(
-            disp_points[i], metamer_dir_in_disp, np.eye(self.color_space.dim)))
-
-        cones = self.color_space.convert(metamers_in_disp[i], ColorSpaceType.DISP, ColorSpaceType.CONE)
-
-        return generate_ishihara_plate(cones[0], cones[1], self.color_space, secret, lum_noise=lum_noise, s_cone_noise=s_cone_noise)
 
     def get_cone_contrast_metamers_brainard(self, target_contrasts: npt.NDArray,  # shape: [n_primaries]
                                             background_primary: npt.NDArray,  # shape: [n_primaries]
@@ -989,3 +1015,186 @@ class ColorSampler:
 
         # Return the PlateColor
         return PlateColor(foreground, background)
+
+    def get_metameric_pairs(self, luminance: float, saturation: float, cube_idx: int, metameric_axis: int = 2) -> Tuple[npt.NDArray, npt.NDArray]:
+        """ Get the metamer points for a given luminance and cube index (4D only)
+        Args:
+            luminance (float): luminance value
+            saturation (float): saturation value
+            cube_idx (int): cube index
+            metameric_axis (int): metameric axis to use
+
+        Returns:
+            Tuple[npt.NDArray, npt.NDArray]: metamers_in_disp, cones
+        """
+        if self.color_space.dim != 4:
+            raise ValueError("get_metameric_pairs only works for 4D color spaces")
+        disp_points = self._output_cubemap_values_4d(
+            luminance, saturation, ColorSpaceType.DISP, metameric_axis=metameric_axis)[cube_idx]
+        metamer_dir_in_disp = self.color_space.get_metameric_axis_in(
+            ColorSpaceType.DISP, metameric_axis_num=metameric_axis)
+
+        vec = np.zeros(self.color_space.dim)
+        vec[0] = luminance
+
+        metamers_in_disp = np.zeros((disp_points.shape[0], 2, self.color_space.dim))
+        for i in range(metamers_in_disp.shape[0]):
+            # points in contention in disp space, bounded by unit cube scaled by vectors, direction is the metameric axis
+            metamers_in_disp[i] = np.array(FindMaximumIn1DimDirection(
+                disp_points[i], metamer_dir_in_disp, np.eye(self.color_space.dim)))
+
+        cones = self.color_space.convert(metamers_in_disp.reshape(-1, self.color_space.dim),
+                                         ColorSpaceType.DISP, ColorSpaceType.CONE)
+        return metamers_in_disp, cones.reshape(-1, 2, self.color_space.dim)
+
+    def get_metameric_grid_plates(self, luminance: float, saturation: float,
+                                  cube_idx: int, secrets: Optional[List[int]] = None,
+                                  lum_noise=0.0,
+                                  s_cone_noise=0.0,
+                                  output_space: ColorSpaceType = ColorSpaceType.DISP_6P,
+                                  background_color: None | npt.NDArray = None,
+                                  isSRGB: bool = False) -> List[Tuple[Image.Image, Image.Image]]:
+        """ Get the metamer points for a given luminance and cube index (4D only)
+        Args:
+            luminance (float): luminance value
+            saturation (float): saturation value
+            cube_idx (int): cube index
+            secrets (Optional[List[int]]): secret numbers for plates
+            lum_noise (float): noise to add to luminance
+            s_cone_noise (float): noise to add to S-cone
+            output_space (ColorSpaceType): output color space
+            background_color (None | npt.NDArray): background color in output space
+            isSRGB (bool): whether output is sRGB
+
+        Returns:
+            List[Tuple[Image.Image, Image.Image]]: List of plate image pairs
+        """
+        if self.color_space.dim != 4:
+            raise ValueError("get_metameric_grid_plates only works for 4D color spaces")
+        disp_points = self._output_cubemap_values_4d(luminance, saturation, ColorSpaceType.DISP)[cube_idx]
+        metamer_dir_in_disp = self.color_space.get_metameric_axis_in(ColorSpaceType.DISP)
+        if secrets is None:
+            secrets = np.random.randint(10, 100, size=len(disp_points)).tolist()
+
+        metamers_in_disp = np.zeros((disp_points.shape[0], 2, self.color_space.dim))
+        plates = []
+        plate_generator = IshiharaPlateGenerator(seed=0)
+        iterator = range(metamers_in_disp.shape[0]) if self.disable else tqdm(
+            range(metamers_in_disp.shape[0]), desc="Generating plates")
+        for i in iterator:
+            metamers_in_disp[i] = np.clip(FindMaximumIn1DimDirection(
+                disp_points[i],
+                metamer_dir_in_disp,
+                np.eye(self.color_space.dim)), 0, 1)
+
+            colors = self.color_space.convert(metamers_in_disp[i], ColorSpaceType.DISP, ColorSpaceType.CONE)
+
+            plates += [plate_generator.GeneratePlate(colors[0], colors[1], self.color_space, secrets[i], output_space,
+                                                     lum_noise=lum_noise, s_cone_noise=s_cone_noise, background_color=background_color)]
+
+        return plates
+
+    def get_hue_sphere_scramble(self, luminance: float, saturation: float,
+                                cube_idx: int,
+                                scramble_prob: float = 0.5,
+                                seed: int = 42,
+                                metameric_axis: int = 2,
+                                lum_noise=0.0,
+                                s_cone_noise=0.0,
+                                output_space: ColorSpaceType = ColorSpaceType.DISP_6P,
+                                background_color: None | npt.NDArray = None) -> Tuple[List[Tuple[Image.Image, ...]], List[Tuple[int, int]]]:
+        """ Get the metamer points for a given luminance and cube index (4D only)
+        Args:
+            luminance (float): luminance value
+            saturation (float): saturation value
+            cube_idx (int): cube index
+            scramble_prob (float): probability of scrambling
+            seed (int): random seed
+            metameric_axis (int): metameric axis to use
+            lum_noise (float): noise to add to luminance
+            s_cone_noise (float): noise to add to S-cone
+            output_space (ColorSpaceType): output color space
+            background_color (None | npt.NDArray): background color in output space
+
+        Returns:
+            Tuple[List[Tuple[Image.Image, ...]], List[Tuple[int, int]]]: scrambled images and indices
+        """
+        if self.color_space.dim != 4:
+            raise ValueError("get_hue_sphere_scramble only works for 4D color spaces")
+        np.random.seed(seed)
+        from TetriumColor.Utils.ImageUtils import CreateCircleGridImages
+        disp_points = np.clip(self._output_cubemap_values_4d(
+            luminance, saturation, ColorSpaceType.DISP, metameric_axis=metameric_axis)[cube_idx], 0, None)
+        metamer_dir_in_disp = self.color_space.get_metameric_axis_in(
+            ColorSpaceType.DISP, metameric_axis_num=metameric_axis)
+
+        metamers_in_disp = np.zeros((disp_points.shape[0], 2, self.color_space.dim))
+        colors_in_cone = []
+        for i in range(metamers_in_disp.shape[0]):
+            metamers_in_disp[i] = np.clip(FindMaximumIn1DimDirection(
+                disp_points[i],
+                metamer_dir_in_disp,
+                np.eye(self.color_space.dim)), 0, 1)
+            colors_in_cone.append(self.color_space.convert(
+                metamers_in_disp[i], ColorSpaceType.DISP, ColorSpaceType.CONE))
+
+        colors_in_cone = np.array(colors_in_cone)
+        face1 = colors_in_cone[:, 0, :]
+        face2 = colors_in_cone[:, 1, :]
+        face1_colors = np.round(self.color_space.convert(face1, ColorSpaceType.CONE, output_space) * 255).astype(int)
+        face2_colors = np.round(self.color_space.convert(face2, ColorSpaceType.CONE, output_space) * 255).astype(int)
+
+        face1_unscrambled = CreateCircleGridImages(face1_colors)
+        face2_unscrambled = CreateCircleGridImages(face2_colors)
+
+        # Choose indices to scramble according to scramble_prob
+        num_to_scramble = int(np.round(scramble_prob * len(face1_colors)))
+        idxs = np.random.choice(len(face1_colors), size=num_to_scramble, replace=False)
+
+        # Copy face1_colors for scrambled face
+        scrambled_face_colors = face1_colors.copy()
+        # Replace the scrambled indices' colors with face2_colors at the same indices
+        scrambled_face_colors[idxs] = face2_colors[idxs]
+        scrambled_face = CreateCircleGridImages(scrambled_face_colors)
+        return [face1_unscrambled, face2_unscrambled, scrambled_face], idxs
+
+    def get_metameric_grid_plate(self, luminance: float, saturation: float,
+                                 cube_idx: int, grid_idx: tuple[int, int],
+                                 secret: Optional[int] = None, lum_noise: float = 0.0,
+                                 s_cone_noise: float = 0.0, metameric_axis: int = 2) -> Tuple[Image.Image, Image.Image]:
+        """ Get the metamer points for a given luminance and cube index (4D only)
+        Args:
+            luminance (float): luminance value
+            saturation (float): saturation value
+            cube_idx (int): cube index
+            grid_idx (tuple[int, int]): grid index into the cubemap
+            secret (Optional[int]): secret number for the plate
+            lum_noise (float): noise to add to the luminance channel
+            s_cone_noise (float): noise to add to the S-cone channel
+            metameric_axis (int): metameric axis to use
+
+        Returns:
+            Tuple[Image.Image, Image.Image]: The metamer plates in RGB/OCV
+        """
+        if self.color_space.dim != 4:
+            raise ValueError("get_metameric_grid_plate only works for 4D color spaces")
+        disp_points = self._output_cubemap_values_4d(
+            luminance, saturation, ColorSpaceType.DISP, metameric_axis=metameric_axis)[cube_idx]
+        metamer_dir_in_disp = self.color_space.get_metameric_axis_in(
+            ColorSpaceType.DISP, metameric_axis_num=metameric_axis)
+        if secret is None:
+            secret = np.random.randint(10, 100)
+
+        vec = np.zeros(self.color_space.dim)
+        vec[0] = luminance
+        background = self.color_space.convert(vec, ColorSpaceType.VSH, ColorSpaceType.DISP_6P)
+
+        metamers_in_disp = np.zeros((disp_points.shape[0], 2, self.color_space.dim))
+        i = grid_idx[0] * self._cubemap_size + grid_idx[1]
+
+        metamers_in_disp[i] = np.array(FindMaximumIn1DimDirection(
+            disp_points[i], metamer_dir_in_disp, np.eye(self.color_space.dim)))
+
+        cones = self.color_space.convert(metamers_in_disp[i], ColorSpaceType.DISP, ColorSpaceType.CONE)
+
+        return generate_ishihara_plate(cones[0], cones[1], self.color_space, secret, lum_noise=lum_noise, s_cone_noise=s_cone_noise)

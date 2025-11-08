@@ -120,6 +120,9 @@ class ColorSpace:
         self.observer = observer
         self.metameric_axis = metameric_axis
         self.led_mapping = led_mapping
+        if observer.dimension == 3:
+            display_primaries = [display_primaries[i] for i in [0, 1, 2]]  # RGB , presumably RGBO
+            led_mapping = [0, 1, 2, 0, 1, 2]  # RGB / RGB
         self.display_primaries = display_primaries
         self.print_gamut = print_gamut
         self.disp_method = disp_method
@@ -290,7 +293,6 @@ class ColorSpace:
             Optional[Tuple[npt.NDArray, npt.NDArray, float]]: (cone1, cone2, metamer_difference) or None if rejected
         """
         metamer_dir_in_disp = self.get_metameric_axis_in(ColorSpaceType.DISP, metameric_axis_num=metameric_axis)
-
         disp_pts = np.clip(FindMaximumIn1DimDirection(
             pt,
             metamer_dir_in_disp,

@@ -655,7 +655,9 @@ class GeneticColorGenerator(ColorGenerator):
         color_space, color_sampler = self.genotype_mapping[genotype]
 
         grid_points = color_sampler.output_cubemap_values(
-            self.luminance, self.saturation, ColorSpaceType.DISP, metameric_axis=metameric_axis)[4]
+            self.luminance, self.saturation, ColorSpaceType.DISP, metameric_axis=metameric_axis)
+        if color_space.dim == 4:
+            grid_points = grid_points[4]
         max_diff = 0.0
         max_diff_idx = 0
         for retry in range(10):
