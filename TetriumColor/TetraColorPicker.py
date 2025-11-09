@@ -658,6 +658,8 @@ class GeneticColorGenerator(ColorGenerator):
             self.luminance, self.saturation, ColorSpaceType.DISP, metameric_axis=metameric_axis)
         if color_space.dim == 4:
             grid_points = grid_points[4]
+        elif color_space.dim == 3:
+            grid_points = grid_points[0]  # pick first, we might need to change this
         max_diff = 0.0
         max_diff_idx = 0
         for retry in range(10):

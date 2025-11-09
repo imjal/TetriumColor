@@ -102,6 +102,31 @@ class ColorSampler:
                     self._gamut_lut = cache_data['lut']
                     self._lum_range = cache_data['lum_range']
                     self._sat_range = cache_data['sat_range']
+
+                    # Validate LUT format matches expected structure
+                    if self.color_space.dim == 4:
+                        # Should be dict with 6 faces, each containing a PIL Image
+                        if not isinstance(self._gamut_lut, dict) or len(self._gamut_lut) != 6:
+                            print("Cached LUT format invalid for 4D (wrong type or size), regenerating...")
+                            return False
+                        # Verify each face is a PIL Image
+                        for face_idx in range(6):
+                            if face_idx not in self._gamut_lut or not isinstance(self._gamut_lut[face_idx], Image.Image):
+                                print(
+                                    f"Cached LUT format invalid for 4D (face {face_idx} is not a PIL Image), regenerating...")
+                                return False
+                    elif self.color_space.dim == 3:
+                        # Should be dict with 4 faces, each containing a PIL Image
+                        if not isinstance(self._gamut_lut, dict) or len(self._gamut_lut) != 4:
+                            print("Cached LUT format invalid for 3D (wrong type or size), regenerating...")
+                            return False
+                        # Verify each face is a PIL Image
+                        for face_idx in range(4):
+                            if face_idx not in self._gamut_lut or not isinstance(self._gamut_lut[face_idx], Image.Image):
+                                print(
+                                    f"Cached LUT format invalid for 3D (face {face_idx} is not a PIL Image), regenerating...")
+                                return False
+
                     return True
                 except Exception as e:
                     print(f"Failed to load LUT from cache: {e}")
@@ -127,7 +152,7 @@ class ColorSampler:
         if self.color_space.dim == 4:
             return self._generate_gamut_cubemap()
         elif self.color_space.dim == 3:
-            return self._generate_gamut_circle()
+            return self._generate_gamut_square()
         else:
             raise ValueError(
                 f"ColorSampler not implemented for {self.color_space.dim}D color spaces. Only 3D and 4D are supported.")
@@ -207,43 +232,219 @@ class ColorSampler:
 
         return cubemap_images, ((lum_min, lum_max), (sat_min, sat_max))
 
-    def _generate_gamut_circle(self) -> Tuple[npt.NDArray, Tuple[Tuple[float, float], Tuple[float, float]]]:
+    @staticmethod
+    def _convert_square_uv_to_xy(face_idx: int, u: npt.NDArray, v: npt.NDArray, normalize: Optional[float] = None) -> npt.NDArray:
         """
-        Generate a circle-based representation of the gamut boundaries (for 3D color spaces).
+        Convert square UV coordinates to 2D XY coordinates (for 3D color spaces).
+
+        The 4 square faces represent:
+        - Face 0: +X (right) - x=1, y varies
+        - Face 1: -X (left) - x=-1, y varies
+        - Face 2: +Y (up) - y=1, x varies
+        - Face 3: -Y (down) - y=-1, x varies
+
+        Parameters:
+            face_idx: Square face index (0-3), single integer
+            u, v: UV coordinates in [0, 1], arrays
+            normalize: Optional radius to normalize to
+
+        Returns:
+            Nx2 array of (x, y) coordinates
+        """
+        # Convert range 0 to 1 to -1 to 1
+        uc = 2.0 * u - 1.0
+        vc = 2.0 * v - 1.0
+
+        # Initialize x, y
+        x = np.zeros_like(u)
+        y = np.zeros_like(u)
+
+        # POSITIVE X (right) - x=1, y varies along v
+        if face_idx == 0:
+            x[:] = 1.0
+            y[:] = vc
+
+        # NEGATIVE X (left) - x=-1, y varies along v
+        elif face_idx == 1:
+            x[:] = -1.0
+            y[:] = vc
+
+        # POSITIVE Y (up) - y=1, x varies along u
+        elif face_idx == 2:
+            x[:] = uc
+            y[:] = 1.0
+
+        # NEGATIVE Y (down) - y=-1, x varies along u
+        elif face_idx == 3:
+            x[:] = uc
+            y[:] = -1.0
+
+        # Normalize to unit circle
+        if normalize is not None:
+            norm = np.sqrt(x**2 + y**2)
+            x = (x / norm) * normalize
+            y = (y / norm) * normalize
+
+        return np.column_stack([x.flatten(), y.flatten()])
+
+    @staticmethod
+    def _convert_xy_to_square_uv(x: npt.NDArray, y: npt.NDArray) -> Tuple[npt.NDArray, npt.NDArray, npt.NDArray]:
+        """
+        Convert 2D XY coordinates to square face index and UV coordinates (for 3D color spaces).
+
+        Parameters:
+            x, y: 2D Cartesian coordinates
+
+        Returns:
+            Tuple of (face_idx, u, v) arrays
+        """
+        # Compute absolute values
+        abs_x = np.abs(x)
+        abs_y = np.abs(y)
+
+        # Determine the positive and dominant axes
+        is_x_positive = x > 0
+        is_y_positive = y > 0
+
+        # Initialize arrays
+        index = np.zeros_like(x, dtype=int)
+        max_axis = np.zeros_like(x, dtype=float)
+        uc = np.zeros_like(x, dtype=float)
+        vc = np.zeros_like(x, dtype=float)
+
+        # POSITIVE X
+        mask = is_x_positive & (abs_x >= abs_y)
+        max_axis[mask] = abs_x[mask]
+        uc[mask] = 0.0  # Not used for +X face
+        vc[mask] = y[mask]
+        index[mask] = 0
+
+        # NEGATIVE X
+        mask = ~is_x_positive & (abs_x >= abs_y)
+        max_axis[mask] = abs_x[mask]
+        uc[mask] = 0.0  # Not used for -X face
+        vc[mask] = y[mask]
+        index[mask] = 1
+
+        # POSITIVE Y
+        mask = is_y_positive & (abs_y >= abs_x)
+        max_axis[mask] = abs_y[mask]
+        uc[mask] = x[mask]
+        vc[mask] = 0.0  # Not used for +Y face
+        index[mask] = 2
+
+        # NEGATIVE Y
+        mask = ~is_y_positive & (abs_y >= abs_x)
+        max_axis[mask] = abs_y[mask]
+        uc[mask] = x[mask]
+        vc[mask] = 0.0  # Not used for -Y face
+        index[mask] = 3
+
+        # Convert range from -1 to 1 to 0 to 1
+        # For +X/-X faces, use v coordinate; for +Y/-Y faces, use u coordinate
+        u = np.zeros_like(uc)
+        v = np.zeros_like(vc)
+
+        # For X faces, u is not used, v comes from vc
+        mask_x = (index == 0) | (index == 1)
+        u[mask_x] = 0.5  # Center of square
+        v[mask_x] = 0.5 * (vc[mask_x] / max_axis[mask_x] + 1.0)
+
+        # For Y faces, u comes from uc, v is not used
+        mask_y = (index == 2) | (index == 3)
+        u[mask_y] = 0.5 * (uc[mask_y] / max_axis[mask_y] + 1.0)
+        v[mask_y] = 0.5  # Center of square
+
+        return index, u, v
+
+    def _generate_gamut_square(self) -> Tuple[Dict, Tuple[Tuple[float, float], Tuple[float, float]]]:
+        """
+        Generate a square-based representation of the gamut boundaries (for 3D color spaces).
+        Uses 4 square faces, analogous to the 6 cube faces in 4D.
 
         Returns:
             Tuple containing:
-                - 1D array of (lum_cusp, sat_cusp) pairs indexed by theta
+                - Dict of square face images (4 faces)
                 - Tuple of luminance and saturation ranges
         """
-        # Sample angles uniformly around the circle
-        all_angles = Geometry.SampleCircle(self._cubemap_size)
-        all_thetas = all_angles.flatten()
+        # Generate grid of UV coordinates
+        all_us = (np.arange(self._cubemap_size) + 0.5) / self._cubemap_size
+        all_vs = (np.arange(self._cubemap_size) + 0.5) / self._cubemap_size
+        square_u, square_v = np.meshgrid(all_us, all_vs)
+        flattened_u, flattened_v = square_u.flatten(), square_v.flatten()
 
-        # For each angle, find the cusp point
-        lut_data = []
-        iterator = range(len(all_thetas)) if self.disable else tqdm(
-            range(len(all_thetas)), desc="Generating circle LUT")
+        # Get metameric direction matrix (for 2D, this is a 2x2 rotation matrix)
+        metameric_dir = self.color_space.get_metameric_axis_in(
+            ColorSpaceType.HERING, metameric_axis_num=2)
+        # For 3D, metameric direction is 2D (after removing luminance)
+        metameric_dir_2d = metameric_dir[1:]  # Remove luminance component
+        metameric_dir_2d = metameric_dir_2d / np.linalg.norm(metameric_dir_2d)
+
+        # Create rotation matrix to align square edges with metameric direction
+        # Rotate so that the metameric direction aligns with one of the square edges
+        # We'll use a 2D rotation matrix
+        angle = np.arctan2(metameric_dir_2d[1], metameric_dir_2d[0])
+        cos_a, sin_a = np.cos(angle), np.sin(angle)
+        rot_matrix = np.array([[cos_a, -sin_a], [sin_a, cos_a]])
+        inv_rot_matrix = np.linalg.inv(rot_matrix)
+
+        # Process each face of the square
+        lut_dicts = []
+        iterator = range(4) if self.disable else tqdm(range(4), desc="Generating square LUT")
         for i in iterator:
-            theta = all_thetas[i]
-            # Find cusp point for this hue angle
-            hue_cartesian = self.color_space.convert(
-                np.array([[0, 1, theta]]), ColorSpaceType.VSH, ColorSpaceType.HERING)
-            max_sat_point = self._find_maximal_saturation(
-                (self.color_space._get_hering_to_disp() @ hue_cartesian.T).T[0])
-            max_sat_hering = np.linalg.inv(self.color_space._get_hering_to_disp()) @ max_sat_point
-            max_sat_vsh = self.color_space.convert(
-                max_sat_hering[np.newaxis, :], ColorSpaceType.HERING, ColorSpaceType.VSH)[0]
-            lum_cusp, sat_cusp = max_sat_vsh[0], max_sat_vsh[1]
-            lut_data.append((lum_cusp, sat_cusp))
+            # Convert UV to XY coordinates for this square face
+            xy = self._convert_square_uv_to_xy(i, square_u, square_v, 1).reshape(-1, 2)
+            # Rotate by inverse metameric direction to align with chromatic space
+            xy = np.dot(inv_rot_matrix, xy.T).T
 
-        lut_array = np.array(lut_data)
+            # Create hering coordinates with unit luminance
+            lum_vector = np.ones(self._cubemap_size * self._cubemap_size)
+            # For 3D, Hering space is [L, x, y] where x, y are the 2D chromatic coordinates
+            vxy = np.hstack((lum_vector[np.newaxis, :].T, xy))
+
+            # Convert to VSH space
+            vshh = self.color_space.convert(vxy, ColorSpaceType.HERING, ColorSpaceType.VSH)
+
+            # Generate gamut LUT for this face
+            face_dict = {}
+            for j in range(len(flattened_u)):
+                u, v = flattened_v[j], flattened_u[j]
+                angle = tuple(vshh[j, 2:])  # For 3D, this is just (theta,)
+                # Find cusp point for this hue angle
+                hue_cartesian = self.color_space.convert(
+                    np.array([[0, 1, *angle]]), ColorSpaceType.VSH, ColorSpaceType.HERING)
+                max_sat_point = self._find_maximal_saturation(
+                    (self.color_space._get_hering_to_disp() @ hue_cartesian.T).T[0])
+                max_sat_hering = np.linalg.inv(self.color_space._get_hering_to_disp()) @ max_sat_point
+                max_sat_vsh = self.color_space.convert(
+                    max_sat_hering[np.newaxis, :], ColorSpaceType.HERING, ColorSpaceType.VSH)[0]
+                lum_cusp, sat_cusp = max_sat_vsh[0], max_sat_vsh[1]
+                face_dict[(u, v)] = (lum_cusp, sat_cusp)
+
+            lut_dicts.append(face_dict)
 
         # Compute overall ranges for normalization
-        lum_min, lum_max = np.min(lut_array[:, 0]), np.max(lut_array[:, 0])
-        sat_min, sat_max = np.min(lut_array[:, 1]), np.max(lut_array[:, 1])
+        all_values = np.array([list(lut_dicts[i].values()) for i in range(4)]).reshape(-1, 2)
+        lum_min, lum_max = np.min(all_values[:, 0]), np.max(all_values[:, 0])
+        sat_min, sat_max = np.min(all_values[:, 1]), np.max(all_values[:, 1])
 
-        return lut_array, ((lum_min, lum_max), (sat_min, sat_max))
+        # Generate square face images
+        square_images = {}
+        for i in range(4):
+            img = Image.new('RGB', (self._cubemap_size, self._cubemap_size))
+            draw = ImageDraw.Draw(img)
+
+            for j in range(len(flattened_u)):
+                u, v = flattened_v[j], flattened_u[j]
+                lum_cusp, sat_cusp = lut_dicts[i][(u, v)]
+                normalized_lum = (lum_cusp - lum_min) / (lum_max - lum_min)
+                normalized_sat = (sat_cusp - sat_min) / (sat_max - sat_min)
+                rgb_color = (int(normalized_lum * 255), int(normalized_sat * 255), 0)
+                draw.point((int(u * self._cubemap_size), int(v * self._cubemap_size)), fill=rgb_color)
+
+            square_images[i] = img
+
+        return square_images, ((lum_min, lum_max), (sat_min, sat_max))
 
     def _angles_to_lut_coords(self, angles: tuple) -> Union[Tuple[int, float, float], float]:
         """
@@ -258,7 +459,7 @@ class ColorSampler:
         if self.color_space.dim == 4:
             return self._angles_to_cube_uv(angles)
         elif self.color_space.dim == 3:
-            return self._angle_to_circle_coord(angles)
+            return self._angle_to_square_uv(angles)
         else:
             raise ValueError(f"ColorSampler not implemented for {self.color_space.dim}D color spaces.")
 
@@ -277,22 +478,24 @@ class ColorSampler:
         face_id, u, v = Geometry.ConvertXYZToCubeUV(x, y, z)
         return int(face_id), float(u), float(v)
 
-    def _angle_to_circle_coord(self, angles: tuple[float]) -> float:
+    def _angle_to_square_uv(self, angles: tuple[float]) -> Tuple[int, float, float]:
         """
-        Convert angle to LUT coordinate (for 3D).
+        Convert angle to square face index and UV coordinates (for 3D).
 
         Parameters:
             angles (tuple): Single angle (theta) to convert
 
         Returns:
-            float: Coordinate in [0, circle_size) for interpolation
+            Tuple[int, float, float]: Square face index and UV coordinates
         """
+        # Convert angle to 2D Cartesian coordinates
         theta = angles[0]
-        # Normalize theta to [0, 2π)
-        theta = theta % (2 * np.pi)
-        # Convert to index coordinate [0, cubemap_size)
-        coord = (theta / (2 * np.pi)) * self._cubemap_size
-        return coord
+        x = np.cos(theta)
+        y = np.sin(theta)
+
+        # Convert to square face and UV coordinates
+        face_id, u, v = self._convert_xy_to_square_uv(np.array([x]), np.array([y]))
+        return int(face_id[0]), float(u[0]), float(v[0])
 
     def _interpolate_from_lut(self, angles: tuple) -> Tuple[float, float]:
         """
@@ -307,7 +510,7 @@ class ColorSampler:
         if self.color_space.dim == 4:
             return self._interpolate_from_cubemap(angles)
         elif self.color_space.dim == 3:
-            return self._interpolate_from_circle(angles)
+            return self._interpolate_from_square(angles)
         else:
             raise ValueError(f"ColorSampler not implemented for {self.color_space.dim}D color spaces.")
 
@@ -354,9 +557,9 @@ class ColorSampler:
 
         return lum, sat
 
-    def _interpolate_from_circle(self, angles: tuple) -> Tuple[float, float]:
+    def _interpolate_from_square(self, angles: tuple) -> Tuple[float, float]:
         """
-        Interpolate luminance and saturation values from the circle LUT for given angle (for 3D).
+        Interpolate luminance and saturation values from the square LUT for given angle (for 3D).
 
         Parameters:
             angles (tuple): Single angle (theta) for which to interpolate values
@@ -365,20 +568,37 @@ class ColorSampler:
             Tuple[float, float]: Interpolated luminance and saturation values
         """
         if self._gamut_lut is None:
-            self.get_gamut_lut()  # Initialize the LUT if not already done
+            self.get_gamut_lut()  # Initialize the square LUT if not already done
 
-        coord = self._angle_to_circle_coord(angles)
+        face_idx, u, v = self._angle_to_square_uv(angles)
 
-        # Get integer indices and fractional part for linear interpolation
-        idx0 = int(coord) % self._cubemap_size
-        idx1 = (idx0 + 1) % self._cubemap_size
-        t = coord - int(coord)
+        lum_min, lum_max = self._lum_range
+        sat_min, sat_max = self._sat_range
 
-        # Linear interpolation
-        lum_cusp = (1 - t) * self._gamut_lut[idx0, 0] + t * self._gamut_lut[idx1, 0]
-        sat_cusp = (1 - t) * self._gamut_lut[idx0, 1] + t * self._gamut_lut[idx1, 1]
+        img = self._gamut_lut[face_idx]
+        # Convert UV to pixel coordinates
+        x, y = u * img.width, v * img.height
 
-        return lum_cusp, sat_cusp
+        # Get integer pixel coordinates and fractional parts
+        x0, y0 = int(x), int(y)
+        x1, y1 = min(x0 + 1, img.width - 1), min(y0 + 1, img.height - 1)
+        dx, dy = x - x0, y - y0
+
+        # Get pixel values for the four surrounding pixels
+        r00, g00, _ = img.getpixel((x0, y0))
+        r10, g10, _ = img.getpixel((x1, y0))
+        r01, g01, _ = img.getpixel((x0, y1))
+        r11, g11, _ = img.getpixel((x1, y1))
+
+        # Perform bilinear interpolation
+        r = (1 - dx) * (1 - dy) * r00 + dx * (1 - dy) * r10 + (1 - dx) * dy * r01 + dx * dy * r11
+        g = (1 - dx) * (1 - dy) * g00 + dx * (1 - dy) * g10 + (1 - dx) * dy * g01 + dx * dy * g11
+
+        # Convert normalized values back to actual luminance and saturation
+        lum = (r / 255.0) * (lum_max - lum_min) + lum_min
+        sat = (g / 255.0) * (sat_max - sat_min) + sat_min
+
+        return lum, sat
 
     def get_gamut_lut(self, force_recompute: bool = False) -> None:
         """
@@ -691,12 +911,12 @@ class ColorSampler:
 
         Returns:
             List[PIL.Image.Image] for 4D: List of 6 cubemap face images
-            PIL.Image.Image for 3D: Single circle map image
+            List[PIL.Image.Image] for 3D: List of 4 square face images
         """
         if self.color_space.dim == 4:
             return self._generate_cubemap_4d(luminance, saturation, display_color_space)
         elif self.color_space.dim == 3:
-            return self._generate_circle_map_3d(luminance, saturation, display_color_space)
+            return self._generate_square_map_3d(luminance, saturation, display_color_space)
         else:
             raise ValueError(f"generate_cubemap not implemented for {self.color_space.dim}D color spaces.")
 
@@ -745,42 +965,81 @@ class ColorSampler:
 
         return cubemap_images
 
-    def _generate_circle_map_3d(self, luminance: float, saturation: float,
-                                display_color_space: ColorSpaceType) -> Image.Image:
-        """Generate a circle map within the gamut boundaries (3D only)"""
-        # Sample angles uniformly
-        all_angles = Geometry.SampleCircle(self._cubemap_size)
-        all_thetas = all_angles.flatten()
+    def _generate_square_map_3d(self, luminance: float, saturation: float,
+                                display_color_space: ColorSpaceType) -> List[Image.Image]:
+        """Generate square maps within the gamut boundaries (3D only)"""
+        # Generate grid of UV coordinates
+        all_us = (np.arange(self._cubemap_size) + 0.5) / self._cubemap_size
+        all_vs = (np.arange(self._cubemap_size) + 0.5) / self._cubemap_size
+        square_u, square_v = np.meshgrid(all_us, all_vs)
 
-        # Get max saturations from LUT
-        max_saturations = self._gamut_lut[:, 1]
-        normalized_saturations = max_saturations
+        # Get metameric direction matrix
+        metameric_dir = self.color_space.get_metameric_axis_in(
+            ColorSpaceType.HERING, metameric_axis_num=2)
+        metameric_dir_2d = metameric_dir[1:]
+        metameric_dir_2d = metameric_dir_2d / np.linalg.norm(metameric_dir_2d)
 
-        # Create VSH points
-        vshh = np.zeros((len(all_thetas), 3))
-        vshh[:, 0] = luminance
-        vshh[:, 1] = np.minimum(saturation, normalized_saturations)
-        vshh[:, 2] = all_thetas
+        angle = np.arctan2(metameric_dir_2d[1], metameric_dir_2d[0])
+        cos_a, sin_a = np.cos(angle), np.sin(angle)
+        rot_matrix = np.array([[cos_a, -sin_a], [sin_a, cos_a]])
+        inv_rot_matrix = np.linalg.inv(rot_matrix)
 
-        # Remap to gamut
-        remapped_points = self.remap_to_gamut(vshh)
-        corresponding_colors = self.color_space.convert(remapped_points, ColorSpaceType.VSH, display_color_space)
+        # Process each face of the square
+        square_images = []
+        iterator = range(4) if self.disable else tqdm(range(4), desc="Generating square map")
+        for i in iterator:
+            # Convert UV to XY coordinates for this square face
+            xy = self._convert_square_uv_to_xy(i, square_u, square_v, 1).reshape(-1, 2)
+            xy = np.dot(inv_rot_matrix, xy.T).T
 
-        # Convert colors to 8-bit format
-        corresponding_colors = np.clip(corresponding_colors, 0, 1) * 255
-        corresponding_colors = corresponding_colors.astype(np.uint8)
+            # Get max saturations from LUT
+            # Ensure _gamut_lut is a dictionary (not an old array format)
+            if not isinstance(self._gamut_lut, dict):
+                raise ValueError(f"_gamut_lut is not a dictionary (got {type(self._gamut_lut)}). "
+                                 f"This likely means an old cache format was loaded. "
+                                 f"Try calling get_gamut_lut(force_recompute=True) to regenerate.")
+            if i not in self._gamut_lut:
+                raise ValueError(f"Face {i} not found in _gamut_lut. Available keys: {list(self._gamut_lut.keys())}")
 
-        # Create a square image (we'll arrange colors in a square grid for visualization)
-        side_length = int(np.ceil(np.sqrt(self._cubemap_size)))
-        img_array = np.zeros((side_length, side_length, 3), dtype=np.uint8)
+            img = self._gamut_lut[i]
+            if isinstance(img, Image.Image):
+                # Ensure image is in RGB mode
+                if img.mode != 'RGB':
+                    img = img.convert('RGB')
+                img_array = np.array(img)
+            else:
+                raise ValueError(f"Expected PIL Image for face {i}, got {type(img)}")
+            # Ensure it's the right shape: (height, width, 3)
+            if img_array.ndim == 2:
+                # If it's 2D, it might be grayscale - convert to RGB
+                img_array = np.stack([img_array, img_array, img_array], axis=-1)
+            elif img_array.ndim == 3 and img_array.shape[2] != 3:
+                raise ValueError(f"Expected RGB image with 3 channels, got {img_array.shape}")
+            max_saturations = img_array.reshape(-1, 3)[:, 1]/255
+            normalized_saturations = (
+                max_saturations * (self._sat_range[1] - self._sat_range[0])) + self._sat_range[0]
 
-        for i, color in enumerate(corresponding_colors):
-            row = i // side_length
-            col = i % side_length
-            if row < side_length and col < side_length:
-                img_array[row, col] = color
+            # Create hering coordinates with unit luminance
+            lum_vector = np.ones(self._cubemap_size * self._cubemap_size) * luminance
+            vxy = np.hstack((lum_vector[np.newaxis, :].T, xy))
 
-        return Image.fromarray(img_array, 'RGB')
+            # Convert to VSH space
+            vshh = self.color_space.convert(vxy, ColorSpaceType.HERING, ColorSpaceType.VSH)
+            vshh[:, 1] = np.min(
+                np.vstack((np.full(normalized_saturations.shape, saturation), normalized_saturations)), axis=0)
+            remapped_points = self.remap_to_gamut(vshh)
+            corresponding_colors = self.color_space.convert(remapped_points, ColorSpaceType.VSH, display_color_space)
+
+            # Convert colors to 8-bit format and reshape for image saving
+            corresponding_colors = np.clip(corresponding_colors, 0, 1) * 255
+            corresponding_colors = corresponding_colors.astype(np.uint8)
+            corresponding_colors = corresponding_colors.reshape(
+                self._cubemap_size, self._cubemap_size, 3).transpose(1, 0, 2)
+
+            # Create an image from the array
+            square_images += [Image.fromarray(corresponding_colors, 'RGB')]
+
+        return square_images
 
     def generate_concatenated_cubemap(self, luminance: float, saturation: float,
                                       display_color_space: ColorSpaceType = ColorSpaceType.SRGB) -> Image.Image:
@@ -802,12 +1061,12 @@ class ColorSampler:
 
         Returns:
             List[npt.NDArray] for 4D: List of 6 arrays, one for each cubemap face
-            npt.NDArray for 3D: Array of colors in display_color_space
+            List[npt.NDArray] for 3D: List of 4 arrays, one for each square face
         """
         if self.color_space.dim == 4:
             return self._output_cubemap_values_4d(luminance, saturation, display_color_space, metameric_axis)
         elif self.color_space.dim == 3:
-            return self._output_circle_values_3d(luminance, saturation, display_color_space)
+            return self._output_square_values_3d(luminance, saturation, display_color_space)
         else:
             raise ValueError(f"output_cubemap_values not implemented for {self.color_space.dim}D color spaces.")
 
@@ -846,26 +1105,74 @@ class ColorSampler:
             colors += [self.color_space.convert(remapped_points, ColorSpaceType.VSH, display_color_space)]
         return colors
 
-    def _output_circle_values_3d(self, luminance: float, saturation: float,
-                                 display_color_space: ColorSpaceType) -> npt.NDArray:
-        """Generate circle values within the gamut boundaries (3D only)"""
-        # Sample angles uniformly
-        all_angles = Geometry.SampleCircle(self._cubemap_size)
-        all_thetas = all_angles.flatten()
+    def _output_square_values_3d(self, luminance: float, saturation: float,
+                                 display_color_space: ColorSpaceType) -> List[npt.NDArray]:
+        """Generate square values within the gamut boundaries (3D only)"""
+        # Generate grid of UV coordinates
+        all_us = (np.arange(self._cubemap_size) + 0.5) / self._cubemap_size
+        all_vs = (np.arange(self._cubemap_size) + 0.5) / self._cubemap_size
+        square_u, square_v = np.meshgrid(all_us, all_vs)
 
-        # Get max saturations from LUT
-        max_saturations = self._gamut_lut[:, 1]
-        normalized_saturations = max_saturations
+        # Get metameric direction matrix
+        metameric_dir = self.color_space.get_metameric_axis_in(
+            ColorSpaceType.HERING, metameric_axis_num=2)
+        metameric_dir_2d = metameric_dir[1:]
+        metameric_dir_2d = metameric_dir_2d / np.linalg.norm(metameric_dir_2d)
 
-        # Create VSH points
-        vshh = np.zeros((len(all_thetas), 3))
-        vshh[:, 0] = luminance
-        vshh[:, 1] = np.minimum(saturation, normalized_saturations)
-        vshh[:, 2] = all_thetas
+        angle = np.arctan2(metameric_dir_2d[1], metameric_dir_2d[0])
+        cos_a, sin_a = np.cos(angle), np.sin(angle)
+        rot_matrix = np.array([[cos_a, -sin_a], [sin_a, cos_a]])
+        inv_rot_matrix = np.linalg.inv(rot_matrix)
 
-        # Remap to gamut
-        remapped_points = self.remap_to_gamut(vshh)
-        colors = self.color_space.convert(remapped_points, ColorSpaceType.VSH, display_color_space)
+        # Process each face of the square
+        colors = []
+        for i in range(4):
+            # Convert UV to XY coordinates for this square face
+            xy = self._convert_square_uv_to_xy(i, square_u, square_v, 1).reshape(-1, 2)
+            xy = np.dot(inv_rot_matrix, xy.T).T
+
+            # Get max saturations from LUT
+            # Ensure _gamut_lut is a dictionary (not an old array format)
+            if not isinstance(self._gamut_lut, dict):
+                raise ValueError(f"_gamut_lut is not a dictionary (got {type(self._gamut_lut)}). "
+                                 f"This likely means an old cache format was loaded. "
+                                 f"Try calling get_gamut_lut(force_recompute=True) to regenerate.")
+            if i not in self._gamut_lut:
+                raise ValueError(f"Face {i} not found in _gamut_lut. Available keys: {list(self._gamut_lut.keys())}")
+
+            img = self._gamut_lut[i]
+            if isinstance(img, Image.Image):
+                # Ensure image is in RGB mode
+                if img.mode != 'RGB':
+                    img = img.convert('RGB')
+                img_array = np.array(img)
+            else:
+                raise ValueError(f"Expected PIL Image for face {i}, got {type(img)}")
+            # Ensure it's the right shape: (height, width, 3)
+            if img_array.ndim == 2:
+                # If it's 2D, it might be grayscale - convert to RGB
+                img_array = np.stack([img_array, img_array, img_array], axis=-1)
+            elif img_array.ndim == 3 and img_array.shape[2] != 3:
+                raise ValueError(f"Expected RGB image with 3 channels, got {img_array.shape}")
+
+            # Verify we have a valid image array before reshaping
+            if img_array.size == 0:
+                raise ValueError(f"Image array is empty for face {i}")
+
+            max_saturations = img_array.reshape(-1, 3)[:, 1]/255
+            normalized_saturations = (
+                max_saturations * (self._sat_range[1] - self._sat_range[0])) + self._sat_range[0]
+
+            # Create hering coordinates with unit luminance
+            lum_vector = np.ones(self._cubemap_size * self._cubemap_size) * luminance
+            vxy = np.hstack((lum_vector[np.newaxis, :].T, xy))
+
+            # Convert to VSH space
+            vshh = self.color_space.convert(vxy, ColorSpaceType.HERING, ColorSpaceType.VSH)
+            vshh[:, 1] = np.min(
+                np.vstack((np.full(normalized_saturations.shape, saturation), normalized_saturations)), axis=0)
+            remapped_points = self.remap_to_gamut(vshh)
+            colors += [self.color_space.convert(remapped_points, ColorSpaceType.VSH, display_color_space)]
         return colors
 
     def get_maximal_metameric_pairs(self) -> Tuple[npt.NDArray, npt.NDArray]:
