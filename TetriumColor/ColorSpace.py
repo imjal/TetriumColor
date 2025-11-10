@@ -119,10 +119,10 @@ class ColorSpace:
         """
         self.observer = observer
         self.metameric_axis = metameric_axis
-        self.led_mapping = led_mapping
-        if observer.dimension == 3:
+        if display_primaries is not None and observer.dimension == 3:
             display_primaries = [display_primaries[i] for i in [0, 1, 2]]  # RGB , presumably RGBO
             led_mapping = [0, 1, 2, 0, 1, 2]  # RGB / RGB
+        self.led_mapping = led_mapping
         self.display_primaries = display_primaries
         self.print_gamut = print_gamut
         self.disp_method = disp_method

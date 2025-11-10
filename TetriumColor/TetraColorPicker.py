@@ -555,7 +555,7 @@ class GeneticColorGenerator(ColorGenerator):
     def __init__(self, sex: str, percentage_screened: float, peak_to_test: float = 547,
                  luminance: float = 1.0, saturation: float = 0.5,
                  dimensions: Optional[List[int]] = [3], seed: int = 42,
-                 trials_per_direction: int = 20, metameric_axes: List[int] = [1, 2, 3], **kwargs):
+                 trials_per_direction: int = 20, metameric_axes: List[int] = [1, 2, 3], randomize_genotypes: bool = True, **kwargs):
         """Color picker that samples from the most common trichromatic phenotypes.
 
         Args:
@@ -574,6 +574,8 @@ class GeneticColorGenerator(ColorGenerator):
         self.luminance = luminance
         self.saturation = saturation
 
+        self.randomize_genotypes = randomize_genotypes
+
         # Get genotypes covering the target probability
         self.genotypes = self.observer_genotypes.get_genotypes_covering_probability(
             target_probability=percentage_screened, sex=sex)
@@ -582,14 +584,24 @@ class GeneticColorGenerator(ColorGenerator):
         self.genotype_mapping: Dict[Tuple, Tuple[ColorSpace, List[npt.NDArray]]] = {}
 
         for genotype in self.genotypes:
-            if peak_to_test not in genotype:
-                # Create color space with the peak to test added
-                color_space = self.observer_genotypes.get_color_space_for_peaks(
-                    genotype + (peak_to_test,), **kwargs)
+            if len(genotype) == 1:  # testing for hard dichromats
+                if 530 in genotype or 533 in genotype:  # protonope
+                    genotype = genotype + (559,)
+                else:
+                    genotype = (530,) + genotype  # deuteranope
+            elif len(genotype) == 2:  # testing for trichromats
+                if peak_to_test not in genotype:
+                    genotype = genotype + (peak_to_test,)
+                else:
+                    continue
 
-                # Create color sampler and get cubemap values
-                color_sampler = ColorSampler(color_space, cubemap_size=5)
-                self.genotype_mapping[genotype] = [color_space, color_sampler]
+            # Create color space with the peak to test added
+            color_space = self.observer_genotypes.get_color_space_for_peaks(
+                genotype, **kwargs)
+
+            # Create color sampler and get cubemap values
+            color_sampler = ColorSampler(color_space, cubemap_size=5)
+            self.genotype_mapping[genotype] = [color_space, color_sampler]
 
         self.list_of_genotypes = list(self.genotype_mapping.keys())
 
@@ -603,14 +615,21 @@ class GeneticColorGenerator(ColorGenerator):
             for metameric_axis in self.metameric_axes:
                 for i in range(self.trials_per_direction):
                     trial_list.append((genotype, metameric_axis))
-        np.random.shuffle(trial_list)
+        if self.randomize_genotypes:
+            np.random.shuffle(trial_list)
         self._trial_list = trial_list
         self._trial_idx = 0
 
     def NewColor(self):
         """Return the cone, axis, etc. for the next trial (for first use or after reset)."""
-        if not hasattr(self, "_trial_list") or self._trial_idx >= len(self._trial_list):
+        if not hasattr(self, "_trial_list"):
             self._generate_trials()
+
+            print("Trial Number: ", self._trial_idx)
+            print("Number of trials: ", len(self._trial_list))
+        elif self._trial_idx >= len(self._trial_list):
+            print("No more trials to generate")
+            return None
         genotype, metameric_axis = self._trial_list[self._trial_idx]
         self._trial_idx += 1
         return self.GetMetamericPair(genotype, metameric_axis)
@@ -638,6 +657,14 @@ class GeneticColorGenerator(ColorGenerator):
             List[Tuple]: The list of genotypes.
         """
         return self.genotypes
+
+    def GetCurrentTestInfo(self) -> Tuple:
+        """Get the current genotype.
+
+        Returns:
+            Tuple: The current genotype.
+        """
+        return self._trial_list[self._trial_idx-1]
 
     def GetMetamericPair(self, genotype: Tuple, metameric_axis: int = None) -> Tuple[npt.NDArray, npt.NDArray, ColorSpace]:
         """Get a metameric pair for a given genotype.

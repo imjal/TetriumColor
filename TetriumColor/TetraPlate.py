@@ -1,6 +1,6 @@
 import numpy as np
 import numpy.typing as npt
-from typing import List, Tuple, Union
+from typing import Any, List, Tuple, Union
 from abc import ABC, abstractmethod
 from PIL import Image
 
@@ -191,15 +191,8 @@ class PseudoIsochromaticPlateGenerator(PlateGenerator):
             rgb_path = f"{filename}_SRGB.png"
             ocv_path = rgb_path  # For SRGB, both paths are the same
 
-        # Extract genotype if available
-        genotype = getattr(color_space, 'genotype', None)
-        if genotype:
-            genotype_str = str(genotype)
-        else:
-            genotype_str = "unknown"
-
-        # Extract metameric axis if available
-        metameric_axis = getattr(color_space, 'metameric_axis', -1)
+        genotype, metameric_axis = self.color_generator.GetCurrentTestInfo()
+        genotype_str = str(genotype)
 
         # Return trial data as dictionary
         return {
@@ -379,7 +372,7 @@ if __name__ == "__main__":
         primaries = load_primaries_from_csv("./measurements/2025-10-10/primaries/")
 
         color_generator = GeneticCDFTestColorGenerator(
-            sex='female', percentage_screened=0.999, dimensions=[2], display_primaries=primaries)
+            sex='female', percentage_screened=0.999, dimensions=[2], display_primaries=primaries, trials_per_direction=1)
 
         print("Number of Genotypes: ", color_generator.get_num_samples())
         number_of_tests = color_generator.get_num_samples()
@@ -426,45 +419,74 @@ if __name__ == "__main__":
         from TetriumColor.Measurement import load_primaries_from_csv
 
         primaries = load_primaries_from_csv("./measurements/2025-10-10/primaries/")
-
+        testing_dim = 3
         color_generator = GeneticColorGenerator(
-            sex='female', percentage_screened=0.999, display_primaries=primaries, dimensions=[2])
+            sex='both', percentage_screened=0.999, display_primaries=primaries, dimensions=[testing_dim],
+            metameric_axes=list(range(1, testing_dim + 1)), trials_per_direction=1, randomize_genotypes=False)
+
+        print("Number of Genotypes: ", len(color_generator.genotypes))
 
         genotypes = color_generator.GetGenotypes()
-        plate_generator = GeneticColorPickerPlateGenerator(color_generator)
+        print(f"Genotypes: {genotypes}")
+        plate_generator = PseudoIsochromaticPlateGenerator(color_generator)
 
         lum_noise = 0.0
         s_cone_noise = 0.1
         output_space = ColorSpaceType.DISP_6P
         output_filename = "genetic_color_picker_scone_noise"
 
-        dirname = f"./measurements/2025-11-4/tests_noise_{lum_noise}_scone_noise_{s_cone_noise}"
+        dirname = f"./measurements/2025-11-10/noise_{lum_noise}_scone_{s_cone_noise}_dimension_{testing_dim}"
         os.makedirs(dirname, exist_ok=True)
 
         # Get the list of uppercase alphabet letters (A-Z)
         import string
-        alphabet = list(string.ascii_uppercase) * 2
+        alphabet = list(string.ascii_uppercase) * 10
+        images = []
 
-        control_plate = plate_generator.GetControlPlate(os.path.join(
-            dirname, "control"), color_generator.genotype_mapping[genotypes[0]][0], lum_noise=lum_noise, s_cone_noise=s_cone_noise, output_space=output_space, corner_label=alphabet[0])
-        images = [control_plate]
+        # control_plate = plate_generator.GetControlPlate(os.path.join(
+        #     dirname, "control"), color_generator.genotype_mapping[genotypes[0]][0], lum_noise=lum_noise, s_cone_noise=s_cone_noise, output_space=output_space, corner_label=alphabet[0])
+        # images.append(control_plate)
 
         landolt_symbols = ['landolt_up', 'landolt_down', 'landolt_left', 'landolt_right']
 
-        for i, genotype in enumerate(genotypes):
-            for j, metameric_axis in enumerate(range(4)):
-                idx = i * 4 + j
-                random_landolt_symbol = np.random.choice(landolt_symbols)
-                print(f"Generating plate {genotype} {metameric_axis}")
-                images.append(plate_generator.GetPlate(
-                    genotype, metameric_axis, os.path.join(dirname, f"test_{idx}"), random_landolt_symbol, output_space=output_space, lum_noise=lum_noise, s_cone_noise=s_cone_noise, corner_label=alphabet[idx]))
+        idx = 0
+        while True:
+            random_landolt_symbol = np.random.choice(landolt_symbols)
+            image = plate_generator.GetTest(None, os.path.join(
+                dirname, f"test_{idx}"), random_landolt_symbol, output_space=output_space,
+                lum_noise=lum_noise, s_cone_noise=s_cone_noise, corner_label=alphabet[idx])
+            print(f"Generated plate {idx}")
+            if image is None:
+                break
+            images.append(image)
+            idx += 1
+
         if output_space == ColorSpaceType.DISP_6P:
-            rgb_images = [image[0] for image in images]
-            ocv_images = [image[1] for image in images]
+            from PIL import Image
+            rgb_images = [Image.open(image['rgb_path']) for image in images]
+            ocv_images = [Image.open(image['ocv_path']) for image in images]
             rgb_grid = CreatePaddedGrid(rgb_images, padding=0, channels=3, square_grid=False)
             ocv_grid = CreatePaddedGrid(ocv_images, padding=0, channels=3, square_grid=False)
             rgb_grid.save(os.path.join(dirname, f"{output_filename}_RGB.png"))
             ocv_grid.save(os.path.join(dirname, f"{output_filename}_OCV.png"))
+
+            # For each generated plate (indexed by idx/alphabet), save genotype and metameric axis to a .txt file
+            genotype_axis_txt_path = os.path.join(dirname, f"{output_filename}_genotype_axis.txt")
+            with open(genotype_axis_txt_path, "w") as f:
+                f.write("Letter\tGenotype\tMetamericAxis\n")
+                for i, image_info in enumerate(images):
+                    # Each 'image_info' should have metameric_axis and genotype (from GetTest)
+                    letter = alphabet[i]
+                    genotype = image_info.get('genotype', None)
+                    axis = image_info.get('metameric_axis', None)
+                    # Format genotype nicely as tuple or string
+                    if genotype is not None:
+                        genotype_str = str(tuple[Any, ...](genotype)) if not isinstance(genotype, str) else genotype
+                    else:
+                        genotype_str = "N/A"
+                    axis_str = str(axis) if axis is not None else "N/A"
+                    f.write(f"{letter}\t{genotype_str}\t{axis_str}\n")
+            print(f"Saved genotype/axis mapping to {genotype_axis_txt_path}")
         else:
             images = [image[0] for image in images]
             grid = CreatePaddedGrid(images, padding=0, channels=3, square_grid=False)
