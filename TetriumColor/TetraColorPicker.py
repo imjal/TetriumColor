@@ -115,21 +115,32 @@ class QuestColorGenerator(ColorGenerator):
             seed=seed
         )
 
-        genotypes = self.observer_genotypes.get_genotypes_covering_probability(
-            target_probability=percentage_screened, sex=self.sex
-        )[:self.num_genotypes]
+        # Get genotypes covering the target probability
+        self.genotypes = self.observer_genotypes.get_genotypes_covering_probability(
+            target_probability=percentage_screened, sex=sex)
 
-        self.genotype_mapping = {}
+        # Create mapping from genotype -> [color_space, color_sampler]
+        self.genotype_mapping: Dict[Tuple, Tuple[ColorSpace, List[npt.NDArray]]] = {}
 
-        print(f"Using {len(genotypes)} top genotypes for direction generation")
+        for genotype in self.genotypes:
+            if len(genotype) == 1:  # testing for hard dichromats
+                if 530 in genotype or 533 in genotype:  # protonope
+                    genotype = genotype + (559,)
+                else:
+                    genotype = (530,) + genotype  # deuteranope
+            elif len(genotype) == 2:  # testing for trichromats
+                if peak_to_test not in genotype:
+                    genotype = genotype + (peak_to_test,)
+                else:
+                    continue
 
-        for genotype in genotypes:
-            # Create color space for this genotype
-            genotype_cs = self.observer_genotypes.get_color_space_for_peaks(
-                genotype + (peak_to_test,),
-                **kwargs
-            )
-            self.genotype_mapping[genotype] = genotype_cs
+            # Create color space with the peak to test added
+            color_space = self.observer_genotypes.get_color_space_for_peaks(
+                genotype, **kwargs)
+
+            # Create color sampler and get cubemap values
+            color_sampler = ColorSampler(color_space, cubemap_size=5)
+            self.genotype_mapping[genotype] = color_space
 
         self.background = np.ones(dimensions[0] + 1) * 0.5
 
@@ -324,6 +335,8 @@ class QuestColorGenerator(ColorGenerator):
     def NewColor(self) -> Tuple[npt.NDArray, npt.NDArray, ColorSpace, float]:
         """Get first color stimulus."""
         self.current_direction_idx = 0
+        import pdb
+        pdb.set_trace()
         return self._get_color_for_direction(self.current_direction_idx)
 
     def GetColor(self, previous_result: ColorTestResult) -> Tuple[npt.NDArray, npt.NDArray, ColorSpace, float] | None:
@@ -337,7 +350,8 @@ class QuestColorGenerator(ColorGenerator):
         """
         if self.current_direction_idx < 0 or self.current_direction_idx >= len(self.directions):
             return None
-
+        import pdb
+        pdb.set_trace()
         # Update Quest with previous response
         quest = self.quest_objects[self.current_direction_idx]
 
@@ -392,6 +406,14 @@ class QuestColorGenerator(ColorGenerator):
             np.array([background_disp]), ColorSpaceType.DISP, ColorSpaceType.CONE)[0]
         test_cone = genotype_cs.convert(
             np.array([test_disp]), ColorSpaceType.DISP, ColorSpaceType.CONE)[0]
+
+        print("DEBUG: background_cone: ", background_cone)
+        print("DEBUG: test_cone: ", test_cone)
+        print("DEBUG: background_disp: ", background_disp)
+        print("DEBUG: test_disp: ", test_disp)
+        print("DEBUG: direction_vec: ", direction_vec)
+        import pdb
+        pdb.set_trace()
 
         # Compute DISP distance from background (this is what we're thresholding)
         disp_distance = np.linalg.norm(test_disp - background_disp)
