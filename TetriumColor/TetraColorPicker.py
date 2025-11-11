@@ -97,7 +97,7 @@ class QuestColorGenerator(ColorGenerator):
 
         # Default Quest parameters
         default_quest_params = {
-            'tGuess': -1.5,  # log10 of initial threshold guess (around 3% saturation)
+            'tGuess': -0.046,  # log10 of initial threshold guess (90% of max - start at most visible end)
             'tGuessSd': 0.5,  # standard deviation of initial guess
             'pThreshold': 0.75,  # threshold criterion (75% correct)
             'beta': 3.5,  # steepness of psychometric function
@@ -335,8 +335,6 @@ class QuestColorGenerator(ColorGenerator):
     def NewColor(self) -> Tuple[npt.NDArray, npt.NDArray, ColorSpace, float]:
         """Get first color stimulus."""
         self.current_direction_idx = 0
-        import pdb
-        pdb.set_trace()
         return self._get_color_for_direction(self.current_direction_idx)
 
     def GetColor(self, previous_result: ColorTestResult) -> Tuple[npt.NDArray, npt.NDArray, ColorSpace, float] | None:
@@ -350,8 +348,7 @@ class QuestColorGenerator(ColorGenerator):
         """
         if self.current_direction_idx < 0 or self.current_direction_idx >= len(self.directions):
             return None
-        import pdb
-        pdb.set_trace()
+
         # Update Quest with previous response
         quest = self.quest_objects[self.current_direction_idx]
 
@@ -406,14 +403,6 @@ class QuestColorGenerator(ColorGenerator):
             np.array([background_disp]), ColorSpaceType.DISP, ColorSpaceType.CONE)[0]
         test_cone = genotype_cs.convert(
             np.array([test_disp]), ColorSpaceType.DISP, ColorSpaceType.CONE)[0]
-
-        print("DEBUG: background_cone: ", background_cone)
-        print("DEBUG: test_cone: ", test_cone)
-        print("DEBUG: background_disp: ", background_disp)
-        print("DEBUG: test_disp: ", test_disp)
-        print("DEBUG: direction_vec: ", direction_vec)
-        import pdb
-        pdb.set_trace()
 
         # Compute DISP distance from background (this is what we're thresholding)
         disp_distance = np.linalg.norm(test_disp - background_disp)
