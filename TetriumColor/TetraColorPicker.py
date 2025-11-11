@@ -375,6 +375,16 @@ class QuestColorGenerator(ColorGenerator):
         self.current_direction_idx = next_direction_idx
         return self._get_color_for_direction(self.current_direction_idx)
 
+    def GetCurrentTestInfo(self) -> Tuple:
+        """Get the current info about the test.
+
+        Returns:
+            Tuple: The current genotype.
+        """
+        genotype = self.direction_metadata[self.current_direction_idx]['genotype']
+        metameric_axis = self.direction_metadata[self.current_direction_idx]['metameric_axis']
+        return genotype, metameric_axis
+
     def _get_color_for_direction(self, direction_idx: int) -> Tuple[npt.NDArray, npt.NDArray, ColorSpace, float]:
         """Get color stimulus for a specific direction."""
         direction_vec = self.directions[direction_idx]  # This is already scaled to max_distance
