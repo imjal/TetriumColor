@@ -121,7 +121,8 @@ PyObject* ColorGeneratorFactory::CreateQuestColorGenerator(
     int trials_per_direction,
     const std::vector<int>& metameric_axes,
     const std::vector<int>& dimensions,
-    const std::string& display_primaries_path
+    const std::string& display_primaries_path,
+    bool bipolar
 )
 {
     // Load primaries from CSV first
@@ -195,6 +196,7 @@ PyObject* ColorGeneratorFactory::CreateQuestColorGenerator(
     PyDict_SetItemString(pKwargs, "dimensions", pDimensions);        // Steals reference
     PyDict_SetItemString(pKwargs, "metameric_axes", pMetamericAxes); // Steals reference
     PyDict_SetItemString(pKwargs, "display_primaries", pPrimaries);  // Steals reference
+    PyDict_SetItemString(pKwargs, "bipolar", bipolar ? Py_True : Py_False);
 
     PyObject* pArgs = PyTuple_New(2);
     PyTuple_SetItem(pArgs, 0, PyUnicode_FromString(sex.c_str()));

@@ -69,6 +69,7 @@ class QuestColorGenerator(ColorGenerator):
                  trials_per_direction: int = 20,
                  quest_params: Optional[Dict] = None,
                  metameric_axes: Optional[List[int]] = [2],
+                 bipolar: bool = False,
                  **kwargs):
         """Initialize Quest-based color generator.
 
@@ -85,6 +86,7 @@ class QuestColorGenerator(ColorGenerator):
             trials_per_direction: Number of trials per direction
             quest_params: Optional dictionary of Quest parameters (tGuess, tGuessSd, pThreshold, beta, delta, gamma)
             metameric_axes: Optional list of metameric axes to test (e.g., [2] for only testing 547nm cone). If None, tests all axes.
+            bipolar: If True, sample in both direction and -direction, returning the -direction point instead of the background
             **kwargs: Additional arguments including display_primaries
         """
         self.background_luminance = luminance
@@ -94,6 +96,7 @@ class QuestColorGenerator(ColorGenerator):
         self.sex = sex
         self.metameric_axes = metameric_axes if metameric_axes is not None else list(range(4))
         self.dim = 4
+        self.bipolar = bipolar
 
         # Default Quest parameters
         default_quest_params = {
@@ -402,20 +405,38 @@ class QuestColorGenerator(ColorGenerator):
         # Store the CLIPPED log proportion for Quest update (so Quest knows what we actually tested)
         self._last_intensity = np.log10(np.maximum(proportion, 1e-10))  # Avoid log(0)
 
-        # Get test point in DISP space
-        # direction_vec is already scaled by max_distance, so proportion directly scales it
-        test_disp = self._disp_direction_to_point(background_disp, direction_vec, proportion)
-
         genotype_cs = self.genotype_mapping[self.direction_metadata[direction_idx]['genotype']]
 
-        # Convert both to cone space
-        background_cone = genotype_cs.convert(
-            np.array([background_disp]), ColorSpaceType.DISP, ColorSpaceType.CONE)[0]
-        test_cone = genotype_cs.convert(
-            np.array([test_disp]), ColorSpaceType.DISP, ColorSpaceType.CONE)[0]
+        if self.bipolar:
+            # Sample in both direction and -direction
+            # Get test point in positive direction
+            test_disp = self._disp_direction_to_point(background_disp, direction_vec, proportion)
+            # Get test point in negative direction
+            negative_test_disp = self._disp_direction_to_point(background_disp, -direction_vec, proportion)
 
-        # Compute DISP distance from background (this is what we're thresholding)
-        disp_distance = np.linalg.norm(test_disp - background_disp)
+            # Convert both to cone space
+            # Return negative direction point as "background" and positive direction point as "test"
+            background_cone = genotype_cs.convert(
+                np.array([negative_test_disp]), ColorSpaceType.DISP, ColorSpaceType.CONE)[0]
+            test_cone = genotype_cs.convert(
+                np.array([test_disp]), ColorSpaceType.DISP, ColorSpaceType.CONE)[0]
+
+            # Compute DISP distance between the two test points
+            disp_distance = np.linalg.norm(test_disp - negative_test_disp)
+        else:
+            # Original behavior: sample in one direction, return background and test point
+            # Get test point in DISP space
+            # direction_vec is already scaled by max_distance, so proportion directly scales it
+            test_disp = self._disp_direction_to_point(background_disp, direction_vec, proportion)
+
+            # Convert both to cone space
+            background_cone = genotype_cs.convert(
+                np.array([background_disp]), ColorSpaceType.DISP, ColorSpaceType.CONE)[0]
+            test_cone = genotype_cs.convert(
+                np.array([test_disp]), ColorSpaceType.DISP, ColorSpaceType.CONE)[0]
+
+            # Compute DISP distance from background (this is what we're thresholding)
+            disp_distance = np.linalg.norm(test_disp - background_disp)
 
         return background_cone, test_cone, genotype_cs, disp_distance
 

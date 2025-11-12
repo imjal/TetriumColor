@@ -33,7 +33,8 @@ class ColorGeneratorFactory
         int trials_per_direction = 20,
         const std::vector<int>& metameric_axes = {}, // Empty = all axes
         const std::vector<int>& dimensions = {2},    // Dimensions for ObserverGenotypes
-        const std::string& display_primaries_path = ""
+        const std::string& display_primaries_path = "",
+        bool bipolar = false
     );
 
     // Create a TestGenerator (PseudoIsochromaticPlateGenerator) instance
