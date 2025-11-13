@@ -150,8 +150,9 @@ class ColorSpace:
     def _get_cone_to_hering(self) -> npt.NDArray:
         """Lazy compute CONE->HERING transformation matrix."""
         if self._cone_to_hering is None:
-            cone_to_maxbasis = self._get_cone_to_maxbasis()
+            # Reuse the same max_basis object to ensure consistency
             max_basis = MaxBasisFactory.get_object(self.observer, denom=1, verbose=False)
+            cone_to_maxbasis = max_basis.cone_to_maxbasis
             hering_matrix = max_basis.HMatrix
             self._cone_to_hering = hering_matrix @ cone_to_maxbasis
         return self._cone_to_hering
@@ -424,6 +425,9 @@ class ColorSpace:
         # Step 2: Convert FROM CONE TO target space
         if to_space == ColorSpaceType.CONE:
             return cone_points
+        # Special case: if converting from HERING to VSH, use direct path (no roundtrip through CONE)
+        elif from_space == ColorSpaceType.HERING and to_space == ColorSpaceType.VSH:
+            return self._hering_to_vsh(points)
         elif to_space == ColorSpaceType.PRINT:
             # CONE -> PRINT via InkGamut
             if ink_gamut is None:
@@ -468,7 +472,7 @@ class ColorSpace:
             # sRGB gamma encoding
             encoded_rgb = np.where(linear_rgb <= 0.0031308,
                                    12.92 * linear_rgb,
-                                   1.055 * np.power(linear_rgb, 1/2.4) - 0.055)
+                                   1.055 * np.power(linear_rgb, 1/2.2) - 0.055)
             return encoded_rgb.T
         elif to_space == ColorSpaceType.OKLAB:
             # CONE -> XYZ -> OKLAB
