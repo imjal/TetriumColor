@@ -421,10 +421,9 @@ class QuestColorGenerator(ColorGenerator):
             test_cone = genotype_cs.convert(
                 np.array([test_disp]), ColorSpaceType.DISP, ColorSpaceType.CONE)[0]
 
-            # For bipolar, the distance between the two points is 2 * actual_distance
-            # Return proportion: (2 * actual_distance) / (2 * max_distance) = proportion
-            # But we want to return the proportion of max_distance, so we use proportion directly
-            disp_distance = np.linalg.norm(test_disp - negative_test_disp)
+            # For bipolar, return proportion (0-1) representing proportion of max_distance
+            # The distance between the two points is 2 * (proportion * max_distance),
+            # but we return the proportion of max_distance for consistency
         else:
             # Original behavior: sample in one direction, return background and test point
             # Get test point in DISP space
@@ -437,10 +436,9 @@ class QuestColorGenerator(ColorGenerator):
             test_cone = genotype_cs.convert(
                 np.array([test_disp]), ColorSpaceType.DISP, ColorSpaceType.CONE)[0]
 
-            # Compute DISP distance from background (this is what we're thresholding)
-            disp_distance = np.linalg.norm(test_disp - background_disp)
-
-        return background_cone, test_cone, genotype_cs, disp_distance
+        # Return proportion (0-1) as intensity, representing proportion of max_distance
+        # This is consistent with threshold_proportion and makes intensity comparable across directions
+        return background_cone, test_cone, genotype_cs, proportion
 
     def _compute_final_thresholds(self):
         """Compute final threshold estimates for all directions."""
