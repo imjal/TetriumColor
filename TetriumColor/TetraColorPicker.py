@@ -105,7 +105,7 @@ class QuestColorGenerator(ColorGenerator):
             'pThreshold': 0.75,  # threshold criterion (75% correct)
             'beta': 3.5,  # steepness of psychometric function
             'delta': 0.01,  # lapse rate
-            'gamma': 0.5  # guess rate (2AFC)
+            'gamma': 0.25  # guess rate (4AFC)
         }
         if quest_params:
             default_quest_params.update(quest_params)
@@ -316,7 +316,7 @@ class QuestColorGenerator(ColorGenerator):
         # Interleave: cycle through incomplete directions
         return incomplete_directions[self.total_trials % len(incomplete_directions)]
 
-    def _disp_direction_to_point(self, background_disp: npt.NDArray, disp_direction: npt.NDArray, distance: float) -> npt.NDArray:
+    def _disp_direction_to_point(self, background_disp: npt.NDArray, disp_direction: npt.NDArray, proportion: float) -> npt.NDArray:
         """Convert DISP direction + distance to DISP point.
 
         Args:
@@ -328,7 +328,7 @@ class QuestColorGenerator(ColorGenerator):
             DISP coordinates
         """
         # Move from background in the direction by the distance
-        disp_point = background_disp + disp_direction * distance
+        disp_point = background_disp + disp_direction * proportion
 
         # Clip to valid DISP range [0, 1]
         disp_point = np.clip(disp_point, 0, 1)
@@ -421,7 +421,9 @@ class QuestColorGenerator(ColorGenerator):
             test_cone = genotype_cs.convert(
                 np.array([test_disp]), ColorSpaceType.DISP, ColorSpaceType.CONE)[0]
 
-            # Compute DISP distance between the two test points
+            # For bipolar, the distance between the two points is 2 * actual_distance
+            # Return proportion: (2 * actual_distance) / (2 * max_distance) = proportion
+            # But we want to return the proportion of max_distance, so we use proportion directly
             disp_distance = np.linalg.norm(test_disp - negative_test_disp)
         else:
             # Original behavior: sample in one direction, return background and test point
@@ -451,16 +453,23 @@ class QuestColorGenerator(ColorGenerator):
 
             # Scale to actual distance
             threshold_distance = threshold_proportion * np.linalg.norm(direction_vec)
+            max_distance = np.linalg.norm(direction_vec)
+
+            # Check if threshold is beyond displayable gamut
+            beyond_gamut = threshold_proportion > 1.0
 
             sd_log = quest.sd()
 
             self.thresholds[i] = {
-                'direction': direction_vec,  # Normalized direction vector
+                'direction': direction_vec,  # Direction vector (scaled to max_distance)
                 'background': self.background,  # Background point (origin)
-                'threshold_distance': threshold_distance,  # Actual distance in DISP space
-                'threshold_proportion': threshold_proportion,  # Proportion of max distance
+                # Actual distance in DISP space (may exceed max_distance if beyond_gamut)
+                'threshold_distance': threshold_distance,
+                # Proportion of max distance (may be > 1.0 if beyond gamut)
+                'threshold_proportion': threshold_proportion,
                 'threshold_log_proportion': threshold_log_proportion,  # Log10 of proportion
-                'max_distance': np.linalg.norm(direction_vec),  # Maximum displayable distance
+                'max_distance': max_distance,  # Maximum displayable distance
+                'beyond_gamut': beyond_gamut,  # True if threshold exceeds displayable gamut
                 'sd_log': sd_log,
                 'trials': self.trials_completed[i],
                 'genotype': metadata.get('genotype'),
