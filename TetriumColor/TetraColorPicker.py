@@ -102,9 +102,9 @@ class QuestColorGenerator(ColorGenerator):
         default_quest_params = {
             'tGuess': -0.046,  # log10 of initial threshold guess (90% of max - start at most visible end)
             'tGuessSd': 0.5,  # standard deviation of initial guess
-            'pThreshold': 0.75,  # threshold criterion (75% correct)
+            'pThreshold': 0.5,  # threshold criterion (50% correct), lower bc sensitivity
             'beta': 3.5,  # steepness of psychometric function
-            'delta': 0.01,  # lapse rate
+            'delta': 0.05,  # lapse rate
             'gamma': 0.25  # guess rate (4AFC)
         }
         if quest_params:
