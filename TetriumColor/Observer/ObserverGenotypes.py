@@ -578,8 +578,9 @@ class ObserverGenotypes:
         cones = []
         for peak in sorted(peaks):
             if peak == 420:
-                od = od * 0.8
-            cone = Cone.cone(peak, wavelengths=self.wavelengths, template='neitz', od=od)
+                cone = Cone.cone(peak, wavelengths=self.wavelengths, template='neitz', od=od * 0.8)
+            else:
+                cone = Cone.cone(peak, wavelengths=self.wavelengths, template='neitz', od=od)
             cones.append(cone)
 
         return Observer(cones, illuminant=None)
@@ -629,7 +630,7 @@ class ObserverGenotypes:
         Returns:
             Observer object
         """
-        return self.get_observer_for_peaks(list(genotype))
+        return self.get_observer_for_peaks(genotype)
 
     def get_color_space_for_genotype(self, genotype: Tuple[float, ...],
                                      **kwargs) -> ColorSpace:

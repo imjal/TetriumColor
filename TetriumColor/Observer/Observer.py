@@ -318,14 +318,48 @@ class Cone(Spectra):
         return (~(C_r / denom)).as_energy()
 
     @staticmethod
-    def cone(peak, template="govardovskii", od: float = 0.35, lens: float = 1.0, macular: float = 1.0, wavelengths=None):
+    def cone(peak, template="govardovskii", od: float = 0.35, lens: float = 1.0, macular: float = 1.0, degree: Optional[float] = 4, wavelengths=None):
         # TODO: want to add eccentricity and/or macular, lens control
+
         if not isinstance(peak, (int, float)):
             raise ValueError("Currently only numerical peaks are supported.")
         if wavelengths is None:
             wavelengths = np.arange(400, 701, 1)
         if template not in Cone.templates:
             raise ValueError(f"Choose a template from {Cone.templates.keys()}")
+
+        def macular_pigment_factor(degree):
+            """
+            Macular pigment optical density factor (multiply your CSV by this).
+            1.0 at 2°, 0.271 at 10°, using area-based interpolation.
+            """
+            degree = np.clip(degree, 2.0, 10.0)
+            return 1.0 + (0.271 - 1.0) * (degree**2 - 4) / 96
+
+        def lm_photopigment_od(degree):
+            """
+            Peak optical density for L and M cone photopigments.
+            0.50 at 2°, 0.38 at 10°, using area-based interpolation.
+            """
+            degree = np.clip(degree, 2.0, 10.0)
+            return 0.50 + (0.38 - 0.50) * (degree**2 - 4) / 96
+
+        def s_photopigment_od(degree):
+            """
+            Peak optical density for S cone photopigment.
+            0.40 at 2°, 0.30 at 10°, using area-based interpolation.
+            """
+            degree = np.clip(degree, 2.0, 10.0)
+            return 0.40 + (0.30 - 0.40) * (degree**2 - 4) / 96
+
+        macular = macular * macular_pigment_factor(degree)
+        if od == 0.4:
+            od = s_photopigment_od(degree)
+        elif od == 0.5:
+            od = lm_photopigment_od(degree)
+        else:
+            raise ValueError(f"OD {od} not supported")
+        print(f"Degree: {degree}, Macular: {macular}, OD: {od}")
         return Cone.templates[template](wavelengths, peak).with_preceptoral(od=od, macular=macular, lens=lens)
 
     @staticmethod
@@ -366,7 +400,10 @@ class Cone(Spectra):
 
 
 class Observer:
-    def __init__(self, sensors: List[Cone], illuminant: Optional[Spectra] = Illuminant.get('D65'), verbose: bool = False):
+    def __init__(self, sensors: List[Cone],
+                 illuminant: Optional[Spectra] = Illuminant.get('D65'),
+                 degree: Optional[float] = 2,
+                 verbose: bool = False):
         self.dimension = len(sensors)
         self.sensors = sensors
 
