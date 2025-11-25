@@ -404,10 +404,10 @@ class QuestColorGenerator(ColorGenerator):
         test_cone = genotype_cs.convert(
             np.array([test_disp]), ColorSpaceType.DISP, ColorSpaceType.CONE)[0]
 
-        # Compute DISP distance from background (this is what we're thresholding)
-        disp_distance = np.linalg.norm(test_disp - background_disp)
+        # # Compute DISP distance from background (this is what we're thresholding)
+        # disp_distance = np.linalg.norm(test_disp - background_disp)
 
-        return background_cone, test_cone, genotype_cs, disp_distance
+        return background_cone, test_cone, genotype_cs, proportion
 
     def _compute_final_thresholds(self):
         """Compute final threshold estimates for all directions."""
