@@ -18,7 +18,7 @@ def compute_cone_to_display_direct(
     observer: Observer,
     display_primaries: List[Spectra],
     white_point_normalize: bool = True,
-    scaling_factor: float = 100
+    scaling_factor: float = 10000
 ) -> Tuple[npt.NDArray, Dict[str, Any]]:
     """
     Direct matrix inverse when N cones = N primaries.

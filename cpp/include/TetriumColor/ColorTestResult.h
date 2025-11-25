@@ -4,5 +4,6 @@
 enum class ColorTestResult
 {
     Success = 1,
-    Failure = 0
+    Failure = 0,
+    NoAnswer = -1
 };

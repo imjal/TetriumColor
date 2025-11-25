@@ -160,8 +160,18 @@ std::optional<TrialData> TestGenerator::GetNextTrial(
         throw std::runtime_error("TestGenerator: Failed to get ColorTestResult class");
     }
 
-    // Get the appropriate enum value (Success or Failure)
-    const char* result_name = (previous_result == ColorTestResult::Success) ? "Success" : "Failure";
+    // Get the appropriate enum value (Success, Failure, or NoAnswer)
+    const char* result_name;
+    if (previous_result == ColorTestResult::Success) {
+        result_name = "Success";
+    } else if (previous_result == ColorTestResult::Failure) {
+        result_name = "Failure";
+    } else if (previous_result == ColorTestResult::NoAnswer) {
+        result_name = "NoAnswer";
+    } else {
+        Py_DECREF(pColorTestResultClass);
+        throw std::runtime_error("TestGenerator: Unknown ColorTestResult value");
+    }
     PyObject* pPreviousResult = PyObject_GetAttrString(pColorTestResultClass, result_name);
     Py_DECREF(pColorTestResultClass);
 

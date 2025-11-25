@@ -69,6 +69,7 @@ class QuestColorGenerator(ColorGenerator):
                  trials_per_direction: int = 20,
                  quest_params: Optional[Dict] = None,
                  metameric_axes: Optional[List[int]] = [2],
+                 bipolar: bool = False,
                  **kwargs):
         """Initialize Quest-based color generator.
 
@@ -85,6 +86,7 @@ class QuestColorGenerator(ColorGenerator):
             trials_per_direction: Number of trials per direction
             quest_params: Optional dictionary of Quest parameters (tGuess, tGuessSd, pThreshold, beta, delta, gamma)
             metameric_axes: Optional list of metameric axes to test (e.g., [2] for only testing 547nm cone). If None, tests all axes.
+            bipolar: If True, sample in both direction and -direction, returning the -direction point instead of the background
             **kwargs: Additional arguments including display_primaries
         """
         self.background_luminance = luminance
@@ -94,15 +96,16 @@ class QuestColorGenerator(ColorGenerator):
         self.sex = sex
         self.metameric_axes = metameric_axes if metameric_axes is not None else list(range(4))
         self.dim = 4
+        self.bipolar = bipolar
 
         # Default Quest parameters
         default_quest_params = {
             'tGuess': -0.046,  # log10 of initial threshold guess (90% of max - start at most visible end)
             'tGuessSd': 0.5,  # standard deviation of initial guess
-            'pThreshold': 0.75,  # threshold criterion (75% correct)
+            'pThreshold': 0.5,  # threshold criterion (50% correct), lower bc sensitivity
             'beta': 3.5,  # steepness of psychometric function
-            'delta': 0.01,  # lapse rate
-            'gamma': 0.5  # guess rate (2AFC)
+            'delta': 0.05,  # lapse rate
+            'gamma': 0.25  # guess rate (4AFC)
         }
         if quest_params:
             default_quest_params.update(quest_params)
@@ -313,7 +316,7 @@ class QuestColorGenerator(ColorGenerator):
         # Interleave: cycle through incomplete directions
         return incomplete_directions[self.total_trials % len(incomplete_directions)]
 
-    def _disp_direction_to_point(self, background_disp: npt.NDArray, disp_direction: npt.NDArray, distance: float) -> npt.NDArray:
+    def _disp_direction_to_point(self, background_disp: npt.NDArray, disp_direction: npt.NDArray, proportion: float) -> npt.NDArray:
         """Convert DISP direction + distance to DISP point.
 
         Args:
@@ -325,7 +328,7 @@ class QuestColorGenerator(ColorGenerator):
             DISP coordinates
         """
         # Move from background in the direction by the distance
-        disp_point = background_disp + disp_direction * distance
+        disp_point = background_disp + disp_direction * proportion
 
         # Clip to valid DISP range [0, 1]
         disp_point = np.clip(disp_point, 0, 1)
@@ -375,6 +378,16 @@ class QuestColorGenerator(ColorGenerator):
         self.current_direction_idx = next_direction_idx
         return self._get_color_for_direction(self.current_direction_idx)
 
+    def GetCurrentTestInfo(self) -> Tuple:
+        """Get the current info about the test.
+
+        Returns:
+            Tuple: The current genotype.
+        """
+        genotype = self.direction_metadata[self.current_direction_idx]['genotype']
+        metameric_axis = self.direction_metadata[self.current_direction_idx]['metameric_axis']
+        return genotype, metameric_axis
+
     def _get_color_for_direction(self, direction_idx: int) -> Tuple[npt.NDArray, npt.NDArray, ColorSpace, float]:
         """Get color stimulus for a specific direction."""
         direction_vec = self.directions[direction_idx]  # This is already scaled to max_distance
@@ -392,21 +405,39 @@ class QuestColorGenerator(ColorGenerator):
         # Store the CLIPPED log proportion for Quest update (so Quest knows what we actually tested)
         self._last_intensity = np.log10(np.maximum(proportion, 1e-10))  # Avoid log(0)
 
-        # Get test point in DISP space
-        # direction_vec is already scaled by max_distance, so proportion directly scales it
-        test_disp = self._disp_direction_to_point(background_disp, direction_vec, proportion)
-
         genotype_cs = self.genotype_mapping[self.direction_metadata[direction_idx]['genotype']]
 
-        # Convert both to cone space
-        background_cone = genotype_cs.convert(
-            np.array([background_disp]), ColorSpaceType.DISP, ColorSpaceType.CONE)[0]
-        test_cone = genotype_cs.convert(
-            np.array([test_disp]), ColorSpaceType.DISP, ColorSpaceType.CONE)[0]
+        if self.bipolar:
+            # Sample in both direction and -direction
+            # Get test point in positive direction
+            test_disp = self._disp_direction_to_point(background_disp, direction_vec, proportion)
+            # Get test point in negative direction
+            negative_test_disp = self._disp_direction_to_point(background_disp, -direction_vec, proportion)
 
-        # # Compute DISP distance from background (this is what we're thresholding)
-        # disp_distance = np.linalg.norm(test_disp - background_disp)
+            # Convert both to cone space
+            # Return negative direction point as "background" and positive direction point as "test"
+            background_cone = genotype_cs.convert(
+                np.array([negative_test_disp]), ColorSpaceType.DISP, ColorSpaceType.CONE)[0]
+            test_cone = genotype_cs.convert(
+                np.array([test_disp]), ColorSpaceType.DISP, ColorSpaceType.CONE)[0]
 
+            # For bipolar, return proportion (0-1) representing proportion of max_distance
+            # The distance between the two points is 2 * (proportion * max_distance),
+            # but we return the proportion of max_distance for consistency
+        else:
+            # Original behavior: sample in one direction, return background and test point
+            # Get test point in DISP space
+            # direction_vec is already scaled by max_distance, so proportion directly scales it
+            test_disp = self._disp_direction_to_point(background_disp, direction_vec, proportion)
+
+            # Convert both to cone space
+            background_cone = genotype_cs.convert(
+                np.array([background_disp]), ColorSpaceType.DISP, ColorSpaceType.CONE)[0]
+            test_cone = genotype_cs.convert(
+                np.array([test_disp]), ColorSpaceType.DISP, ColorSpaceType.CONE)[0]
+
+        # Return proportion (0-1) as intensity, representing proportion of max_distance
+        # This is consistent with threshold_proportion and makes intensity comparable across directions
         return background_cone, test_cone, genotype_cs, proportion
 
     def _compute_final_thresholds(self):
@@ -420,16 +451,23 @@ class QuestColorGenerator(ColorGenerator):
 
             # Scale to actual distance
             threshold_distance = threshold_proportion * np.linalg.norm(direction_vec)
+            max_distance = np.linalg.norm(direction_vec)
+
+            # Check if threshold is beyond displayable gamut
+            beyond_gamut = threshold_proportion > 1.0
 
             sd_log = quest.sd()
 
             self.thresholds[i] = {
-                'direction': direction_vec,  # Normalized direction vector
+                'direction': direction_vec,  # Direction vector (scaled to max_distance)
                 'background': self.background,  # Background point (origin)
-                'threshold_distance': threshold_distance,  # Actual distance in DISP space
-                'threshold_proportion': threshold_proportion,  # Proportion of max distance
+                # Actual distance in DISP space (may exceed max_distance if beyond_gamut)
+                'threshold_distance': threshold_distance,
+                # Proportion of max distance (may be > 1.0 if beyond gamut)
+                'threshold_proportion': threshold_proportion,
                 'threshold_log_proportion': threshold_log_proportion,  # Log10 of proportion
-                'max_distance': np.linalg.norm(direction_vec),  # Maximum displayable distance
+                'max_distance': max_distance,  # Maximum displayable distance
+                'beyond_gamut': beyond_gamut,  # True if threshold exceeds displayable gamut
                 'sd_log': sd_log,
                 'trials': self.trials_completed[i],
                 'genotype': metadata.get('genotype'),

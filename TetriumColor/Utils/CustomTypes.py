@@ -8,6 +8,7 @@ from enum import Enum
 class ColorTestResult(Enum):
     Success = 1
     Failure = 0
+    NoAnswer = -1
 
 
 class TestType(Enum):
