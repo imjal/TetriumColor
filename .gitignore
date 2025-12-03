@@ -1,3 +1,6 @@
+# agents
+.agent
+
 scripts/*/debug.ipynb
 scripts/debugging/
 # repository 

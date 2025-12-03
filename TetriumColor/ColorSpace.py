@@ -105,7 +105,8 @@ class ColorSpace:
                  print_gamut: InkGamut | None = None,
                  metameric_axis: int = 2,
                  led_mapping: List[int] | None = [0, 1, 3, 2, 1, 3],
-                 disp_method: str = 'direct'):
+                 disp_method: str = 'direct',
+                 primary_interpolation_method: str = 'gaussian'):
         """
         Initialize a ColorSpace with an observer and optional display.
 
@@ -116,6 +117,7 @@ class ColorSpace:
             metameric_axis (int, optional): Axis to be metameric over (default: 2)
             led_mapping (List[int], optional): LED mapping for 6P display (default: [0,1,3,2,1,3])
             disp_method (str, optional): Method for CONE->DISP ('direct', 'lsq', 'optimized', 'subset')
+            primary_interpolation_method (str, optional): Method for interpolating display primaries ('linear', 'cubic', 'gaussian')
         """
         self.observer = observer
         self.metameric_axis = metameric_axis
@@ -123,7 +125,16 @@ class ColorSpace:
             display_primaries = [display_primaries[i] for i in [0, 1, 2]]  # RGB , presumably RGBO
             led_mapping = [0, 1, 2, 0, 1, 2]  # RGB / RGB
         self.led_mapping = led_mapping
-        self.display_primaries = display_primaries
+
+        # Interpolate display primaries to observer wavelengths
+        if display_primaries is not None:
+            self.display_primaries = [
+                p.interpolate_values(observer.wavelengths, method=primary_interpolation_method)
+                for p in display_primaries
+            ]
+        else:
+            self.display_primaries = None
+
         self.print_gamut = print_gamut
         self.disp_method = disp_method
 

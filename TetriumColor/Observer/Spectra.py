@@ -8,7 +8,7 @@ import warnings
 import copy
 
 from colour import SDS_ILLUMINANTS, SDS_LIGHT_SOURCES, sRGB_to_XYZ, sd_to_XYZ, XYZ_to_xy, XYZ_to_sRGB, XYZ_to_Lab, delta_E, SpectralDistribution, notation, MultiSpectralDistributions
-from scipy.interpolate import interp1d
+from scipy.interpolate import interp1d, Rbf
 from scipy.signal import savgol_filter
 
 
@@ -188,10 +188,10 @@ class Spectra:
         return XYZ_to_Lab(self.to_xyz(illuminant))
 
     @staticmethod
-    def delta_e(spectra1: "Spectra", spectra2: "Spectra") -> float:
+    def delta_e(spectra1: "Spectra", spectra2: "Spectra", illuminant: Optional["Spectra"] = None) -> float:
         """Calculates the delta E between two spectra.
         """
-        return delta_E(spectra1.to_lab(), spectra2.to_lab())
+        return delta_E(spectra1.to_lab(illuminant), spectra2.to_lab(illuminant))
 
     def avg_delta_e_unit(self, illuminant: "Spectra", num_samples: int = 100, ball_radius: float = 0.01) -> float:
         chromaticity_coord = XYZ_to_xy(sd_to_XYZ(illuminant.to_colour()) / 100)
@@ -237,19 +237,24 @@ class Spectra:
             ax.scatter(self.wavelengths, self.data/factor, color=color, s=10)
             ax.plot(self.wavelengths, self.data/factor, label=name, color=color, alpha=alpha)
 
-    def interpolate_values(self, wavelengths: Union[npt.NDArray, None]):
+    def interpolate_values(self, wavelengths: Union[npt.NDArray, None], method: str = 'linear'):
         """Interpolate the spectra to the given wavelengths.
 
         Args:
             wavelengths (Union[npt.NDArray, None]): the wavelengths to linearly interpolate the spectra to.
+            method (str, optional): The interpolation method to use. Defaults to 'linear'.
 
         Returns:
             Spectra: the interpolated spectra.
         """
         if wavelengths is None:
             return self
-        if np.array_equal(wavelengths, self.wavelengths):
+        if np.array_equal(wavelengths, self.wavelengths) and method == 'linear':
             return self
+            
+        if method != 'linear':
+            return self.interpolate(wavelengths, method=method)
+            
         interpolated_data = []
         for wavelength in wavelengths:
             d = self.interpolated_value(wavelength)
@@ -298,6 +303,7 @@ class Spectra:
             - 'slinear': First-order spline interpolation.
             - 'quadratic': Second-order spline interpolation.
             - 'cubic': Third-order spline interpolation.
+            - 'gaussian': Gaussian interpolation using Rbf.
             - 'previous': Previous value interpolation.
             - 'next': Next value interpolation.
 
@@ -305,8 +311,13 @@ class Spectra:
             Spectra: The interpolated spectra.
         """
 
-        interpolator = interp1d(self.wavelengths, self.data, kind=method, bounds_error=False)
-        new_data = interpolator(new_wavelengths)
+        if method == 'gaussian':
+            # Use Rbf for gaussian interpolation
+            rbf = Rbf(self.wavelengths, self.data, function='gaussian')
+            new_data = rbf(new_wavelengths)
+        else:
+            interpolator = interp1d(self.wavelengths, self.data, kind=method, bounds_error=False, fill_value="extrapolate")
+            new_data = interpolator(new_wavelengths)
 
         return Spectra(wavelengths=new_wavelengths, data=new_data)
 
