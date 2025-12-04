@@ -604,7 +604,7 @@ class GeneticColorGenerator(ColorGenerator):
     def __init__(self, sex: str, percentage_screened: float, peak_to_test: float = 547,
                  luminance: float = 1.0, saturation: float = 0.5,
                  dimensions: Optional[List[int]] = [3], seed: int = 42,
-                 trials_per_direction: int = 20, metameric_axes: List[int] = [1, 2, 3], randomize_genotypes: bool = True, **kwargs):
+                 trials_per_direction: int = 20, metameric_axes: List[int] = [1, 2, 3], randomize_genotypes: bool = True, debug_middle: bool = False, **kwargs):
         """Color picker that samples from the most common trichromatic phenotypes.
 
         Args:
@@ -622,6 +622,7 @@ class GeneticColorGenerator(ColorGenerator):
         self.observer_genotypes = ObserverGenotypes(dimensions=dimensions, seed=seed)
         self.luminance = luminance
         self.saturation = saturation
+        self.debug_middle = debug_middle
 
         self.randomize_genotypes = randomize_genotypes
 
@@ -739,8 +740,12 @@ class GeneticColorGenerator(ColorGenerator):
         max_diff = 0.0
         max_diff_idx = 0
         for retry in range(10):
-            random_idx = np.random.randint(0, len(grid_points))
-            point = grid_points[random_idx]
+            if self.debug_middle:
+                center_idx = len(grid_points) // 2  # 12 for 25 points
+                point = grid_points[center_idx]
+            else:
+                random_idx = np.random.randint(0, len(grid_points))
+                point = grid_points[random_idx]
             inside_cone, outside_cone, _ = color_space.get_maximal_pair_in_disp_from_pt(
                 point, metameric_axis=metameric_axis)
             if inside_cone[metameric_axis] - outside_cone[metameric_axis] > 0.02:
