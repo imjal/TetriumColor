@@ -44,36 +44,59 @@ def get_spectras_from_rgbo_list(
 
     Returns a list of power value lists in the same order as the input RGBO list.
     If a file is missing, the corresponding entry is None and a warning is printed.
+
+    For each RGBO, finds all timestamped files (e.g., r255g0b0o0_20251202_165603_050.csv),
+    sorts them by timestamp, and averages the last 4 measurements.
     """
     wavelengths = np.arange(380, 781, 4)  # Assuming a fixed wavelength range
     results = []
 
     for rgbo in rgbo_list:
         r, g, b, o = rgbo
-        filename = f"r{r}g{g}b{b}o{o}.csv"
-        filepath = os.path.join(directory, filename)
+        pattern = f"r{r}g{g}b{b}o{o}"
 
-        if not os.path.exists(filepath):
-            print(f"Warning: CSV file for {rgbo} not found at {filepath}")
+        # Find all files matching this RGBO pattern
+        matching_files = []
+        for filename in os.listdir(directory):
+            if filename.startswith(pattern) and filename.endswith('.csv'):
+                matching_files.append(filename)
+
+        if not matching_files:
+            print(f"Warning: No CSV files for {rgbo} found in {directory}")
             results.append(None)
             continue
 
-        power_values = []
-        with open(filepath, newline='') as csvfile:
-            reader = csv.reader(csvfile)
-            next(reader, None)  # Skip header if present
-            for row in reader:
-                if len(row) < 2:
-                    continue
-                try:
-                    power = float(row[1])
-                    power_values.append(power)
-                except ValueError:
-                    continue  # Skip malformed rows
+        # Sort by timestamp (embedded in filename)
+        matching_files.sort()
 
-        if len(power_values) > len(wavelengths):
-            power_values = power_values[-len(wavelengths):]  # take the soonest measurements
-        results.append(Spectra(wavelengths=wavelengths, data=np.array(power_values)))
+        # Take the last 4 measurements
+        files_to_average = matching_files[-4:]
+
+        # Read and average power values from the last 4 files
+        all_power_values = []
+        for filename in files_to_average:
+            filepath = os.path.join(directory, filename)
+            power_values = []
+            with open(filepath, newline='') as csvfile:
+                reader = csv.reader(csvfile)
+                next(reader, None)  # Skip header if present
+                for row in reader:
+                    if len(row) < 2:
+                        continue
+                    try:
+                        power = float(row[1])
+                        power_values.append(power)
+                    except ValueError:
+                        continue  # Skip malformed rows
+
+            if len(power_values) > len(wavelengths):
+                power_values = power_values[-len(wavelengths):]
+            all_power_values.append(power_values)
+
+        # Average the power values across the last 4 measurements
+        averaged_power = np.mean(all_power_values, axis=0)
+        results.append(Spectra(wavelengths=wavelengths, data=averaged_power))
+
     return results
 
 
