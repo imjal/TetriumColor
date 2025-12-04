@@ -741,8 +741,8 @@ class GeneticColorGenerator(ColorGenerator):
         max_diff_idx = 0
         for retry in range(10):
             if self.debug_middle:
-                center_idx = len(grid_points) // 2  # 12 for 25 points
-                point = grid_points[center_idx]
+                random_idx = len(grid_points) // 2  # 12 for 25 points
+                point = grid_points[random_idx]
             else:
                 random_idx = np.random.randint(0, len(grid_points))
                 point = grid_points[random_idx]
