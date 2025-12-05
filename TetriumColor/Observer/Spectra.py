@@ -251,10 +251,10 @@ class Spectra:
             return self
         if np.array_equal(wavelengths, self.wavelengths) and method == 'linear':
             return self
-            
+
         if method != 'linear':
             return self.interpolate(wavelengths, method=method)
-            
+
         interpolated_data = []
         for wavelength in wavelengths:
             d = self.interpolated_value(wavelength)
@@ -304,6 +304,7 @@ class Spectra:
             - 'quadratic': Second-order spline interpolation.
             - 'cubic': Third-order spline interpolation.
             - 'gaussian': Gaussian interpolation using Rbf.
+            - 'asymmetric_gaussian': Asymmetric Gaussian fit (different σ for left/right of peak).
             - 'previous': Previous value interpolation.
             - 'next': Next value interpolation.
 
@@ -315,11 +316,69 @@ class Spectra:
             # Use Rbf for gaussian interpolation
             rbf = Rbf(self.wavelengths, self.data, function='gaussian')
             new_data = rbf(new_wavelengths)
+        elif method == 'asymmetric_gaussian':
+            # Fit asymmetric Gaussian (different σ for left/right of peak)
+            new_data = self._fit_asymmetric_gaussian(new_wavelengths)
         else:
-            interpolator = interp1d(self.wavelengths, self.data, kind=method, bounds_error=False, fill_value="extrapolate")
+            interpolator = interp1d(self.wavelengths, self.data, kind=method,
+                                    bounds_error=False, fill_value="extrapolate")
             new_data = interpolator(new_wavelengths)
 
         return Spectra(wavelengths=new_wavelengths, data=new_data)
+
+    def _fit_asymmetric_gaussian(self, new_wavelengths: npt.NDArray) -> npt.NDArray:
+        """Fit an asymmetric Gaussian to the spectral data.
+
+        LEDs typically have asymmetric spectra - steeper on short-wavelength side,
+        longer tail on long-wavelength side.
+
+        Args:
+            new_wavelengths: Target wavelengths to interpolate to.
+
+        Returns:
+            Interpolated data using asymmetric Gaussian fit.
+        """
+        from scipy.optimize import curve_fit
+
+        def asymmetric_gaussian(x, amp, center, sigma_left, sigma_right):
+            """Asymmetric Gaussian with different widths on each side of peak."""
+            result = np.zeros_like(x, dtype=float)
+            left_mask = x < center
+            right_mask = x >= center
+            result[left_mask] = amp * np.exp(-0.5 * ((x[left_mask] - center) / sigma_left) ** 2)
+            result[right_mask] = amp * np.exp(-0.5 * ((x[right_mask] - center) / sigma_right) ** 2)
+            return result
+
+        # Initial parameter estimates
+        peak_idx = np.argmax(self.data)
+        amp_init = self.data[peak_idx]
+        center_init = self.wavelengths[peak_idx]
+
+        # Estimate initial sigma from half-max points
+        half_max = amp_init / 2
+        above_half = self.data >= half_max
+        if np.any(above_half):
+            left_idx = np.where(above_half)[0][0]
+            right_idx = np.where(above_half)[0][-1]
+            sigma_init = (self.wavelengths[right_idx] - self.wavelengths[left_idx]) / 2.355  # FWHM to sigma
+        else:
+            sigma_init = 20.0
+
+        try:
+            popt, _ = curve_fit(
+                asymmetric_gaussian,
+                self.wavelengths,
+                self.data,
+                p0=[amp_init, center_init, sigma_init, sigma_init],
+                bounds=([0, self.wavelengths[0], 1, 1],
+                        [amp_init * 2, self.wavelengths[-1], 100, 100]),
+                maxfev=5000
+            )
+            return np.clip(asymmetric_gaussian(new_wavelengths, *popt), 0, None)
+        except Exception:
+            # Fallback to symmetric Gaussian RBF
+            rbf = Rbf(self.wavelengths, self.data, function='gaussian')
+            return rbf(new_wavelengths)
 
     def smooth(self, poly_degree=8) -> 'Spectra':
         """Smooth the spectra data using Savitzky-Golay filtering.

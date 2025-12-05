@@ -1,4 +1,4 @@
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 import os
 import csv
 import numpy as np
@@ -21,20 +21,249 @@ def save_primaries_into_csv(primaries_dir: str, primaries_filename: str):
             writer.writerow(row)
 
 
-def load_primaries_from_csv(primaries_dir: str) -> List[Spectra]:
-    """Load primaries from a csv file
+def load_primaries_from_csv(primaries_dir: str,
+                            extract_zero: bool = False,
+                            smooth_method: Optional[str] = None) -> List[Spectra]:
+    """Load primaries from a csv file with optional zero extraction and smoothing.
 
     Args:
-        primary_csv (str): path to the csv file
+        primaries_dir (str): path to the directory containing primary measurements
+        extract_zero (bool): If True, uses consecutive measurements to extract and
+            subtract the zero/offset that PR650 can't measure directly.
+        smooth_method (str, optional): Interpolation method to smooth/upsample to 1nm.
+            Options: 'asymmetric_gaussian', 'gaussian', 'cubic', 'linear', etc.
 
     Returns:
         List[Spectra]: list of Spectra objects representing the Primaries measured
     """
-
     try:
-        return get_spectras_from_rgbo_list(primaries_dir, [(255, 0, 0, 0), (0, 255, 0, 0), (0, 0, 255, 0), (0, 0, 0, 255)])
+        if extract_zero:
+            # Use consecutive measurements to extract zero
+            primaries, _ = load_primaries_with_zero_extraction(
+                primaries_dir,
+                smooth_method=smooth_method
+            )
+            return primaries
+
+        # Standard loading: average last 4 measurements
+        primaries = get_spectras_from_rgbo_list(
+            primaries_dir,
+            [(255, 0, 0, 0), (0, 255, 0, 0), (0, 0, 255, 0), (0, 0, 0, 255)]
+        )
+
+        # Apply smoothing/interpolation to 1nm resolution
+        if smooth_method is not None:
+            output_wavelengths = np.arange(380, 781, 1)
+            primaries = [
+                p.interpolate(output_wavelengths, method=smooth_method) if p is not None else None
+                for p in primaries
+            ]
+
+        return primaries
     except Exception as e:
         raise Exception(f"Error loading primaries from {primaries_dir}: {e}")
+
+
+def load_single_measurement(filepath: str) -> Spectra:
+    """Load a single measurement CSV file into a Spectra object.
+
+    Args:
+        filepath: Path to the CSV file
+
+    Returns:
+        Spectra object with the measurement data
+    """
+    wavelengths = np.arange(380, 781, 4)
+    power_values = []
+
+    with open(filepath, newline='') as csvfile:
+        reader = csv.reader(csvfile)
+        next(reader, None)  # Skip header
+        for row in reader:
+            if len(row) < 2:
+                continue
+            try:
+                power_values.append(float(row[1]))
+            except ValueError:
+                continue
+
+    if len(power_values) > len(wavelengths):
+        power_values = power_values[-len(wavelengths):]
+
+    return Spectra(wavelengths=wavelengths, data=np.array(power_values))
+
+
+def get_measurement_files_for_rgbo(directory: str, rgbo: Tuple[int, int, int, int]) -> List[str]:
+    """Get all measurement files for a given RGBO, sorted by timestamp.
+
+    Args:
+        directory: Directory containing measurement files
+        rgbo: (R, G, B, O) tuple
+
+    Returns:
+        List of filenames sorted by timestamp (oldest first)
+    """
+    r, g, b, o = rgbo
+    pattern = f"r{r}g{g}b{b}o{o}"
+
+    matching_files = []
+    for filename in os.listdir(directory):
+        if filename.startswith(pattern) and filename.endswith('.csv'):
+            matching_files.append(filename)
+
+    matching_files.sort()  # Sorts by timestamp embedded in filename
+    return matching_files
+
+
+def extract_zero_from_consecutive_measurements(
+    primaries_dir: str,
+    smooth_method: Optional[str] = 'asymmetric_gaussian'
+) -> Tuple[List[Spectra], List[Spectra]]:
+    """Extract zero/offset by subtracting consecutive measurements of the same LED.
+
+    Since PR650 can't measure true zero (too dim), we estimate it by taking
+    two back-to-back measurements of the same LED setting. If the LED is stable,
+    their difference reveals the measurement noise floor and systematic offset.
+
+    Method:
+    - For each primary (R, G, B, O), find all timestamped measurements
+    - Take two consecutive measurements: M1 and M2
+    - The average (M1 + M2) / 2 is our best estimate of the signal
+    - The difference |M1 - M2| / 2 estimates the noise/zero level
+    - Subtract the estimated zero from the signal
+
+    Args:
+        primaries_dir: Directory with measurement CSVs
+        smooth_method: Interpolation method ('asymmetric_gaussian', 'gaussian', 'cubic', etc.)
+
+    Returns:
+        Tuple of (corrected_primaries, estimated_zeros)
+    """
+    primary_patterns = [
+        (255, 0, 0, 0),  # R
+        (0, 255, 0, 0),  # G
+        (0, 0, 255, 0),  # B
+        (0, 0, 0, 255),  # O
+    ]
+
+    corrected_primaries = []
+    estimated_zeros = []
+
+    for rgbo in primary_patterns:
+        files = get_measurement_files_for_rgbo(primaries_dir, rgbo)
+
+        if len(files) < 2:
+            print(f"Warning: Need at least 2 measurements for {rgbo}, found {len(files)}")
+            if len(files) == 1:
+                filepath = os.path.join(primaries_dir, files[0])
+                corrected_primaries.append(load_single_measurement(filepath))
+                estimated_zeros.append(None)
+            else:
+                corrected_primaries.append(None)
+                estimated_zeros.append(None)
+            continue
+
+        # Use the last two consecutive measurements
+        m1_path = os.path.join(primaries_dir, files[-2])
+        m2_path = os.path.join(primaries_dir, files[-1])
+
+        m1 = load_single_measurement(m1_path)
+        m2 = load_single_measurement(m2_path)
+
+        # Average is our best signal estimate
+        signal_estimate = (m1.data + m2.data) / 2
+
+        # Half the absolute difference estimates the zero/noise floor
+        zero_estimate = np.abs(m1.data - m2.data) / 2
+
+        # Subtract zero estimate from signal
+        corrected_data = signal_estimate - zero_estimate
+        corrected_data = np.clip(corrected_data, 0, None)
+
+        corrected_primaries.append(Spectra(wavelengths=m1.wavelengths, data=corrected_data))
+        estimated_zeros.append(Spectra(wavelengths=m1.wavelengths, data=zero_estimate))
+
+        print(f"{rgbo}: Used {files[-2]} and {files[-1]}, zero estimate max={np.max(zero_estimate):.4f}")
+
+    # Apply smoothing/interpolation to 1nm resolution
+    if smooth_method is not None:
+        output_wavelengths = np.arange(380, 781, 1)
+        corrected_primaries = [
+            p.interpolate(output_wavelengths, method=smooth_method) if p is not None else None
+            for p in corrected_primaries
+        ]
+
+    return corrected_primaries, estimated_zeros
+
+
+def load_primaries_with_zero_extraction(
+    primaries_dir: str,
+    measurement_indices: Tuple[int, int] = (-2, -1),
+    smooth_method: Optional[str] = 'asymmetric_gaussian'
+) -> Tuple[List[Spectra], List[Spectra]]:
+    """Load primaries by extracting zero from consecutive measurements.
+
+    Takes two measurements of each LED setting and subtracts them to remove
+    the PR650's systematic offset that can't be directly measured.
+
+    Args:
+        primaries_dir: Directory containing measurement CSVs
+        measurement_indices: Which measurements to use (default: last two)
+        smooth_method: Interpolation method to smooth/upsample to 1nm.
+            Options: 'asymmetric_gaussian', 'gaussian', 'cubic', 'linear', etc.
+
+    Returns:
+        Tuple of (primaries, zero_estimates)
+    """
+    primary_patterns = [
+        (255, 0, 0, 0),  # R
+        (0, 255, 0, 0),  # G
+        (0, 0, 255, 0),  # B
+        (0, 0, 0, 255),  # O
+    ]
+
+    primaries = []
+    zero_estimates = []
+    idx1, idx2 = measurement_indices
+
+    for rgbo in primary_patterns:
+        files = get_measurement_files_for_rgbo(primaries_dir, rgbo)
+
+        if len(files) < 2:
+            print(f"Warning: Need 2+ measurements for {rgbo}, found {len(files)}")
+            if files:
+                primaries.append(load_single_measurement(os.path.join(primaries_dir, files[-1])))
+                zero_estimates.append(None)
+            else:
+                primaries.append(None)
+                zero_estimates.append(None)
+            continue
+
+        # Load the two specified measurements
+        m1 = load_single_measurement(os.path.join(primaries_dir, files[idx1]))
+        m2 = load_single_measurement(os.path.join(primaries_dir, files[idx2]))
+
+        # Subtract to remove common offset: (Signal + Zero) - (Signal + Zero')
+        # If Zero ≈ Zero', the signals should be similar, difference shows drift
+        # Average gives best signal estimate, difference shows zero level
+        avg_signal = (m1.data + m2.data) / 2
+        zero_level = np.abs(m1.data - m2.data) / 2
+
+        corrected = np.clip(avg_signal - zero_level, 0, None)
+        primaries.append(Spectra(wavelengths=m1.wavelengths, data=corrected))
+        zero_estimates.append(Spectra(wavelengths=m1.wavelengths, data=zero_level))
+
+        print(f"{rgbo}: Used {files[idx1]} and {files[idx2]}, zero estimate max={np.max(zero_level):.4f}")
+
+    # Apply smoothing/interpolation using Spectra's interpolate method
+    if smooth_method is not None:
+        output_wavelengths = np.arange(380, 781, 1)  # 1nm resolution
+        primaries = [
+            p.interpolate(output_wavelengths, method=smooth_method) if p is not None else None
+            for p in primaries
+        ]
+
+    return primaries, zero_estimates
 
 
 def get_spectras_from_rgbo_list(

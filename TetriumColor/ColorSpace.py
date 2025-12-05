@@ -117,7 +117,8 @@ class ColorSpace:
             metameric_axis (int, optional): Axis to be metameric over (default: 2)
             led_mapping (List[int], optional): LED mapping for 6P display (default: [0,1,3,2,1,3])
             disp_method (str, optional): Method for CONE->DISP ('direct', 'lsq', 'optimized', 'subset')
-            primary_interpolation_method (str, optional): Method for interpolating display primaries ('linear', 'cubic', 'gaussian')
+            primary_interpolation_method (str, optional): Method for interpolating display primaries 
+                ('linear', 'cubic', 'gaussian', 'asymmetric_gaussian')
         """
         self.observer = observer
         self.metameric_axis = metameric_axis
@@ -128,10 +129,12 @@ class ColorSpace:
 
         # Interpolate display primaries to observer wavelengths
         if display_primaries is not None:
-            self.display_primaries = [
-                p.interpolate_values(observer.wavelengths, method=primary_interpolation_method)
-                for p in display_primaries
-            ]
+            wv = display_primaries[0].wavelengths
+            if wv[1] - wv[0] > 1.5:
+                self.display_primaries = [
+                    p.interpolate_values(observer.wavelengths, method=primary_interpolation_method)
+                    for p in display_primaries
+                ]
         else:
             self.display_primaries = None
 
