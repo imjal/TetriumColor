@@ -26,6 +26,9 @@ class TestGenerator
         ColorSpaceType output_space = ColorSpaceType::DISP_6P,
         float lum_noise = 0.0f,
         float s_cone_noise = 0.0f,
+        float background_luminance = 0.5f,
+        float dot_size = 1.0f,
+        float degree = 4.0f,
         const std::string& genotype = "", // Optional: genotype string like "(558.9, 530.3)"
         int metameric_axis = -1           // Optional: metameric axis index
     );
@@ -38,7 +41,10 @@ class TestGenerator
         const std::string& hidden_symbol,
         ColorSpaceType output_space = ColorSpaceType::DISP_6P,
         float lum_noise = 0.0f,
-        float s_cone_noise = 0.0f
+        float s_cone_noise = 0.0f,
+        float background_luminance = 0.5f,
+        float dot_size = 1.0f,
+        float degree = 4.0f
     );
 
     // Get genotypes list (for CircleGridGenerator and similar)

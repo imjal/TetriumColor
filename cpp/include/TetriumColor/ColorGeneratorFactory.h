@@ -16,13 +16,14 @@ class ColorGeneratorFactory
         const std::string& sex = "female",
         float percentage_screened = 0.999f,
         float peak_to_test = 547.0f,
-        float luminance = 1.0f,
+        float luminance = 0.5f,
         float saturation = 0.5f,
         const std::vector<int>& dimensions = {2},
         int seed = 42,
         int trials_per_direction = 20,
         const std::vector<int>& metameric_axes = {}, // Empty = default [1, 2, 3]
-        const std::string& display_primaries_path = ""
+        const std::string& display_primaries_path = "",
+        float degree = 4.0f
     );
 
     // Create a QuestColorGenerator instance
@@ -34,7 +35,8 @@ class ColorGeneratorFactory
         const std::vector<int>& metameric_axes = {}, // Empty = all axes
         const std::vector<int>& dimensions = {2},    // Dimensions for ObserverGenotypes
         const std::string& display_primaries_path = "",
-        bool bipolar = false
+        bool bipolar = false,
+        float degree = 4.0f
     );
 
     // Create a TestGenerator (PseudoIsochromaticPlateGenerator) instance

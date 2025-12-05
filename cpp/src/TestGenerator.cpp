@@ -63,6 +63,9 @@ std::optional<TrialData> TestGenerator::NewTrial(
     ColorSpaceType output_space,
     float lum_noise,
     float s_cone_noise,
+    float background_luminance,
+    float dot_size,
+    float degree,
     const std::string& genotype,
     int metameric_axis
 )
@@ -91,12 +94,15 @@ std::optional<TrialData> TestGenerator::NewTrial(
     PyTuple_SetItem(pArgs, 0, PyUnicode_FromString(filename.c_str()));
     PyTuple_SetItem(pArgs, 1, PyUnicode_FromString(hidden_symbol.c_str()));
 
-    // Build keyword arguments dict: {output_space, lum_noise, s_cone_noise, genotype,
-    // metameric_axis}
+    // Build keyword arguments dict: {output_space, lum_noise, s_cone_noise, background_luminance,
+    // dot_size, degree, genotype, metameric_axis}
     PyObject* pKwargs = PyDict_New();
     PyDict_SetItemString(pKwargs, "output_space", pOutputSpace); // Steals reference
     PyDict_SetItemString(pKwargs, "lum_noise", PyFloat_FromDouble(lum_noise));
     PyDict_SetItemString(pKwargs, "s_cone_noise", PyFloat_FromDouble(s_cone_noise));
+    PyDict_SetItemString(pKwargs, "background_luminance", PyFloat_FromDouble(background_luminance));
+    PyDict_SetItemString(pKwargs, "dot_size", PyFloat_FromDouble(dot_size));
+    PyDict_SetItemString(pKwargs, "degree", PyFloat_FromDouble(degree));
 
     // Add optional genotype and metameric_axis if provided
     if (!genotype.empty()) {
@@ -138,7 +144,10 @@ std::optional<TrialData> TestGenerator::GetNextTrial(
     const std::string& hidden_symbol,
     ColorSpaceType output_space,
     float lum_noise,
-    float s_cone_noise
+    float s_cone_noise,
+    float background_luminance,
+    float dot_size,
+    float degree
 )
 {
     if (!pInstance) {
@@ -203,11 +212,15 @@ std::optional<TrialData> TestGenerator::GetNextTrial(
     PyTuple_SetItem(pArgs, 1, PyUnicode_FromString(filename.c_str()));
     PyTuple_SetItem(pArgs, 2, PyUnicode_FromString(hidden_symbol.c_str()));
 
-    // Build keyword arguments dict: {output_space, lum_noise, s_cone_noise}
+    // Build keyword arguments dict: {output_space, lum_noise, s_cone_noise, background_luminance,
+    // dot_size, degree}
     PyObject* pKwargs = PyDict_New();
     PyDict_SetItemString(pKwargs, "output_space", pOutputSpace); // Steals reference
     PyDict_SetItemString(pKwargs, "lum_noise", PyFloat_FromDouble(lum_noise));
     PyDict_SetItemString(pKwargs, "s_cone_noise", PyFloat_FromDouble(s_cone_noise));
+    PyDict_SetItemString(pKwargs, "background_luminance", PyFloat_FromDouble(background_luminance));
+    PyDict_SetItemString(pKwargs, "dot_size", PyFloat_FromDouble(dot_size));
+    PyDict_SetItemString(pKwargs, "degree", PyFloat_FromDouble(degree));
 
     PyObject* pResult = PyObject_Call(pMethod, pArgs, pKwargs);
 

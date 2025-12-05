@@ -87,7 +87,8 @@ class PseudoIsochromaticPlateGenerator(PlateGenerator):
         self.plate_generator: IshiharaPlateGenerator = IshiharaPlateGenerator()
 
     def NewTest(self, filename: str, hidden_symbol: Union[int, str],
-                output_space: ColorSpaceType = ColorSpaceType.DISP_6P, lum_noise: float = 0, s_cone_noise: float = 0):
+                output_space: ColorSpaceType = ColorSpaceType.DISP_6P, lum_noise: float = 0, s_cone_noise: float = 0,
+                background_luminance: float = 0.5, dot_size: float = 1.0, degree: float = 4.0):
         """
         Generates a new plate with the given hidden symbol and returns trial data as dict
 
@@ -97,6 +98,7 @@ class PseudoIsochromaticPlateGenerator(PlateGenerator):
             output_space (ColorSpaceType): Target color space for output
             lum_noise (float): Luminance noise amount
             s_cone_noise (float): S-cone noise amount
+            background_luminance (float): Background luminance level (0.0 to 1.0)
 
         Returns:
             dict: Trial data with paths, metadata, and trial information
@@ -107,6 +109,8 @@ class PseudoIsochromaticPlateGenerator(PlateGenerator):
             inside_cone, outside_cone, color_space,
             hidden_symbol, output_space,
             lum_noise=lum_noise, s_cone_noise=s_cone_noise,
+            background_luminance=background_luminance,
+            dot_size=dot_size,
             seed=np.random.randint(0, 1000000)
         )
 
@@ -149,7 +153,8 @@ class PseudoIsochromaticPlateGenerator(PlateGenerator):
 
     def GetTest(self, previous_result: ColorTestResult,
                 filename: str, hidden_symbol: Union[int, str],
-                output_space: ColorSpaceType = ColorSpaceType.DISP_6P, lum_noise: float = 0, s_cone_noise: float = 0.1, **kwargs):
+                output_space: ColorSpaceType = ColorSpaceType.DISP_6P, lum_noise: float = 0, s_cone_noise: float = 0.1,
+                background_luminance: float = 0.5, dot_size: float = 1.0, degree: float = 4.0, **kwargs):
         """
         Generates a new plate based on previous result and returns trial data as dict or None if complete
 
@@ -160,6 +165,7 @@ class PseudoIsochromaticPlateGenerator(PlateGenerator):
             output_space (ColorSpaceType): Target color space for output
             lum_noise (float): Luminance noise amount
             s_cone_noise (float): S-cone noise amount
+            background_luminance (float): Background luminance level (0.0 to 1.0)
 
         Returns:
             dict or None: Trial data dict if test continues, None if test is complete
@@ -177,7 +183,9 @@ class PseudoIsochromaticPlateGenerator(PlateGenerator):
         image = self.plate_generator.GeneratePlate(
             inside_cone, outside_cone, color_space,
             hidden_symbol, output_space,
-            lum_noise=lum_noise, s_cone_noise=s_cone_noise, **kwargs,
+            lum_noise=lum_noise, s_cone_noise=s_cone_noise,
+            background_luminance=background_luminance,
+            dot_size=dot_size, degree=degree, **kwargs,
             seed=np.random.randint(0, 1000000)
         )
 
@@ -291,13 +299,9 @@ class BipartiteFieldGenerator(TestGenerator):
         if output_space == ColorSpaceType.DISP_6P:
             # Convert cone values to display primaries
             inside_disp = color_space.convert(inside_cone.reshape(
-                1, -1), ColorSpaceType.CONE, ColorSpaceType.DISP_6P)
+                1, -1), ColorSpaceType.CONE, ColorSpaceType.DISP_6P)[0]
             outside_disp = color_space.convert(outside_cone.reshape(
-                1, -1), ColorSpaceType.CONE, ColorSpaceType.DISP_6P)
-
-            # Flatten to 1D arrays
-            inside_disp = np.atleast_1d(inside_disp).flatten()
-            outside_disp = np.atleast_1d(outside_disp).flatten()
+                1, -1), ColorSpaceType.CONE, ColorSpaceType.DISP_6P)[0]
 
             # Create RGB image (first 3 channels)
             left_rgb = inside_disp[:3]
@@ -316,12 +320,8 @@ class BipartiteFieldGenerator(TestGenerator):
             img_ocv.save(ocv_path)
         else:
             # SRGB output
-            inside_srgb = color_space.convert(inside_cone.reshape(1, -1), ColorSpaceType.CONE, ColorSpaceType.SRGB)
-            outside_srgb = color_space.convert(outside_cone.reshape(1, -1), ColorSpaceType.CONE, ColorSpaceType.SRGB)
-
-            # Flatten to 1D arrays
-            inside_srgb = np.atleast_1d(inside_srgb).flatten()
-            outside_srgb = np.atleast_1d(outside_srgb).flatten()
+            inside_srgb = color_space.convert(inside_cone.reshape(1, -1), ColorSpaceType.CONE, ColorSpaceType.SRGB)[0]
+            outside_srgb = color_space.convert(outside_cone.reshape(1, -1), ColorSpaceType.CONE, ColorSpaceType.SRGB)[0]
 
             img = self._create_bipartite_circle(inside_srgb, outside_srgb, self.size)
             rgb_path = f"{filename}_SRGB.png"
@@ -386,11 +386,7 @@ class BipartiteFieldGenerator(TestGenerator):
             inside_disp = color_space.convert(inside_cone.reshape(
                 1, -1), ColorSpaceType.CONE, ColorSpaceType.DISP_6P)
             outside_disp = color_space.convert(outside_cone.reshape(
-                1, -1), ColorSpaceType.CONE, ColorSpaceType.DISP_6P)
-
-            # Flatten to 1D arrays
-            inside_disp = np.atleast_1d(inside_disp).flatten()
-            outside_disp = np.atleast_1d(outside_disp).flatten()
+                1, -1), ColorSpaceType.CONE, ColorSpaceType.DISP_6P)[0]
 
             # Create RGB image (first 3 channels)
             left_rgb = inside_disp[:3]
@@ -409,12 +405,8 @@ class BipartiteFieldGenerator(TestGenerator):
             img_ocv.save(ocv_path)
         else:
             # SRGB output
-            inside_srgb = color_space.convert(inside_cone.reshape(1, -1), ColorSpaceType.CONE, ColorSpaceType.SRGB)
-            outside_srgb = color_space.convert(outside_cone.reshape(1, -1), ColorSpaceType.CONE, ColorSpaceType.SRGB)
-
-            # Flatten to 1D arrays
-            inside_srgb = np.atleast_1d(inside_srgb).flatten()
-            outside_srgb = np.atleast_1d(outside_srgb).flatten()
+            inside_srgb = color_space.convert(inside_cone.reshape(1, -1), ColorSpaceType.CONE, ColorSpaceType.SRGB)[0]
+            outside_srgb = color_space.convert(outside_cone.reshape(1, -1), ColorSpaceType.CONE, ColorSpaceType.SRGB)[0]
 
             img = self._create_bipartite_circle(inside_srgb, outside_srgb, self.size)
             rgb_path = f"{filename}_SRGB.png"
