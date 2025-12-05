@@ -22,8 +22,8 @@ def save_primaries_into_csv(primaries_dir: str, primaries_filename: str):
 
 
 def load_primaries_from_csv(primaries_dir: str,
-                            extract_zero: bool = False,
-                            smooth_method: Optional[str] = None) -> List[Spectra]:
+                            extract_zero: bool = True,
+                            smooth_method: Optional[str] = 'gaussian') -> List[Spectra]:
     """Load primaries from a csv file with optional zero extraction and smoothing.
 
     Args:
