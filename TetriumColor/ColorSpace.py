@@ -135,6 +135,8 @@ class ColorSpace:
                     p.interpolate_values(observer.wavelengths, method=primary_interpolation_method)
                     for p in display_primaries
                 ]
+            else:
+                self.display_primaries = display_primaries
         else:
             self.display_primaries = None
 
