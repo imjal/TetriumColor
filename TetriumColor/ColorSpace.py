@@ -36,6 +36,10 @@ IPT_M1 = np.array([
 
 M_XYZ_to_RGB = RGB_COLOURSPACE_BT709.matrix_XYZ_to_RGB
 
+# RYGB cutpoints from Observer.tetrachromat() MaxBasis
+# These define the spectral transitions for Red-Yellow-Green-Blue basis
+RYGB_CUTPOINTS = [493.0, 563.0, 608.0]  # in nanometers
+
 
 class ColorSpaceType(Enum):
     """ColorSpaceType is the core of the color space system. It defines the different types of color spaces
@@ -45,6 +49,7 @@ class ColorSpaceType(Enum):
     HERING = "hering"  # Hering opponent color space
     MAXBASIS = "maxbasis"  # Display space (RYGB)
     CONE = "cone"  # Cone responses (SMQL)
+    RYGB = "rygb"  # Red-Yellow-Green-Blue basis (tetrachromat MaxBasis)
 
     DISP_6P = "disp_6p"  # RGO/BGO 6D representation
     DISP = "disp"  # Display space (RGBO)
@@ -149,6 +154,7 @@ class ColorSpace:
         self._cone_to_hering = None
         self._cone_to_disp = None
         self._cone_to_xyz = None
+        self._cone_to_rygb = None
         self._disp_metadata = None
 
         # Lazy-computed gamut properties
@@ -170,6 +176,68 @@ class ColorSpace:
             hering_matrix = max_basis.HMatrix
             self._cone_to_hering = hering_matrix @ cone_to_maxbasis
         return self._cone_to_hering
+
+    def _get_cone_to_rygb(self) -> npt.NDArray:
+        """Lazy compute CONE->RYGB transformation matrix.
+
+        RYGB is the Red-Yellow-Green-Blue basis derived from the MaxBasis 
+        of Observer.tetrachromat() with cutpoints at [493, 563, 608] nm.
+        This creates 4 spectral basis functions corresponding to:
+        - Blue: wavelengths < 493 nm
+        - Green: 493-563 nm  
+        - Yellow: 563-608 nm
+        - Red: wavelengths > 608 nm
+
+        Note: RYGB is defined for any observer dimension using the same cutpoints.
+        For non-tetrachromat observers, the transformation will still be computed
+        based on how that observer responds to the RYGB spectral basis.
+        """
+        if self._cone_to_rygb is None:
+            # Get cutpoint transitions
+            cutpoints = RYGB_CUTPOINTS
+            transitions = self._get_rygb_transitions(cutpoints)
+
+            # Create spectral basis functions from transitions
+            # Each transition defines a spectral region (step function)
+            rygb_basis = []
+            for i, transition in enumerate(transitions):
+                spectrum = Spectra.from_transitions(
+                    transition,
+                    1 if i == 0 else 0,  # First region starts at 1, others at 0
+                    self.observer.wavelengths
+                )
+                rygb_basis.append(spectrum)
+
+            # Compute cone responses to each RYGB basis function
+            # Shape: (num_cones, 4) for 4 RYGB basis functions
+            cone_responses = self.observer.observe_spectras(rygb_basis)
+
+            # For tetrachromat (4D), this is a square matrix and we can invert
+            # For other dimensions, we use the pseudoinverse (least-squares solution)
+            if self.observer.dimension == 4 and cone_responses.shape == (4, 4):
+                self._cone_to_rygb = np.linalg.inv(cone_responses.T)
+            else:
+                # Use pseudoinverse for non-square cases
+                self._cone_to_rygb = np.linalg.pinv(cone_responses.T)
+
+        return self._cone_to_rygb
+
+    def _get_rygb_transitions(self, cutpoints: List[float]) -> List[List[float]]:
+        """Get spectral transitions from cutpoints for RYGB basis.
+
+        Args:
+            cutpoints: List of wavelength cutpoints in nm
+
+        Returns:
+            List of transition lists defining each spectral region
+        """
+        if len(cutpoints) == 0:
+            return [[self.observer.wavelengths[0]]]
+
+        transitions = [[cutpoints[0]], [cutpoints[-1]]]
+        transitions += [[cutpoints[i], cutpoints[i+1]] for i in range(len(cutpoints)-1)]
+        transitions.sort()
+        return transitions
 
     def _get_cone_to_disp(self) -> npt.NDArray:
         """Lazy compute CONE->DISP transformation matrix."""
@@ -247,10 +315,10 @@ class ColorSpace:
             if self.display_primaries is None:
                 # Without display primaries, use unit cone response
                 white_cone = np.ones(self.dim)
-            else:
-                # Convert maximum display point to cone space
-                max_disp = np.ones(self.dim)
-                white_cone = self.convert(max_disp, ColorSpaceType.DISP, ColorSpaceType.CONE)
+            # else:
+            #     # Convert maximum display point to cone space
+            #     max_disp = np.ones(self.dim)
+            #     white_cone = self.convert(max_disp, ColorSpaceType.DISP, ColorSpaceType.CONE)
 
             # Convert to HERING and take luminance (first component)
             white_hering = self.convert(white_cone, ColorSpaceType.CONE, ColorSpaceType.HERING)
@@ -377,6 +445,11 @@ class ColorSpace:
             # HERING -> CONE
             cone_to_hering = self._get_cone_to_hering()
             cone_points = (np.linalg.inv(cone_to_hering) @ points.T).T
+        elif from_space == ColorSpaceType.RYGB:
+            # RYGB -> CONE
+            cone_to_rygb = self._get_cone_to_rygb()
+            # Use pseudoinverse for non-square matrices
+            cone_points = (np.linalg.pinv(cone_to_rygb) @ points.T).T
         elif from_space == ColorSpaceType.DISP:
             # DISP -> CONE
             cone_to_disp = self._get_cone_to_disp()
@@ -459,6 +532,10 @@ class ColorSpace:
             # CONE -> HERING
             cone_to_hering = self._get_cone_to_hering()
             return (cone_to_hering @ cone_points.T).T
+        elif to_space == ColorSpaceType.RYGB:
+            # CONE -> RYGB
+            cone_to_rygb = self._get_cone_to_rygb()
+            return (cone_to_rygb @ cone_points.T).T
         elif to_space == ColorSpaceType.DISP:
             # CONE -> DISP
             cone_to_disp = self._get_cone_to_disp()
