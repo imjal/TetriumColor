@@ -363,32 +363,32 @@ class Cone(Spectra):
         return Cone.templates[template](wavelengths, peak).with_preceptoral(od=od, macular=macular, lens=lens)
 
     @staticmethod
-    def l_cone(wavelengths=None, template=None):
+    def l_cone(wavelengths=None, template=None, degree: Optional[float] = 4):
         if template is None:
             reflectances = Cone.ss_data.iloc[:, [0, 1]].to_numpy()
             return Cone(reflectances).interpolate_values(wavelengths)
-        return Cone.cone(559, template=template, od=0.50, wavelengths=wavelengths)
+        return Cone.cone(559, template=template, od=0.50, wavelengths=wavelengths, degree=degree)
 
     @staticmethod
-    def m_cone(wavelengths=None, template=None):
+    def m_cone(wavelengths=None, template=None, degree: Optional[float] = 4):
         if template is None:
             reflectances = Cone.ss_data.iloc[:, [0, 2]].to_numpy()
             return Cone(reflectances).interpolate_values(wavelengths)
         return Cone.cone(530, template=template, od=0.5, wavelengths=wavelengths)
 
     @staticmethod
-    def s_cone(wavelengths=None, template=None):
+    def s_cone(wavelengths=None, template=None, degree: Optional[float] = 4):
         if template is None:
             reflectances = Cone.ss_data.iloc[:, [0, 3]].dropna().to_numpy()
             return Cone(reflectances).interpolate_values(wavelengths)
         # http://www.cvrl.org/database/text/intros/introod.htm
         # "There are no good estimates of pigment optical densities for the S-cones."
-        return Cone.cone(419, template=template, od=0.4, wavelengths=wavelengths)
+        return Cone.cone(420, template=template, od=0.4, wavelengths=wavelengths, degree=degree)
 
     @staticmethod
-    def q_cone(wavelengths=None, template="neitz"):
+    def q_cone(wavelengths=None, template="neitz", degree: Optional[float] = 4):
         # 545 per nathan & merbs 92
-        return Cone.cone(545, template=template, od=0.5, wavelengths=wavelengths)
+        return Cone.cone(545, template=template, od=0.5, wavelengths=wavelengths, degree=degree)
 
     @staticmethod
     def old_q_cone(wavelengths=None):
@@ -470,17 +470,17 @@ class Observer:
         return Observer([s_cone, m_cone, l_cone], illuminant=illuminant)
 
     @staticmethod
-    def tetrachromat(wavelengths=None, illuminant=None, verbose=False):
+    def tetrachromat(wavelengths=None, degree: Optional[float] = 4, illuminant=None, verbose=False):
         # This is a "maximally well spaced" tetrachromat
         # Cone.cone(555, wavelengths=wavelengths, template="neitz", od=0.35)
-        l_cone = Cone.l_cone(wavelengths)
+        l_cone = Cone.l_cone(wavelengths, )
         q_cone = Cone.cone(545, wavelengths=wavelengths,
                            template="neitz", od=0.5)
         # Cone.cone(530, wavelengths=wavelengths, template="neitz", od=0.35)
         m_cone = Cone.m_cone(wavelengths)
         # Cone.s_cone(wavelengths=wavelengths)
         s_cone = Cone.s_cone(wavelengths)
-        return Observer([s_cone, m_cone, q_cone, l_cone], illuminant=illuminant, verbose=verbose)
+        return Observer([s_cone, m_cone, q_cone, l_cone], degree=degree, illuminant=illuminant, verbose=verbose)
 
     @staticmethod
     def old_tetrachromat(wavelengths=None, illuminant=None, verbose=False):

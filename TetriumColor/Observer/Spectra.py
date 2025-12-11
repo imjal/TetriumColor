@@ -340,45 +340,65 @@ class Spectra:
         """
         from scipy.optimize import curve_fit
 
-        def asymmetric_gaussian(x, amp, center, sigma_left, sigma_right):
-            """Asymmetric Gaussian with different widths on each side of peak."""
-            result = np.zeros_like(x, dtype=float)
+        def asymmetric_gaussian_with_baseline(x, amp, center, sigma_left, sigma_right, baseline):
+            """Asymmetric Gaussian with different widths on each side of peak + baseline."""
+            result = np.full_like(x, baseline, dtype=float)
             left_mask = x < center
             right_mask = x >= center
-            result[left_mask] = amp * np.exp(-0.5 * ((x[left_mask] - center) / sigma_left) ** 2)
-            result[right_mask] = amp * np.exp(-0.5 * ((x[right_mask] - center) / sigma_right) ** 2)
+            result[left_mask] += amp * np.exp(-0.5 * ((x[left_mask] - center) / sigma_left) ** 2)
+            result[right_mask] += amp * np.exp(-0.5 * ((x[right_mask] - center) / sigma_right) ** 2)
             return result
+
+        # Estimate baseline from edges of spectrum (away from peak)
+        edge_samples = max(3, len(self.data) // 10)
+        baseline_init = np.mean(np.concatenate([self.data[:edge_samples], self.data[-edge_samples:]]))
 
         # Initial parameter estimates
         peak_idx = np.argmax(self.data)
-        amp_init = self.data[peak_idx]
+        amp_init = self.data[peak_idx] - baseline_init
         center_init = self.wavelengths[peak_idx]
 
-        # Estimate initial sigma from half-max points
-        half_max = amp_init / 2
+        # Estimate initial sigma from half-max points (relative to baseline)
+        half_max = baseline_init + amp_init / 2
         above_half = self.data >= half_max
         if np.any(above_half):
             left_idx = np.where(above_half)[0][0]
             right_idx = np.where(above_half)[0][-1]
-            sigma_init = (self.wavelengths[right_idx] - self.wavelengths[left_idx]) / 2.355  # FWHM to sigma
+            sigma_init = (self.wavelengths[right_idx] - self.wavelengths[left_idx]) / 2.355
         else:
             sigma_init = 20.0
 
+        sigma_init = max(sigma_init, 5.0)  # Ensure reasonable minimum
+
         try:
-            popt, _ = curve_fit(
-                asymmetric_gaussian,
+            popt, pcov = curve_fit(
+                asymmetric_gaussian_with_baseline,
                 self.wavelengths,
                 self.data,
-                p0=[amp_init, center_init, sigma_init, sigma_init],
-                bounds=([0, self.wavelengths[0], 1, 1],
-                        [amp_init * 2, self.wavelengths[-1], 100, 100]),
-                maxfev=5000
+                p0=[amp_init, center_init, sigma_init, sigma_init, baseline_init],
+                bounds=([0, self.wavelengths[0], 3, 3, 0],
+                        [amp_init * 2, self.wavelengths[-1], 100, 100, baseline_init * 3 + 0.01]),
+                maxfev=10000
             )
-            return np.clip(asymmetric_gaussian(new_wavelengths, *popt), 0, None)
+
+            fitted = asymmetric_gaussian_with_baseline(new_wavelengths, *popt)
+
+            # Check fit quality - if RMSE is too high, fall back to cubic spline
+            fitted_at_original = asymmetric_gaussian_with_baseline(self.wavelengths, *popt)
+            rmse = np.sqrt(np.mean((fitted_at_original - self.data) ** 2))
+            max_val = np.max(self.data)
+
+            if rmse > 0.05 * max_val:  # More than 5% error - use spline instead
+                interpolator = interp1d(self.wavelengths, self.data, kind='cubic',
+                                        bounds_error=False, fill_value="extrapolate")
+                return np.clip(interpolator(new_wavelengths), 0, None)
+
+            return np.clip(fitted, 0, None)
         except Exception:
-            # Fallback to symmetric Gaussian RBF
-            rbf = Rbf(self.wavelengths, self.data, function='gaussian')
-            return rbf(new_wavelengths)
+            # Fallback to cubic spline interpolation
+            interpolator = interp1d(self.wavelengths, self.data, kind='cubic',
+                                    bounds_error=False, fill_value="extrapolate")
+            return np.clip(interpolator(new_wavelengths), 0, None)
 
     def smooth(self, poly_degree=8) -> 'Spectra':
         """Smooth the spectra data using Savitzky-Golay filtering.

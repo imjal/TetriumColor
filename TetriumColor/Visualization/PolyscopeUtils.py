@@ -4,7 +4,6 @@ from typing import List
 
 import tetrapolyscope as ps
 
-from TetriumColor.ColorMath.GamutMath import GenerateMaximalHueSpherePoints
 from TetriumColor import ColorSampler, ColorSpace, ColorSpaceType, PolyscopeDisplayType
 
 from .Geometry import GeometryPrimitives
@@ -251,6 +250,17 @@ def RenderTriangle(name: str, points: npt.NDArray, color: npt.NDArray) -> None:
 
 def RenderMetamericDirection(name: str, observer: Observer, display_basis: PolyscopeDisplayType,
                              metameric_axis: int, color: npt.NDArray, radius: float = 1, scale: float = 1) -> None:
+    """Render a line showing the metameric direction through the origin.
+
+    Args:
+        name (str): Name for the line
+        observer (Observer): Observer object
+        display_basis (PolyscopeDisplayType): Display basis to render in
+        metameric_axis (int): Which cone axis is metameric (0=L, 1=M, 2=S, 3=Q)
+        color (npt.NDArray): RGB color for the line
+        radius (float, optional): Line radius. Defaults to 1.
+        scale (float, optional): Length scale. Defaults to 1.
+    """
     length = 1 * 0.05
     basisLMSQ = np.zeros((1, observer.dimension))
     basisLMSQ[:, metameric_axis] = 1
@@ -258,6 +268,69 @@ def RenderMetamericDirection(name: str, observer: Observer, display_basis: Polys
     basisLMSQ = ColorSpace(observer).convert_to_polyscope(basisLMSQ, ColorSpaceType.CONE, display_basis)
     normalizedLMSQ = basisLMSQ[0] / np.linalg.norm(basisLMSQ[0]) * scale
     Render3DLine(name, np.array([-normalizedLMSQ, normalizedLMSQ]), color, radius)
+
+
+def RenderMetamericPairWithDirection(name: str, cst: ColorSpace, display_basis: PolyscopeDisplayType,
+                                     point_disp: npt.NDArray, metameric_axis: int,
+                                     color: npt.NDArray, show_cone_direction: bool = True,
+                                     proportion: float = 0.8) -> None:
+    """Render a metameric pair and optionally show the pure cone direction for comparison.
+
+    Args:
+        name (str): Base name for rendered objects
+        cst (ColorSpace): ColorSpace with display primaries
+        display_basis (PolyscopeDisplayType): Display basis to render in
+        point_disp (npt.NDArray): Center point in DISP space
+        metameric_axis (int): Which cone axis to vary (0=L, 1=M, 2=S, 3=Q)
+        color (npt.NDArray): RGB color for the pair
+        show_cone_direction (bool, optional): Whether to show pure cone direction. Defaults to True.
+        proportion (float, optional): Proportion of maximum distance. Defaults to 0.8.
+    """
+    # Get metameric pair
+    result = cst.get_maximal_pair_in_disp_from_pt(
+        pt=point_disp,
+        metameric_axis=metameric_axis,
+        output_space=ColorSpaceType.CONE,
+        proportion=proportion
+    )
+
+    if result is None:
+        print(f"Warning: Could not find metameric pair for {name}")
+        return
+
+    cone1, cone2, metamer_diff = result
+
+    # Convert to display space
+    disp1 = cst.convert_to_polyscope(cone1.reshape(1, -1), ColorSpaceType.CONE, display_basis)[0]
+    disp2 = cst.convert_to_polyscope(cone2.reshape(1, -1), ColorSpaceType.CONE, display_basis)[0]
+
+    # Render the metameric pair
+    RenderPointCloud(f"{name}_point1", disp1.reshape(1, -1), color.reshape(1, -1), radius=0.025)
+    RenderPointCloud(f"{name}_point2", disp2.reshape(1, -1), (color * 0.7).reshape(1, -1), radius=0.025)
+    Render3DLine(f"{name}_line", np.array([disp1, disp2]), color, radius=0.005)
+
+    # Optionally show the pure cone direction at the midpoint
+    if show_cone_direction:
+        midpoint_disp = (disp1 + disp2) / 2
+
+        # Create a small vector in the pure cone direction
+        cone_dir = np.zeros(cst.dim)
+        cone_dir[metameric_axis] = 0.1  # Small step
+        cone_dir_display = cst.convert_to_polyscope(
+            np.array([np.zeros(cst.dim), cone_dir]),
+            ColorSpaceType.CONE,
+            display_basis
+        )
+        direction = cone_dir_display[1] - cone_dir_display[0]
+        direction = direction / np.linalg.norm(direction) * np.linalg.norm(disp2 - disp1) * 0.5
+
+        # Render the pure cone direction line
+        Render3DLine(
+            f"{name}_cone_dir",
+            np.array([midpoint_disp - direction, midpoint_disp + direction]),
+            color * 0.5,  # Darker color to distinguish
+            radius=0.003
+        )
 
 
 def RenderOBS(name: str, cst: ColorSpace, display_basis: PolyscopeDisplayType, num_samples=10000) -> None:
@@ -405,3 +478,293 @@ def RenderMeshFromNonConvexPointCloud(name: str, points: npt.NDArray, rgb: npt.N
         rgb = np.ones((len(points), 3)) / 2
     mesh = GeometryPrimitives.Create3DMeshfromNonConvexPoints(points, rgb)
     GeometryPrimitives.ConvertTriangleMeshToPolyscope(name, mesh)
+
+
+def RenderNoiseBall(name: str, center: npt.NDArray, noise_std: npt.NDArray,
+                    color: npt.NDArray | None = None, num_samples: int = 1000,
+                    alpha: float = 0.3, min_std: float = 1e-4) -> None:
+    """Render a noise ball (ellipsoid) representing observer uncertainty.
+
+    Args:
+        name (str): Name of the noise ball to register with polyscope
+        center (npt.NDArray): Center point of the noise ball (3D or 4D, will be projected if needed)
+        noise_std (npt.NDArray): Standard deviations along each axis (defines ellipsoid shape)
+        color (npt.NDArray | None, optional): RGB color for the ball. Defaults to semi-transparent gray.
+        num_samples (int, optional): Number of points to sample on the ellipsoid surface. Defaults to 1000.
+        alpha (float, optional): Transparency of the mesh. Defaults to 0.3.
+        min_std (float, optional): Minimum standard deviation to prevent degeneracy. Defaults to 1e-4.
+    """
+    if color is None:
+        color = np.array([0.7, 0.7, 0.7])
+
+    # Generate points on a unit sphere
+    phi = np.random.uniform(0, 2 * np.pi, num_samples)
+    theta = np.random.uniform(0, np.pi, num_samples)
+
+    x = np.sin(theta) * np.cos(phi)
+    y = np.sin(theta) * np.sin(phi)
+    z = np.cos(theta)
+
+    sphere_points = np.column_stack([x, y, z])
+
+    # Scale by noise standard deviations to create ellipsoid
+    if len(noise_std) == 3:
+        # Ensure minimum std to prevent coplanar points
+        noise_std_safe = np.maximum(np.abs(noise_std), min_std)
+        ellipsoid_points = sphere_points * noise_std_safe
+    elif len(noise_std) == 4:
+        # For 4D, project down to 3D by dropping one dimension (typically luminance)
+        sphere_4d = np.random.randn(num_samples, 4)
+        sphere_4d = sphere_4d / np.linalg.norm(sphere_4d, axis=1, keepdims=True)
+        ellipsoid_points_4d = sphere_4d * noise_std
+        # Drop first dimension (luminance) for visualization
+        ellipsoid_points = ellipsoid_points_4d[:, 1:]
+        # Ensure minimum std to prevent coplanar points
+        ellipsoid_points = ellipsoid_points + np.random.randn(*ellipsoid_points.shape) * min_std
+        center = center[1:] if len(center) == 4 else center
+    else:
+        raise ValueError(f"noise_std must be 3D or 4D, got {len(noise_std)}D")
+
+    # Translate to center
+    points = ellipsoid_points + center
+
+    # Create mesh and render
+    colors = np.tile(color, (len(points), 1))
+    print(points.shape, colors.shape)
+    try:
+        Render3DMesh(name, points, colors)
+        ps.get_surface_mesh(name).set_transparency(alpha)
+    except RuntimeError as e:
+        if "coplanar" in str(e).lower() or "flat" in str(e).lower():
+            # If points are still coplanar, render as point cloud instead
+            print(f"Warning: Noise ball {name} is degenerate, rendering as point cloud")
+            RenderPointCloud(name, points, colors, radius=0.005)
+        else:
+            raise
+
+
+def RenderRYGBGamut(name: str, cst: ColorSpace, display_basis: PolyscopeDisplayType,
+                    color: npt.NDArray | None = None, alpha: float = 0.4,
+                    vertex_radius: float = 0.015, edge_radius: float = 0.003,
+                    scale: float = 1.0) -> None:
+    """Render the RYGB gamut as a projected hypercube (single unified mesh).
+
+    The RYGB gamut is defined by the Red-Yellow-Green-Blue basis with cutpoints
+    at [493, 563, 608] nm. This forms a 4D hypercube that is projected into 3D.
+
+    Args:
+        name (str): Name of the gamut to register with polyscope
+        cst (ColorSpace): ColorSpace object containing the observer
+        display_basis (PolyscopeDisplayType): Basis to display in
+        color (npt.NDArray | None, optional): RGB color for edges. Defaults to white.
+        alpha (float, optional): Transparency of the mesh. Defaults to 0.4.
+        vertex_radius (float, optional): Radius of vertex spheres. Defaults to 0.015.
+        edge_radius (float, optional): Radius of edge cylinders. Defaults to 0.003.
+        scale (float, optional): Scale factor for the entire gamut. Defaults to 1.0.
+    """
+    if color is None:
+        color = np.array([1, 1, 1])
+
+    # Generate all vertices of the unit hypercube in RYGB space
+    vertices_rygb = np.array([[r, y, g, b] for r in [0, 1]
+                              for y in [0, 1]
+                              for g in [0, 1]
+                              for b in [0, 1]])
+
+    # Convert to target display basis
+    vertices_display = cst.convert_to_polyscope(vertices_rygb, ColorSpaceType.RYGB, display_basis)
+
+    # Apply scaling
+    vertices_display = vertices_display * scale
+
+    # Compute colors for vertices (convert to sRGB)
+    vertices_cone = cst.convert(vertices_rygb, ColorSpaceType.RYGB, ColorSpaceType.CONE)
+    vertex_colors = np.clip(cst.convert(vertices_cone, ColorSpaceType.CONE, ColorSpaceType.SRGB), 0, 1)
+
+    # Create mesh objects list
+    mesh_objects = []
+
+    # Scale the radii proportionally
+    scaled_vertex_radius = vertex_radius * scale
+    scaled_edge_radius = edge_radius * scale
+
+    # Create sphere meshes for vertices
+    for i, (vertex, vertex_color) in enumerate(zip(vertices_display, vertex_colors)):
+        sphere = GeometryPrimitives.CreateSphere(
+            radius=scaled_vertex_radius,
+            center=vertex,
+            color=vertex_color,
+            resolution=10
+        )
+        mesh_objects.append(sphere)
+
+    # Find edges of the hypercube (vertices that differ in exactly one coordinate)
+    edges = []
+    for i in range(16):
+        for j in range(i+1, 16):
+            diff = np.sum(vertices_rygb[i] != vertices_rygb[j])
+            if diff == 1:
+                edges.append((i, j))
+
+    # Create cylinder meshes for edges
+    for i, j in edges:
+        edge_color = (vertex_colors[i] + vertex_colors[j]) / 2
+        cylinder = GeometryPrimitives.CreateCylinder(
+            endpoints=[vertices_display[i], vertices_display[j]],
+            radius=scaled_edge_radius,
+            color=edge_color,
+            resolution=8
+        )
+        mesh_objects.append(cylinder)
+
+    combined_mesh = GeometryPrimitives.CollapseMeshObjects(mesh_objects)
+    GeometryPrimitives.ConvertTriangleMeshToPolyscope(name, combined_mesh)
+
+    # Create convex hull mesh
+    try:
+        hull_mesh = GeometryPrimitives.Create3DMesh(vertices_display, vertex_colors)
+        GeometryPrimitives.ConvertTriangleMeshToPolyscope(name + "_hull", hull_mesh)
+        ps.get_surface_mesh(name + "_hull").set_transparency(alpha)
+    except Exception as e:
+        print(f"Warning: Could not create hull mesh for {name}: {e}")
+
+
+def RenderGamutSlices(name: str, cst: ColorSpace, display_space: ColorSpaceType, display_basis: PolyscopeDisplayType,
+                      luminance_values: List[float] = [0.25, 0.5, 0.75],
+                      grid_resolution: int = 20,
+                      tolerance: float = 0.05,
+                      alpha: float = 0.3) -> None:
+    """Render slices of the 4D display gamut at different Hering luminance levels.
+
+    This helps visualize the 4D gamut structure by showing how the chromatic gamut
+    changes at different luminance values.
+
+    Args:
+        name (str): Base name for the slices
+        cst (ColorSpace): ColorSpace with display primaries
+        display_basis (PolyscopeDisplayType): Display basis to render in
+        luminance_values (List[float], optional): Hering luminance values to slice at. Defaults to [0.25, 0.5, 0.75].
+        grid_resolution (int, optional): Resolution of sampling grid in DISP space. Defaults to 20.
+        tolerance (float, optional): Tolerance for luminance matching. Defaults to 0.05.
+        alpha (float, optional): Transparency of slice meshes. Defaults to 0.3.
+    """
+    from TetriumColor.Observer import GetHeringMatrix
+    from itertools import product
+
+    # Sample the DISP space [0,1]^4 on a grid
+    grid_1d = np.linspace(0, 1, grid_resolution)
+    disp_points = np.array(list(product(grid_1d, grid_1d, grid_1d, grid_1d)))
+
+    # Convert to CONE space
+    cone_points = cst.convert(disp_points, display_space, ColorSpaceType.CONE)
+
+    # Get Hering transform and compute luminance for each point
+    H = GetHeringMatrix(cst.dim)
+    hering_points = cone_points @ H.T
+    luminances = hering_points[:, 0]  # First coordinate is luminance
+
+    slice_colors = [
+        np.array([1.0, 0.3, 0.3]),  # Red
+        np.array([0.3, 1.0, 0.3]),  # Green
+        np.array([0.3, 0.3, 1.0]),  # Blue
+        np.array([1.0, 1.0, 0.3]),  # Yellow
+        np.array([1.0, 0.3, 1.0]),  # Magenta
+    ]
+
+    # For each luminance level, extract points and render
+    for slice_idx, target_lum in enumerate(luminance_values):
+        # Find points close to this luminance level
+        mask = np.abs(luminances - target_lum) < tolerance
+        slice_points_cone = cone_points[mask]
+
+        if len(slice_points_cone) < 10:
+            print(f"Warning: Only {len(slice_points_cone)} points found at luminance {target_lum:.2f}")
+            continue
+
+        # Convert to visualization space
+        slice_points_viz = cst.convert_to_polyscope(slice_points_cone, ColorSpaceType.CONE, display_basis)
+
+        # Render the slice
+        color = slice_colors[slice_idx % len(slice_colors)]
+
+        # Try to create a convex hull mesh
+        try:
+            colors = np.tile(color, (len(slice_points_viz), 1))
+            Render3DMesh(f"{name}_slice_L{target_lum:.2f}", slice_points_viz, colors)
+
+            # Use varying transparency to reduce z-fighting between slices
+            slice_alpha = alpha + (slice_idx * 0.05)  # Each slice slightly more/less transparent
+            ps.get_surface_mesh(f"{name}_slice_L{target_lum:.2f}").set_transparency(slice_alpha)
+
+            # Set material to reduce artifacts
+            ps.get_surface_mesh(f"{name}_slice_L{target_lum:.2f}").set_material('wax')
+
+            print(f"Slice at L={target_lum:.2f}: {len(slice_points_viz)} points, alpha={slice_alpha:.2f}")
+        except Exception as e:
+            # If mesh fails, render as point cloud
+            print(f"Slice at L={target_lum:.2f}: mesh failed ({e}), rendering {len(slice_points_viz)} points")
+            RenderPointCloud(f"{name}_slice_L{target_lum:.2f}", slice_points_viz,
+                             np.tile(color, (len(slice_points_viz), 1)), radius=0.008)
+
+
+def RenderLMSQVectors(name: str, cst: ColorSpace, display_basis: PolyscopeDisplayType,
+                      scale: float = 0.3, arrow_radius: float = 0.005) -> None:
+    """Render the LMSQ cone basis vectors as arrows.
+
+    Args:
+        name (str): Base name for the vectors to register with polyscope
+        cst (ColorSpace): ColorSpace object containing the observer
+        display_basis (PolyscopeDisplayType): Basis to display in
+        scale (float, optional): Scale factor for vector length. Defaults to 0.3.
+        arrow_radius (float, optional): Radius of arrow shafts. Defaults to 0.005.
+    """
+    dim = cst.observer.dimension
+
+    # Define LMSQ basis vectors in cone space
+    cone_basis = np.eye(dim)
+
+    # Standard colors for LMSQ: Red, Green, Blue, Violet
+    colors = [
+        np.array([0, 0, 1]),    # S - Red
+        np.array([0, 1, 0]),    # M - Green
+        np.array([0.5, 0.5, 0]),  # Q - Violet (if 4D)
+        np.array([1, 0, 0])    # L - Blue
+    ]
+
+    # Names for each cone type
+    cone_names = ['L', 'M', 'S', 'Q']
+
+    endpoints = []
+    endpoint_colors = []
+
+    for i in range(dim):
+        # Scale the basis vector
+        scaled_vector = cone_basis[i] * scale
+
+        # Convert to display basis
+        vector_display = cst.convert_to_polyscope(
+            np.array([np.zeros(dim), scaled_vector]),
+            ColorSpaceType.CONE,
+            display_basis
+        )
+
+        # Normalize the DIRECTION (not the endpoint itself)
+        # vector_display[0] is origin, vector_display[1] is endpoint
+        direction = vector_display[1] - vector_display[0]
+        normalized_direction = direction / np.linalg.norm(direction)
+
+        # Scale to desired length
+        vector_display[1] = vector_display[0] + normalized_direction * scale
+
+        endpoints.append((vector_display[0], vector_display[1]))
+        endpoint_colors.append(colors[i])
+
+    # Render all arrows
+    RenderSetOfArrows(name, endpoints, np.array(endpoint_colors), radius=arrow_radius)
+
+    # Also render individual lines for labels
+    for i in range(dim):
+        Render3DLine(f"{name}_{cone_names[i]}",
+                     np.array(endpoints[i]),
+                     endpoint_colors[i],
+                     radius=arrow_radius)

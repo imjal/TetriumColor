@@ -95,6 +95,7 @@ class PolyscopeDisplayType(Enum):
     HERING_MAXBASIS = ColorSpaceType.HERING  # this is HERING_MAXBASIS
     HERING_DISP = "hering_disp"
     HERING_CONE = "hering_cone"
+    HERING_RYGB = "hering_rygb"
 
 
 class ColorSpace:
@@ -140,6 +141,8 @@ class ColorSpace:
                     p.interpolate_values(observer.wavelengths, method=primary_interpolation_method)
                     for p in display_primaries
                 ]
+            else:
+                self.display_primaries = display_primaries
         else:
             self.display_primaries = None
 
@@ -225,8 +228,17 @@ class ColorSpace:
     def _get_rygb_transitions(self, cutpoints: List[float]) -> List[List[float]]:
         """Get spectral transitions from cutpoints for RYGB basis.
 
+        Creates 4 spectral regions (for tetrachromats):
+        - Blue: wavelengths < cutpoints[0]  
+        - Green: cutpoints[0] <= wavelengths < cutpoints[1]
+        - Yellow: cutpoints[1] <= wavelengths < cutpoints[2]
+        - Red: wavelengths >= cutpoints[2]
+
+        Each region is represented by transition points that define where
+        the step function goes from 0 to 1 and back to 0.
+
         Args:
-            cutpoints: List of wavelength cutpoints in nm
+            cutpoints: List of wavelength cutpoints in nm (e.g., [493, 563, 608])
 
         Returns:
             List of transition lists defining each spectral region
@@ -234,9 +246,24 @@ class ColorSpace:
         if len(cutpoints) == 0:
             return [[self.observer.wavelengths[0]]]
 
-        transitions = [[cutpoints[0]], [cutpoints[-1]]]
-        transitions += [[cutpoints[i], cutpoints[i+1]] for i in range(len(cutpoints)-1)]
-        transitions.sort()
+        # For 4 regions with 3 cutpoints [c0, c1, c2]:
+        # Region 0 (Blue): < c0  -> transitions: [c0] (starts at 1, goes to 0 at c0)
+        # Region 1 (Green): c0 to c1 -> transitions: [c0, c1] (starts at 0, goes to 1 at c0, back to 0 at c1)
+        # Region 2 (Yellow): c1 to c2 -> transitions: [c1, c2] (starts at 0, goes to 1 at c1, back to 0 at c2)
+        # Region 3 (Red): >= c2 -> transitions: [c2] (starts at 0, goes to 1 at c2)
+
+        transitions = []
+
+        # First region: from min wavelength to first cutpoint
+        transitions.append([cutpoints[0]])
+
+        # Middle regions: between consecutive cutpoints
+        for i in range(len(cutpoints) - 1):
+            transitions.append([cutpoints[i], cutpoints[i+1]])
+
+        # Last region: from last cutpoint to max wavelength
+        transitions.append([cutpoints[-1]])
+
         return transitions
 
     def _get_cone_to_disp(self) -> npt.NDArray:
@@ -364,7 +391,7 @@ class ColorSpace:
                               ColorSpaceType.DISP, output_space).reshape(-1, 2, self.dim)
         return points[0][0], points[0][1]
 
-    def get_maximal_pair_in_disp_from_pt(self, pt: npt.NDArray, metameric_axis: int = 2, output_space: ColorSpaceType = ColorSpaceType.CONE, proportion: float = 1.0) -> Optional[Tuple[npt.NDArray, npt.NDArray, float]]:
+    def get_maximal_pair_in_disp_from_pt(self, pt: npt.NDArray, metameric_axis: int = 2, input_space: ColorSpaceType = ColorSpaceType.DISP, output_space: ColorSpaceType = ColorSpaceType.CONE, proportion: float = 1.0) -> Optional[Tuple[npt.NDArray, npt.NDArray, float]]:
         """Get Maximal Metameric Color Pairs from a Point
 
         Args:
@@ -375,7 +402,7 @@ class ColorSpace:
         Returns:
             Optional[Tuple[npt.NDArray, npt.NDArray, float]]: (cone1, cone2, metamer_difference) or None if rejected
         """
-        metamer_dir_in_disp = self.get_metameric_axis_in(ColorSpaceType.DISP, metameric_axis_num=metameric_axis)
+        metamer_dir_in_disp = self.get_metameric_axis_in(input_space, metameric_axis_num=metameric_axis)
         disp_pts = np.clip(FindMaximumIn1DimDirection(
             pt,
             metamer_dir_in_disp,
@@ -386,7 +413,7 @@ class ColorSpace:
             # Interpolate between center point and maximal points
             disp_pts = pt + (disp_pts - pt) * proportion
 
-        cones = self.convert(disp_pts, ColorSpaceType.DISP, ColorSpaceType.CONE)
+        cones = self.convert(disp_pts, input_space, ColorSpaceType.CONE)
 
         # Calculate metamer difference in the metameric channel
         metamer_difference = abs(cones[0][self.metameric_axis] - cones[1][self.metameric_axis])
