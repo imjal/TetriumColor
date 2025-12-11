@@ -14,7 +14,8 @@ PyObject* ColorGeneratorFactory::CreateGeneticColorGenerator(
     int seed,
     int trials_per_direction,
     const std::vector<int>& metameric_axes,
-    const std::string& display_primaries_path
+    const std::string& display_primaries_path,
+    float degree
 )
 {
     // Load primaries from CSV first
@@ -85,6 +86,7 @@ PyObject* ColorGeneratorFactory::CreateGeneticColorGenerator(
     PyObject* pKwargs = PyDict_New();
     PyDict_SetItemString(pKwargs, "display_primaries", pPrimaries); // Steals reference
     PyDict_SetItemString(pKwargs, "trials_per_direction", PyLong_FromLong(trials_per_direction));
+    PyDict_SetItemString(pKwargs, "degree", PyFloat_FromDouble(degree));
     if (pMetamericAxes) {
         PyDict_SetItemString(pKwargs, "metameric_axes", pMetamericAxes); // Steals reference
     }
@@ -122,7 +124,8 @@ PyObject* ColorGeneratorFactory::CreateQuestColorGenerator(
     const std::vector<int>& metameric_axes,
     const std::vector<int>& dimensions,
     const std::string& display_primaries_path,
-    bool bipolar
+    bool bipolar,
+    float degree
 )
 {
     // Load primaries from CSV first
@@ -197,6 +200,7 @@ PyObject* ColorGeneratorFactory::CreateQuestColorGenerator(
     PyDict_SetItemString(pKwargs, "metameric_axes", pMetamericAxes); // Steals reference
     PyDict_SetItemString(pKwargs, "display_primaries", pPrimaries);  // Steals reference
     PyDict_SetItemString(pKwargs, "bipolar", bipolar ? Py_True : Py_False);
+    PyDict_SetItemString(pKwargs, "degree", PyFloat_FromDouble(degree));
 
     PyObject* pArgs = PyTuple_New(2);
     PyTuple_SetItem(pArgs, 0, PyUnicode_FromString(sex.c_str()));

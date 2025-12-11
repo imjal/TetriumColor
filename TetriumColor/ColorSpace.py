@@ -332,11 +332,12 @@ class ColorSpace:
         """
         Get the maximum luminance value in HERING space.
 
-        This is computed as the luminance (first component) when all display primaries
-        are at maximum (white point in DISP space).
+        This is computed as the luminance (first component) of cone white [1,1,1,1],
+        which represents the maximum cone excitation. This is independent of display
+        primaries; the display conversion happens separately in CONE→DISP.
 
         Returns:
-            float: Maximum luminance value
+            float: Maximum luminance value in HERING space
         """
         if self._max_L is None:
             if self.display_primaries is None:

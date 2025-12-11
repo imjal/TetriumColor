@@ -70,6 +70,7 @@ class QuestColorGenerator(ColorGenerator):
                  quest_params: Optional[Dict] = None,
                  metameric_axes: Optional[List[int]] = [2],
                  bipolar: bool = False,
+                 degree: float = 4.0,
                  **kwargs):
         """Initialize Quest-based color generator.
 
@@ -97,6 +98,10 @@ class QuestColorGenerator(ColorGenerator):
         self.metameric_axes = metameric_axes if metameric_axes is not None else list(range(4))
         self.dim = 4
         self.bipolar = bipolar
+        self.degree = degree
+
+        # Add degree to kwargs for observer creation
+        kwargs['degree'] = degree
 
         # Default Quest parameters
         default_quest_params = {
@@ -604,7 +609,7 @@ class GeneticColorGenerator(ColorGenerator):
     def __init__(self, sex: str, percentage_screened: float, peak_to_test: float = 547,
                  luminance: float = 1.0, saturation: float = 0.5,
                  dimensions: Optional[List[int]] = [3], seed: int = 42,
-                 trials_per_direction: int = 20, metameric_axes: List[int] = [1, 2, 3], randomize_genotypes: bool = True, debug_middle: bool = False, **kwargs):
+                 trials_per_direction: int = 20, metameric_axes: List[int] = [1, 2, 3], randomize_genotypes: bool = True, debug_middle: bool = False, degree: float = 4.0, **kwargs):
         """Color picker that samples from the most common trichromatic phenotypes.
 
         Args:
@@ -623,6 +628,7 @@ class GeneticColorGenerator(ColorGenerator):
         self.luminance = luminance
         self.saturation = saturation
         self.debug_middle = debug_middle
+        self.degree = degree
 
         self.randomize_genotypes = randomize_genotypes
 
@@ -632,6 +638,9 @@ class GeneticColorGenerator(ColorGenerator):
 
         # Create mapping from genotype -> [color_space, color_sampler]
         self.genotype_mapping: Dict[Tuple, Tuple[ColorSpace, List[npt.NDArray]]] = {}
+
+        # Add degree to kwargs for observer creation
+        kwargs['degree'] = degree
 
         for genotype in self.genotypes:
             if len(genotype) == 1:  # testing for hard dichromats

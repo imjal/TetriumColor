@@ -67,6 +67,8 @@ class IshiharaPlateGenerator:
                       lum_noise: float = 0, s_cone_noise: float = 0,
                       corner_label: Optional[str] = None,
                       metamer_difference: Optional[float] = None,
+                      background_luminance: float = 0.5,
+                      dot_size: float = 1.0,
                       seed: int = 42,
                       **kwargs) -> List[Image.Image]:
         """
@@ -80,13 +82,32 @@ class IshiharaPlateGenerator:
             lum_noise: Luminance noise amount
             s_cone_noise: S-cone noise amount
             metamer_difference: Metamer difference for adaptive noise calculation
+            background_luminance: Background luminance level (0.0 to 1.0)
             **kwargs: Additional arguments passed to generate_ishihara_plate
         """
         # Get default values or use provided kwargs
-        dot_sizes = kwargs.get("dot_sizes", [16, 22, 28])
+        base_dot_sizes = kwargs.get("dot_sizes", [16, 22, 28])
         image_size = kwargs.get("image_size", 1024)
 
-        # Get cached geometry
+        # Scale dot sizes by dot_size parameter
+        dot_sizes = [int(size * dot_size) for size in base_dot_sizes]
+
+        # Generate simple uniform gray background for adaptation
+        # background_luminance is in [0, max_L] range, where max_L = 2.0 (cone white)
+        # For a neutral adaptation field, we want R=G=B=luminance/max_L
+        # This avoids complex tetrachromatic conversions that don't produce neutral grays
+
+        # Scale to [0, 1] display range
+        gray_level = background_luminance / color_space.max_L
+
+        # Clip and convert to 8-bit
+        gray_level = np.clip(gray_level, 0.0, 1.0)
+
+        # Create uniform gray across all channels (3 for RGB, 6 for 6P display)
+        num_channels = 3 if output_space == ColorSpaceType.SRGB else 6
+        background_color = np.full(num_channels, int(gray_level * 255), dtype=int)
+
+        # Get cached geometry with scaled dot sizes
         circles = self._get_geometry(seed, dot_sizes, image_size)
 
         # Generate plate using cached geometry
@@ -96,6 +117,7 @@ class IshiharaPlateGenerator:
             output_space=output_space,
             lum_noise=lum_noise, s_cone_noise=s_cone_noise, corner_label=corner_label,
             metamer_difference=metamer_difference,
+            background_color=background_color,
             seed=seed,  # Pass seed for consistency
             **kwargs
         )
@@ -107,7 +129,7 @@ class IshiharaPlateGenerator:
             img.save(f"{filename}_{exts[i]}.png")
 
 
-def _generate_geometry(dot_sizes: List[int], image_size: int, seed: int) -> List[List[float]]:
+def _generate_geometry(dot_sizes: List[int], image_size: int, seed: int, dot_scaling_factor: float = 1.0) -> List[List[float]]:
     """
     Generate the geometry for the Ishihara plate.
 

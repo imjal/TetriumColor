@@ -561,12 +561,14 @@ class ObserverGenotypes:
         """
         return self.get_genotypes_covering_probability(threshold_probability, sex)
 
-    def get_observer_for_peaks(self, peaks: Tuple[float, ...], od: float = 0.5) -> Observer:
+    def get_observer_for_peaks(self, peaks: Tuple[float, ...], od: float = 0.5, degree: float = 4.0) -> Observer:
         """
         Create an Observer object for specific peak wavelengths, with sorted peaks.
 
         Args:
             peaks: List of peak wavelengths
+            od: Optical density
+            degree: Visual angle in degrees (affects macula pigment)
 
         Returns:
             Observer object
@@ -578,9 +580,9 @@ class ObserverGenotypes:
         cones = []
         for peak in sorted(peaks):
             if peak == 420:
-                cone = Cone.cone(peak, wavelengths=self.wavelengths, template='neitz', od=od * 0.8)
+                cone = Cone.cone(peak, wavelengths=self.wavelengths, template='neitz', od=od * 0.8, degree=degree)
             else:
-                cone = Cone.cone(peak, wavelengths=self.wavelengths, template='neitz', od=od)
+                cone = Cone.cone(peak, wavelengths=self.wavelengths, template='neitz', od=od, degree=degree)
             cones.append(cone)
 
         return Observer(cones, illuminant=None)
@@ -591,12 +593,16 @@ class ObserverGenotypes:
 
         Args:
             peaks: List of peak wavelengths
-            **kwargs: Additional arguments to pass to ColorSpace constructor
+            **kwargs: Additional arguments to pass to ColorSpace constructor (including degree for observer)
 
         Returns:
             ColorSpace object
         """
-        observer = self.get_observer_for_peaks(peaks)
+        # Extract degree from kwargs if provided (for observer creation)
+        degree = kwargs.pop('degree', 4.0)
+        od = kwargs.pop('od', 0.5)
+
+        observer = self.get_observer_for_peaks(peaks, od=od, degree=degree)
         return ColorSpace(observer, **kwargs)
 
     def get_observers_by_probability(self, sex: str = 'male') -> List[Observer]:

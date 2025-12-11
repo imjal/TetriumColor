@@ -87,7 +87,8 @@ class PseudoIsochromaticPlateGenerator(PlateGenerator):
         self.plate_generator: IshiharaPlateGenerator = IshiharaPlateGenerator()
 
     def NewTest(self, filename: str, hidden_symbol: Union[int, str],
-                output_space: ColorSpaceType = ColorSpaceType.DISP_6P, lum_noise: float = 0, s_cone_noise: float = 0):
+                output_space: ColorSpaceType = ColorSpaceType.DISP_6P, lum_noise: float = 0, s_cone_noise: float = 0,
+                background_luminance: float = 0.5, dot_size: float = 1.0, degree: float = 4.0):
         """
         Generates a new plate with the given hidden symbol and returns trial data as dict
 
@@ -97,6 +98,7 @@ class PseudoIsochromaticPlateGenerator(PlateGenerator):
             output_space (ColorSpaceType): Target color space for output
             lum_noise (float): Luminance noise amount
             s_cone_noise (float): S-cone noise amount
+            background_luminance (float): Background luminance level (0.0 to 1.0)
 
         Returns:
             dict: Trial data with paths, metadata, and trial information
@@ -107,6 +109,8 @@ class PseudoIsochromaticPlateGenerator(PlateGenerator):
             inside_cone, outside_cone, color_space,
             hidden_symbol, output_space,
             lum_noise=lum_noise, s_cone_noise=s_cone_noise,
+            background_luminance=background_luminance,
+            dot_size=dot_size,
             seed=np.random.randint(0, 1000000)
         )
 
@@ -149,7 +153,8 @@ class PseudoIsochromaticPlateGenerator(PlateGenerator):
 
     def GetTest(self, previous_result: ColorTestResult,
                 filename: str, hidden_symbol: Union[int, str],
-                output_space: ColorSpaceType = ColorSpaceType.DISP_6P, lum_noise: float = 0, s_cone_noise: float = 0.1, **kwargs):
+                output_space: ColorSpaceType = ColorSpaceType.DISP_6P, lum_noise: float = 0, s_cone_noise: float = 0.1,
+                background_luminance: float = 0.5, dot_size: float = 1.0, degree: float = 4.0, **kwargs):
         """
         Generates a new plate based on previous result and returns trial data as dict or None if complete
 
@@ -160,6 +165,7 @@ class PseudoIsochromaticPlateGenerator(PlateGenerator):
             output_space (ColorSpaceType): Target color space for output
             lum_noise (float): Luminance noise amount
             s_cone_noise (float): S-cone noise amount
+            background_luminance (float): Background luminance level (0.0 to 1.0)
 
         Returns:
             dict or None: Trial data dict if test continues, None if test is complete
@@ -177,7 +183,9 @@ class PseudoIsochromaticPlateGenerator(PlateGenerator):
         image = self.plate_generator.GeneratePlate(
             inside_cone, outside_cone, color_space,
             hidden_symbol, output_space,
-            lum_noise=lum_noise, s_cone_noise=s_cone_noise, **kwargs,
+            lum_noise=lum_noise, s_cone_noise=s_cone_noise,
+            background_luminance=background_luminance,
+            dot_size=dot_size, degree=degree, **kwargs,
             seed=np.random.randint(0, 1000000)
         )
 
@@ -208,6 +216,218 @@ class PseudoIsochromaticPlateGenerator(PlateGenerator):
                 'outside_cone': outside_cone.tolist(),
                 'lum_noise': lum_noise,
                 's_cone_noise': s_cone_noise
+            }
+        }
+
+
+class BipartiteFieldGenerator(TestGenerator):
+    """
+    Generator for bipartite field tests - simple circles split vertically in half
+    with two different colors (metamers).
+    """
+
+    def __init__(self, color_generator: ColorGenerator, seed: int = 42, size: int = 512):
+        """
+        Initializes the BipartiteFieldGenerator with the given color generator.
+
+        Args:
+            color_generator (ColorGenerator): The color generator to use for colors
+            seed (int): The seed for random generation
+            size (int): Size of the output image (width and height)
+        """
+        np.random.seed(seed)
+        super().__init__(color_generator)
+        self.size = size
+
+    def _create_bipartite_circle(self, left_color, right_color, size: int):
+        """
+        Create a bipartite circle image split vertically.
+
+        Args:
+            left_color: RGB color array for left half [R, G, B] in range [0, 1]
+            right_color: RGB color array for right half [R, G, B] in range [0, 1]
+            size: Size of the output image
+
+        Returns:
+            PIL Image with bipartite circle
+        """
+        # Create image array
+        img_array = np.zeros((size, size, 3), dtype=np.float32)
+
+        # Create circular mask
+        center = size / 2
+        y, x = np.ogrid[:size, :size]
+        dist_from_center = np.sqrt((x - center)**2 + (y - center)**2)
+        circle_mask = dist_from_center <= (size / 2)
+
+        # Create left/right split mask
+        left_mask = x < center
+        right_mask = x >= center
+
+        # Apply colors
+        # Left half
+        left_region = circle_mask & left_mask
+        img_array[left_region] = left_color[:3]
+
+        # Right half
+        right_region = circle_mask & right_mask
+        img_array[right_region] = right_color[:3]
+
+        # Convert to 8-bit image
+        img_array = np.clip(img_array * 255, 0, 255).astype(np.uint8)
+        return Image.fromarray(img_array, mode='RGB')
+
+    def NewTest(self, filename: str, hidden_symbol: Union[int, str] = None,
+                output_space: ColorSpaceType = ColorSpaceType.DISP_6P,
+                lum_noise: float = 0, s_cone_noise: float = 0):
+        """
+        Generates a new bipartite field test and returns trial data as dict.
+
+        Args:
+            filename (str): Base filename to save the images
+            hidden_symbol (Union[int, str], optional): Not used, kept for API compatibility
+            output_space (ColorSpaceType): Target color space for output
+            lum_noise (float): Not used for bipartite field
+            s_cone_noise (float): Not used for bipartite field
+
+        Returns:
+            dict: Trial data with paths, metadata, and trial information
+        """
+        inside_cone, outside_cone, color_space, intensity = self.color_generator.NewColor()
+
+        # Convert colors to display space
+        if output_space == ColorSpaceType.DISP_6P:
+            # Convert cone values to display primaries
+            inside_disp = color_space.convert(inside_cone.reshape(
+                1, -1), ColorSpaceType.CONE, ColorSpaceType.DISP_6P)[0]
+            outside_disp = color_space.convert(outside_cone.reshape(
+                1, -1), ColorSpaceType.CONE, ColorSpaceType.DISP_6P)[0]
+
+            # Create RGB image (first 3 channels)
+            left_rgb = inside_disp[:3]
+            right_rgb = outside_disp[:3]
+            img_rgb = self._create_bipartite_circle(left_rgb, right_rgb, self.size)
+
+            # Create OCV image (last 3 channels)
+            left_ocv = inside_disp[3:]
+            right_ocv = outside_disp[3:]
+            img_ocv = self._create_bipartite_circle(left_ocv, right_ocv, self.size)
+
+            # Save images
+            rgb_path = f"{filename}_RGB.png"
+            ocv_path = f"{filename}_OCV.png"
+            img_rgb.save(rgb_path)
+            img_ocv.save(ocv_path)
+        else:
+            # SRGB output
+            inside_srgb = color_space.convert(inside_cone.reshape(1, -1), ColorSpaceType.CONE, ColorSpaceType.SRGB)[0]
+            outside_srgb = color_space.convert(outside_cone.reshape(1, -1), ColorSpaceType.CONE, ColorSpaceType.SRGB)[0]
+
+            img = self._create_bipartite_circle(inside_srgb, outside_srgb, self.size)
+            rgb_path = f"{filename}_SRGB.png"
+            ocv_path = rgb_path
+            img.save(rgb_path)
+
+        # Extract genotype if available
+        genotype = getattr(color_space, 'genotype', None)
+        if genotype:
+            genotype_str = str(genotype)
+        else:
+            genotype_str = "unknown"
+
+        # Extract metameric axis if available
+        metameric_axis = getattr(color_space, 'metameric_axis', -1)
+
+        # Return trial data as dictionary
+        return {
+            'trial_type': 'bipartite_field',
+            'genotype': genotype_str,
+            'metameric_axis': metameric_axis,
+            'rgb_path': rgb_path,
+            'ocv_path': ocv_path,
+            'intensity': intensity,
+            'metadata': {
+                'inside_cone': inside_cone.tolist(),
+                'outside_cone': outside_cone.tolist(),
+                'size': self.size
+            }
+        }
+
+    def GetTest(self, previous_result: ColorTestResult,
+                filename: str, hidden_symbol: Union[int, str] = None,
+                output_space: ColorSpaceType = ColorSpaceType.DISP_6P,
+                lum_noise: float = 0, s_cone_noise: float = 0, **kwargs):
+        """
+        Generates a bipartite field test based on previous result.
+
+        Args:
+            previous_result (ColorTestResult): The result of the previous test
+            filename (str): Base filename to save the images
+            hidden_symbol (Union[int, str], optional): Not used, kept for API compatibility
+            output_space (ColorSpaceType): Target color space for output
+            lum_noise (float): Not used for bipartite field
+            s_cone_noise (float): Not used for bipartite field
+
+        Returns:
+            dict or None: Trial data dict if test continues, None if test is complete
+        """
+        # Get next color from color generator
+        result = self.color_generator.GetColor(previous_result)
+
+        # If None returned, test is complete
+        if result is None:
+            return None
+
+        inside_cone, outside_cone, color_space, intensity = result
+
+        # Convert colors to display space
+        if output_space == ColorSpaceType.DISP_6P:
+            # Convert cone values to display primaries
+            inside_disp = color_space.convert(inside_cone.reshape(
+                1, -1), ColorSpaceType.CONE, ColorSpaceType.DISP_6P)
+            outside_disp = color_space.convert(outside_cone.reshape(
+                1, -1), ColorSpaceType.CONE, ColorSpaceType.DISP_6P)[0]
+
+            # Create RGB image (first 3 channels)
+            left_rgb = inside_disp[:3]
+            right_rgb = outside_disp[:3]
+            img_rgb = self._create_bipartite_circle(left_rgb, right_rgb, self.size)
+
+            # Create OCV image (last 3 channels)
+            left_ocv = inside_disp[3:]
+            right_ocv = outside_disp[3:]
+            img_ocv = self._create_bipartite_circle(left_ocv, right_ocv, self.size)
+
+            # Save images
+            rgb_path = f"{filename}_RGB.png"
+            ocv_path = f"{filename}_OCV.png"
+            img_rgb.save(rgb_path)
+            img_ocv.save(ocv_path)
+        else:
+            # SRGB output
+            inside_srgb = color_space.convert(inside_cone.reshape(1, -1), ColorSpaceType.CONE, ColorSpaceType.SRGB)[0]
+            outside_srgb = color_space.convert(outside_cone.reshape(1, -1), ColorSpaceType.CONE, ColorSpaceType.SRGB)[0]
+
+            img = self._create_bipartite_circle(inside_srgb, outside_srgb, self.size)
+            rgb_path = f"{filename}_SRGB.png"
+            ocv_path = rgb_path
+            img.save(rgb_path)
+
+        genotype, metameric_axis = self.color_generator.GetCurrentTestInfo()
+        genotype_str = str(genotype)
+
+        # Return trial data as dictionary
+        return {
+            'trial_type': 'bipartite_field',
+            'genotype': genotype_str,
+            'metameric_axis': metameric_axis,
+            'rgb_path': rgb_path,
+            'ocv_path': ocv_path,
+            'intensity': intensity,
+            'metadata': {
+                'inside_cone': inside_cone.tolist(),
+                'outside_cone': outside_cone.tolist(),
+                'size': self.size
             }
         }
 
