@@ -110,6 +110,10 @@ class IshiharaPlateGenerator:
         # Get cached geometry with scaled dot sizes
         circles = self._get_geometry(seed, dot_sizes, image_size)
 
+        # Filter out parameters that generate_ishihara_plate doesn't accept
+        filtered_kwargs = {k: v for k, v in kwargs.items()
+                           if k not in ['degree', 'dot_size', 'dot_sizes', 'image_size']}
+
         # Generate plate using cached geometry
         return generate_ishihara_plate(
             inside_cone, outside_cone, color_space,
@@ -119,7 +123,7 @@ class IshiharaPlateGenerator:
             metamer_difference=metamer_difference,
             background_color=background_color,
             seed=seed,  # Pass seed for consistency
-            **kwargs
+            **filtered_kwargs
         )
 
     def ExportPlateTo6P(self, plate_imgs: List[Image.Image], filename: str):
@@ -127,6 +131,111 @@ class IshiharaPlateGenerator:
         exts = ["RGB", "OCV"]
         for i, img in enumerate(plate_imgs):
             img.save(f"{filename}_{exts[i]}.png")
+
+    def GeneratePlateRYGB(self, inside_cone: npt.NDArray, outside_cone: npt.NDArray,
+                          color_space: ColorSpace,
+                          hidden_symbol: Union[int, str],
+                          lum_noise: float = 0, s_cone_noise: float = 0,
+                          corner_label: Optional[str] = None,
+                          metamer_difference: Optional[float] = None,
+                          background_luminance: float = 0.5,
+                          dot_size: float = 1.0,
+                          seed: int = 42,
+                          **kwargs) -> npt.NDArray:
+        """
+        Generate plate in RYGB color space (display-agnostic).
+
+        Args:
+            inside_cone: Inside color in cone space
+            outside_cone: Outside color in cone space
+            hidden_symbol: Number or symbol to embed in plate
+            lum_noise: Luminance noise amount
+            s_cone_noise: S-cone noise amount
+            metamer_difference: Metamer difference for adaptive noise calculation
+            background_luminance: Background luminance level (0.0 to 1.0)
+            dot_size: Dot size scaling factor
+            seed: Random seed for reproducibility
+            **kwargs: Additional arguments (dot_sizes, image_size, etc.)
+
+        Returns:
+            RYGB array of shape (height, width, 4) with float32 values
+        """
+        # Get parameters
+        base_dot_sizes = kwargs.get("dot_sizes", [16, 22, 28])
+        image_size = kwargs.get("image_size", 1024)
+        dot_sizes = [int(size * dot_size) for size in base_dot_sizes]
+
+        # Get cached geometry
+        circles = self._get_geometry(seed, dot_sizes, image_size)
+
+        # Convert cone colors to RYGB
+        inside_rygb = color_space.convert(inside_cone.reshape(1, -1), ColorSpaceType.CONE, ColorSpaceType.RYGB)[0]
+        outside_rygb = color_space.convert(outside_cone.reshape(1, -1), ColorSpaceType.CONE, ColorSpaceType.RYGB)[0]
+
+        # Calculate background in RYGB
+        gray_level = background_luminance / color_space.max_L
+        gray_level = np.clip(gray_level, 0.0, 1.0)
+        # Neutral gray in RYGB: equal contributions from all channels
+        background_rygb = np.array([gray_level, gray_level, gray_level, gray_level], dtype=np.float32)
+
+        # Create RYGB image array
+        rygb_array = np.tile(background_rygb, (image_size, image_size, 1)).astype(np.float32)
+
+        # Load hidden symbol mask
+        if isinstance(hidden_symbol, int):
+            hidden_symbol = str(hidden_symbol)
+
+        try:
+            with as_file(resources.files('TetriumColor').joinpath(f'Assets/HiddenImages/{hidden_symbol}.png')) as hidden_image_path:
+                hidden_image = Image.open(hidden_image_path).convert('L')
+                hidden_image = hidden_image.resize((image_size, image_size), Image.Resampling.LANCZOS)
+                hidden_mask = np.array(hidden_image) > 128
+        except Exception as e:
+            print(f"Warning: Could not load hidden symbol {hidden_symbol}: {e}")
+            hidden_mask = np.zeros((image_size, image_size), dtype=bool)
+
+        # Draw circles
+        for circle in circles:
+            x, y, r = circle
+            # Determine if circle is inside or outside based on hidden mask
+            mask_value = hidden_mask[int(y), int(x)] if 0 <= int(y) < image_size and 0 <= int(x) < image_size else False
+
+            # Select color
+            base_color = inside_rygb if mask_value else outside_rygb
+
+            # Add noise
+            color = base_color.copy()
+            if lum_noise > 0 or s_cone_noise > 0:
+                # Convert to cone space for noise application
+                cone_color = color_space.convert(color.reshape(1, -1), ColorSpaceType.RYGB, ColorSpaceType.CONE)[0]
+
+                # Add luminance noise (affects all cones equally)
+                if lum_noise > 0:
+                    lum_offset = np.random.uniform(-lum_noise, lum_noise)
+                    cone_color[:3] += lum_offset  # Apply to S, M, L (not Q)
+
+                # Add S-cone noise
+                if s_cone_noise > 0:
+                    s_offset = np.random.uniform(-s_cone_noise, s_cone_noise)
+                    cone_color[0] += s_offset  # S cone only
+
+                # Convert back to RYGB
+                color = color_space.convert(cone_color.reshape(1, -1), ColorSpaceType.CONE, ColorSpaceType.RYGB)[0]
+
+            # Draw circle in RYGB array
+            y_min, y_max = max(0, int(y - r)), min(image_size, int(y + r + 1))
+            x_min, x_max = max(0, int(x - r)), min(image_size, int(x + r + 1))
+
+            for py in range(y_min, y_max):
+                for px in range(x_min, x_max):
+                    if (px - x) ** 2 + (py - y) ** 2 <= r ** 2:
+                        rygb_array[py, px] = color
+
+        return rygb_array
+
+    def ExportPlateRYGB(self, rygb_array: npt.NDArray, filename: str):
+        """Export RYGB plate as TIFF file."""
+        export_plate_rygb_tiff(rygb_array, f"{filename}_RYGB.tiff")
 
 
 def _generate_geometry(dot_sizes: List[int], image_size: int, seed: int, dot_scaling_factor: float = 1.0) -> List[List[float]]:
@@ -446,6 +555,22 @@ def export_plate(rgb_img: Image.Image, ocv_img: Image.Image, filename_rgb: str, 
     """
     rgb_img.save(filename_rgb)
     ocv_img.save(filename_ocv)
+
+
+def export_plate_rygb_tiff(rygb_array: npt.NDArray, filename: str):
+    """
+    Export RYGB plate data as a 32-bit float TIFF file.
+
+    :param rygb_array: RYGB color data as numpy array of shape (height, width, 4)
+    :param filename: Output TIFF filename
+    """
+    import tifffile
+
+    # Ensure array is float32
+    rygb_float32 = rygb_array.astype(np.float32)
+
+    # Save as TIFF with 4 channels (RYGB stored as RGBA)
+    tifffile.imwrite(filename, rygb_float32, photometric='rgb')
 
 
 def GenerateLandoltC(output_dir: str, gap_directions: List[str] = None):

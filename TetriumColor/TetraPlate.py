@@ -151,6 +151,70 @@ class PseudoIsochromaticPlateGenerator(PlateGenerator):
             }
         }
 
+    def NewTestRYGB(self, filename: str, hidden_symbol: Union[int, str],
+                    lum_noise: float = 0, s_cone_noise: float = 0,
+                    background_luminance: float = 0.5, dot_size: float = 1.0, degree: float = 4.0):
+        """
+        Generates a new plate in RYGB format (display-agnostic) and returns trial data as dict.
+
+        This method generates RYGB TIFF files that can be transformed to any display space
+        using calibrated transformation matrices, eliminating the need to regenerate images
+        when display calibration changes.
+
+        Args:
+            filename (str): Base filename to save the RYGB TIFF file
+            hidden_symbol (Union[int, str]): The hidden symbol to embed in the plate
+            lum_noise (float): Luminance noise amount
+            s_cone_noise (float): S-cone noise amount
+            background_luminance (float): Background luminance level (0.0 to 1.0)
+            dot_size (float): Dot size scaling factor
+            degree (float): Visual angle in degrees
+
+        Returns:
+            dict: Trial data with RYGB path, metadata, and trial information
+        """
+        inside_cone, outside_cone, color_space, intensity = self.color_generator.NewColor()
+
+        # Generate RYGB plate array
+        rygb_array = self.plate_generator.GeneratePlateRYGB(
+            inside_cone, outside_cone, color_space,
+            hidden_symbol,
+            lum_noise=lum_noise, s_cone_noise=s_cone_noise,
+            background_luminance=background_luminance,
+            dot_size=dot_size,
+            seed=np.random.randint(0, 1000000)
+        )
+
+        # Save RYGB TIFF
+        self.plate_generator.ExportPlateRYGB(rygb_array, filename)
+        rygb_path = f"{filename}_RYGB.tiff"
+
+        # Extract genotype if available
+        genotype = getattr(color_space, 'genotype', None)
+        if genotype:
+            genotype_str = str(genotype)
+        else:
+            genotype_str = "unknown"
+
+        # Extract metameric axis if available
+        metameric_axis = getattr(color_space, 'metameric_axis', -1)
+
+        # Return trial data as dictionary
+        return {
+            'trial_type': 'pseudo_isochromatic',
+            'genotype': genotype_str,
+            'metameric_axis': metameric_axis,
+            'rygb_path': rygb_path,
+            'hidden_symbol': str(hidden_symbol),
+            'intensity': intensity,
+            'metadata': {
+                'inside_cone': inside_cone.tolist(),
+                'outside_cone': outside_cone.tolist(),
+                'lum_noise': lum_noise,
+                's_cone_noise': s_cone_noise
+            }
+        }
+
     def GetTest(self, previous_result: ColorTestResult,
                 filename: str, hidden_symbol: Union[int, str],
                 output_space: ColorSpaceType = ColorSpaceType.DISP_6P, lum_noise: float = 0, s_cone_noise: float = 0.1,
@@ -209,6 +273,70 @@ class PseudoIsochromaticPlateGenerator(PlateGenerator):
             'metameric_axis': metameric_axis,
             'rgb_path': rgb_path,
             'ocv_path': ocv_path,
+            'hidden_symbol': str(hidden_symbol),
+            'intensity': intensity,
+            'metadata': {
+                'inside_cone': inside_cone.tolist(),
+                'outside_cone': outside_cone.tolist(),
+                'lum_noise': lum_noise,
+                's_cone_noise': s_cone_noise
+            }
+        }
+
+    def GetTestRYGB(self, previous_result: ColorTestResult,
+                    filename: str, hidden_symbol: Union[int, str],
+                    lum_noise: float = 0, s_cone_noise: float = 0.1,
+                    background_luminance: float = 0.5, dot_size: float = 1.0, degree: float = 4.0, **kwargs):
+        """
+        Generates a new plate in RYGB format based on previous result, or None if complete.
+
+        This is the adaptive version that uses feedback from previous trials to adjust difficulty.
+
+        Args:
+            previous_result (ColorTestResult): The result of the previous test
+            filename (str): Base filename to save the RYGB TIFF file
+            hidden_symbol (Union[int, str]): The hidden symbol to embed in the plate
+            lum_noise (float): Luminance noise amount
+            s_cone_noise (float): S-cone noise amount
+            background_luminance (float): Background luminance level (0.0 to 1.0)
+            dot_size (float): Dot size scaling factor
+            degree (float): Visual angle in degrees
+
+        Returns:
+            dict or None: Trial data dict if test continues, None if test is complete
+        """
+        # Get next color from color generator
+        result = self.color_generator.GetColor(previous_result)
+
+        # If None returned, test is complete
+        if result is None:
+            return None
+
+        inside_cone, outside_cone, color_space, intensity = result
+
+        # Generate RYGB plate array
+        rygb_array = self.plate_generator.GeneratePlateRYGB(
+            inside_cone, outside_cone, color_space,
+            hidden_symbol,
+            lum_noise=lum_noise, s_cone_noise=s_cone_noise,
+            background_luminance=background_luminance,
+            dot_size=dot_size,
+            seed=np.random.randint(0, 1000000)
+        )
+
+        # Save RYGB TIFF
+        self.plate_generator.ExportPlateRYGB(rygb_array, filename)
+        rygb_path = f"{filename}_RYGB.tiff"
+
+        genotype, metameric_axis = self.color_generator.GetCurrentTestInfo()
+        genotype_str = str(genotype)
+
+        # Return trial data as dictionary
+        return {
+            'trial_type': 'pseudo_isochromatic',
+            'genotype': genotype_str,
+            'metameric_axis': metameric_axis,
+            'rygb_path': rygb_path,
             'hidden_symbol': str(hidden_symbol),
             'intensity': intensity,
             'metadata': {

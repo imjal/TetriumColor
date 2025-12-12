@@ -47,6 +47,33 @@ class TestGenerator
         float degree = 4.0f
     );
 
+    // Get first trial in RYGB format (calls Python NewTestRYGB())
+    // Returns trial data with rygb_path instead of rgb_path/ocv_path
+    std::optional<TrialData> NewTrialRYGB(
+        const std::string& filename,
+        const std::string& hidden_symbol = "",
+        float lum_noise = 0.0f,
+        float s_cone_noise = 0.0f,
+        float background_luminance = 0.5f,
+        float dot_size = 1.0f,
+        float degree = 4.0f,
+        const std::string& genotype = "",
+        int metameric_axis = -1
+    );
+
+    // Get next trial in RYGB format based on previous result (calls Python GetTestRYGB())
+    // Returns std::nullopt if test is complete
+    std::optional<TrialData> GetNextTrialRYGB(
+        ColorTestResult previous_result,
+        const std::string& filename,
+        const std::string& hidden_symbol,
+        float lum_noise = 0.0f,
+        float s_cone_noise = 0.0f,
+        float background_luminance = 0.5f,
+        float dot_size = 1.0f,
+        float degree = 4.0f
+    );
+
     // Get genotypes list (for CircleGridGenerator and similar)
     // Returns empty vector if method doesn't exist
     std::vector<std::string> GetGenotypes();

@@ -205,7 +205,7 @@ class QuestColorGenerator(ColorGenerator):
                 )
 
                 max_point_in_DISP, _, _ = genotype_cs.get_maximal_pair_in_disp_from_pt(
-                    self.background, metameric_axis=metameric_axis, output_space=ColorSpaceType.DISP)
+                    self.background, metameric_axis=metameric_axis, input_space=ColorSpaceType.RYGB, output_space=ColorSpaceType.DISP)
 
                 max_distance = np.linalg.norm(max_point_in_DISP - self.background)
 
@@ -586,13 +586,8 @@ class GeneticCDFTestColorGenerator(ColorGenerator):
         for attempt in range(max_retries):
             random_idx = np.random.randint(0, len(self.color_samplers[self.current_idx]))
             point = self.color_samplers[self.current_idx][random_idx]
-            inside_cone, outside_cone, metamer_difference = color_space.get_maximal_pair_in_disp_from_pt(point)
-            # inside_cone, outside_cone = color_space.get_maximal_metamer_pair_in_disp(
-            #     metameric_axis=color_space.metameric_axis)
-            # metamer_difference = abs(inside_cone[color_space.metameric_axis] - outside_cone[color_space.metameric_axis])
-            # print("inside cone: ", inside_cone)
-            # print("outside cone: ", outside_cone)
-            # print("metamer difference: ", metamer_difference)
+            inside_cone, outside_cone, metamer_difference = color_space.get_maximal_pair_in_disp_from_pt(
+                point, input_space=ColorSpaceType.RYGB, output_space=ColorSpaceType.CONE)
 
             if metamer_difference > 0.01:
                 print("Metamer difference: ", metamer_difference)
@@ -756,7 +751,7 @@ class GeneticColorGenerator(ColorGenerator):
                 random_idx = np.random.randint(0, len(grid_points))
                 point = grid_points[random_idx]
             inside_cone, outside_cone, _ = color_space.get_maximal_pair_in_disp_from_pt(
-                point, metameric_axis=metameric_axis)
+                point, metameric_axis=metameric_axis, input_space=ColorSpaceType.RYGB, output_space=ColorSpaceType.CONE)
             if inside_cone[metameric_axis] - outside_cone[metameric_axis] > 0.02:
                 return inside_cone, outside_cone, color_space, inside_cone[metameric_axis] - outside_cone[metameric_axis]
             else:
@@ -766,7 +761,7 @@ class GeneticColorGenerator(ColorGenerator):
             f"Could not find valid metamer after 10 retries for genotype {genotype} {metameric_axis}, but we need to return something.")
         point = grid_points[max_diff_idx]
         inside_cone, outside_cone, _ = color_space.get_maximal_pair_in_disp_from_pt(
-            point, metameric_axis=metameric_axis)
+            point, metameric_axis=metameric_axis, input_space=ColorSpaceType.RYGB, output_space=ColorSpaceType.CONE)
 
         return inside_cone, outside_cone, color_space, max_diff
 

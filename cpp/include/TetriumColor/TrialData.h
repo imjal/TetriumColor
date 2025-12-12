@@ -15,6 +15,7 @@ struct PseudoIsochromaticTrial
     int metameric_axis;
     std::string rgb_path;
     std::string ocv_path;
+    std::string rygb_path; // RYGB TIFF path (for new architecture)
     std::string hidden_symbol;
     double intensity;
 

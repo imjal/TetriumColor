@@ -340,9 +340,9 @@ class ColorSpace:
             float: Maximum luminance value in HERING space
         """
         if self._max_L is None:
-            if self.display_primaries is None:
-                # Without display primaries, use unit cone response
-                white_cone = np.ones(self.dim)
+            # if self.display_primaries is None:
+            # Without display primaries, use unit cone response
+            white_cone = np.ones(self.dim)
             # else:
             #     # Convert maximum display point to cone space
             #     max_disp = np.ones(self.dim)
