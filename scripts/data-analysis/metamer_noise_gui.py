@@ -65,6 +65,7 @@ class MetamerNoiseGUI:
         self.doing_interaction = False
         self.window_open = True  # ImGUI window state
         self.show_display_primaries = False  # Toggle for display primaries, disabled by default
+        self.show_other_gamut_slice = False  # Toggle for other metamer's gamut slice, disabled by default
 
         # Load display primaries
         print(f"Loading primaries from {primaries_dir}...")
@@ -77,10 +78,11 @@ class MetamerNoiseGUI:
             wavelengths=observer_wavelengths, dimensions=[4], seed=42
         )
 
-        # Get top N genotypes
+        # Get top N genotypes (create at least 8 so slider can go up to 8)
+        max_genotypes = max(num_observers, 8)
         genotypes = self.observer_genotypes.get_genotypes_covering_probability(
             target_probability=0.999, sex="both"
-        )[:num_observers]
+        )[:max_genotypes]
 
         # Create observers and color spaces
         self.observers = []
@@ -340,19 +342,63 @@ class MetamerNoiseGUI:
         screen_coords = (mouse_pos[0], mouse_pos[1])
         print(f"\n=== Mouse click detected at screen coords: {screen_coords} ===")
 
-        # Convert to world ray using Polyscope's function
+        # Convert to world position using Polyscope's screen_coords_to_world_position function
+        # This uses the depth buffer to get a point on the surface that was clicked
+        # Temporarily disable the reference gamut hull so we can read from the gamut slice
+        reference_gamut_enabled = True
+        reference_gamut_hull_enabled = True
         try:
-            # Use Polyscope's screen_coords_to_world_ray to get the ray
-            camera_params = ps.get_view_camera_parameters()
-            ray_origin = camera_params.get_position()
-            ray_direction = ps.screen_coords_to_world_ray(screen_coords)
-            ray_origin = np.array(ray_origin)
-            ray_direction = np.array(ray_direction)
-            print(f"Ray from Polyscope - origin: {ray_origin}, direction: {ray_direction}")
+            # Try to disable reference gamut objects
+            try:
+                ref_gamut = ps.get_surface_mesh("reference_gamut")
+                reference_gamut_enabled = ref_gamut.is_enabled()
+                ref_gamut.set_enabled(False)
+            except (RuntimeError, KeyError):
+                pass
+            try:
+                ref_gamut_hull = ps.get_surface_mesh("reference_gamut_hull")
+                reference_gamut_hull_enabled = ref_gamut_hull.is_enabled()
+                ref_gamut_hull.set_enabled(False)
+            except (RuntimeError, KeyError):
+                pass
 
-            # Find intersection with gamut using the ray
-            intersection = self.intersect_ray_with_gamut(ray_origin, ray_direction)
-            print(f"Intersection result: {intersection}")
+            x, y = screen_coords
+            # Get the world position from the depth buffer at the clicked location
+            world_pos = ps.screen_coords_to_world_position(screen_coords)
+            intersection = np.array(world_pos)
+            print(f"World position from depth buffer: {intersection}")
+
+            # Re-enable the reference gamut objects
+            try:
+                ref_gamut = ps.get_surface_mesh("reference_gamut")
+                ref_gamut.set_enabled(reference_gamut_enabled)
+            except (RuntimeError, KeyError):
+                pass
+            try:
+                ref_gamut_hull = ps.get_surface_mesh("reference_gamut_hull")
+                ref_gamut_hull.set_enabled(reference_gamut_hull_enabled)
+            except (RuntimeError, KeyError):
+                pass
+
+            # Since we got a point directly from the depth buffer, we need to find
+            # the corresponding gamut point at the selected luminance
+            # The point might not be exactly on the gamut, so we'll find the closest one
+            if intersection is not None and len(intersection) > 0:
+                # Get gamut points at the selected luminance
+                gamut_points, gamut_cone_points = self.get_gamut_points_at_luminance(
+                    self.luminance, grid_resolution=25, tolerance=0.03
+                )
+
+                if gamut_points is not None and len(gamut_points) > 0:
+                    # Find the closest gamut point to the clicked position
+                    distances = np.linalg.norm(gamut_points - intersection, axis=1)
+                    closest_idx = np.argmin(distances)
+                    intersection = gamut_points[closest_idx]
+                    self._last_intersection_cone_point = gamut_cone_points[closest_idx]
+                    print(f"Closest gamut point: {intersection}")
+                else:
+                    print("Warning: Could not find gamut points, using depth buffer point directly")
+                    self._last_intersection_cone_point = None
 
             if intersection is not None and len(intersection) > 0:
                 self.selected_point_world = intersection
@@ -669,33 +715,34 @@ class MetamerNoiseGUI:
                 label_offset = max_semi_axis + margin
                 label_pos = other_disp - metamer_dir_display_norm * label_offset
 
-                # Render gamut slice at the other metamer's luminance
-                # Use unique name per observer
-                other_slice_name_base = f"other_gamut_slice_{i}"
-                other_slice_name = f"{other_slice_name_base}_slice_L{other_luminance:.2f}"
+                # Render gamut slice at the other metamer's luminance (only if enabled)
+                if self.show_other_gamut_slice:
+                    # Use unique name per observer
+                    other_slice_name_base = f"other_gamut_slice_{i}"
+                    other_slice_name = f"{other_slice_name_base}_slice_L{other_luminance:.2f}"
 
-                # Clear previous "other" gamut slice for this observer if it exists
-                try:
-                    ps.remove_surface_mesh(other_slice_name)
-                except (RuntimeError, KeyError):
-                    pass
-                try:
-                    ps.remove_point_cloud(other_slice_name)
-                except (RuntimeError, KeyError):
-                    pass
+                    # Clear previous "other" gamut slice for this observer if it exists
+                    try:
+                        ps.remove_surface_mesh(other_slice_name)
+                    except (RuntimeError, KeyError):
+                        pass
+                    try:
+                        ps.remove_point_cloud(other_slice_name)
+                    except (RuntimeError, KeyError):
+                        pass
 
-                # Render gamut slice at other metamer's luminance
-                RenderGamutSlices(
-                    other_slice_name_base,
-                    cst,
-                    display_space=ColorSpaceType.DISP,
-                    display_basis=self.display_basis,
-                    luminance_values=[other_luminance],
-                    grid_resolution=25,
-                    tolerance=0.03,
-                    alpha=0.2,  # Slightly more transparent to distinguish from main slice
-                )
-                print(f"  Rendered other gamut slice at L={other_luminance:.2f} (name: {other_slice_name})")
+                    # Render gamut slice at other metamer's luminance
+                    RenderGamutSlices(
+                        other_slice_name_base,
+                        cst,
+                        display_space=ColorSpaceType.DISP,
+                        display_basis=self.display_basis,
+                        luminance_values=[other_luminance],
+                        grid_resolution=25,
+                        tolerance=0.03,
+                        alpha=0.2,  # Slightly more transparent to distinguish from main slice
+                    )
+                    print(f"  Rendered other gamut slice at L={other_luminance:.2f} (name: {other_slice_name})")
 
                 # Create billboard text label (same color as metamer line)
                 label_text = f"L_{int(obs.sensors[metameric_axis].peak)}"
@@ -958,10 +1005,44 @@ class MetamerNoiseGUI:
                     except (RuntimeError, KeyError):
                         pass
 
-            # Number of observers
-            changed, self.num_observers = psim.SliderInt(
-                "Num Observers", self.num_observers, 1, 10
+            # Other gamut slice toggle
+            changed_other_slice, self.show_other_gamut_slice = psim.Checkbox(
+                "Show Other Metamer Gamut Slice", self.show_other_gamut_slice
             )
+            if changed_other_slice:
+                if self.show_other_gamut_slice:
+                    # Update visualization to show other gamut slices
+                    self.update_visualization()
+                else:
+                    # Remove other gamut slices when disabled
+                    max_check = max(self.num_observers, 10)
+                    for i in range(max_check):
+                        # Try a range of possible luminance values (0.0 to 2.0 in 0.05 steps)
+                        for lum_int in range(0, 41):  # 0.00 to 2.00 in 0.05 steps
+                            lum = lum_int / 20.0
+                            slice_name = f"other_gamut_slice_{i}_slice_L{lum:.2f}"
+                            try:
+                                ps.remove_surface_mesh(slice_name)
+                            except (RuntimeError, KeyError):
+                                pass
+                            try:
+                                ps.remove_point_cloud(slice_name)
+                            except (RuntimeError, KeyError):
+                                pass
+
+            # Number of observers
+            max_observers = min(len(self.observers), 8) if len(self.observers) > 0 else 8
+            # Ensure num_observers doesn't exceed available observers or limit of 8
+            if self.num_observers > max_observers:
+                self.num_observers = max_observers
+            changed, self.num_observers = psim.SliderInt(
+                "Num Observers", self.num_observers, 1, max_observers
+            )
+            if changed:
+                print(f"Number of observers changed to {self.num_observers}")
+                # Update visualization to show/hide observers based on new count
+                if self.selected_point_hering is not None:
+                    self.update_visualization()
 
             psim.Text("Right-click to select a point on the gamut")
             if self.selected_point_hering is not None:
