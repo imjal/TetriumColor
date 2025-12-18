@@ -1,0 +1,947 @@
+#!/usr/bin/env python3
+"""
+Interactive GUI for visualizing metameric pairs with noise balls for multiple observers.
+
+Features:
+- Select luminance plane (L=x)
+- Click to select a point on the gamut
+- Convert to HERING coordinates and update with selected L value
+- Display N observer balls from ObserverGenotypes
+- Find opponent metamer point
+- Render noise balls with configurable noise_std
+- Render metameric line between points
+- Label metameric direction with Billboard Text
+- Display primaries on the selected luminance plane
+"""
+
+import numpy as np
+import numpy.typing as npt
+from typing import List, Optional, Tuple
+from itertools import product
+import tetrapolyscope as ps
+import tetrapolyscope.imgui as psim
+
+from TetriumColor.Observer import Observer, GetHeringMatrix
+from TetriumColor.Observer.ObserverGenotypes import ObserverGenotypes
+from TetriumColor.ColorSpace import ColorSpace, ColorSpaceType, PolyscopeDisplayType
+from TetriumColor.Measurement import load_primaries_from_csv
+from TetriumColor.Visualization.PolyscopeUtils import (
+    RenderNoiseBall,
+    RenderPointCloud,
+    Render3DLine,
+    RenderRYGBGamut,
+    RenderGamutSlices,
+)
+
+
+class MetamerNoiseGUI:
+    def __init__(
+        self,
+        primaries_dir: str,
+        num_observers: int = 4,
+        initial_luminance: float = 0.5,
+        initial_noise_std: float = 0.01,
+        display_basis: PolyscopeDisplayType = PolyscopeDisplayType.HERING_RYGB,
+    ):
+        """Initialize the GUI application.
+
+        Args:
+            primaries_dir: Directory containing display primary CSV files
+            num_observers: Number of observer genotypes to display
+            initial_luminance: Initial luminance value (L=x)
+            initial_noise_std: Initial noise standard deviation
+            display_basis: Display basis for visualization
+        """
+        self.num_observers = num_observers
+        self.luminance = initial_luminance
+        self.noise_std = initial_noise_std  # Keep for backward compatibility, but use individual values
+        # Individual noise parameters for each dimension (L, M, S, Q)
+        # Default: S=1.0, others=0.0
+        self.L_noise = 0.0001
+        self.M_noise = 0.0001
+        self.S_noise = 0.1
+        self.Q_noise = 0.0001
+        self.display_basis = display_basis
+        self.doing_interaction = False
+        self.window_open = True  # ImGUI window state
+        self.show_display_primaries = False  # Toggle for display primaries, disabled by default
+
+        # Load display primaries
+        print(f"Loading primaries from {primaries_dir}...")
+        self.primaries = load_primaries_from_csv(primaries_dir, extract_zero=False)
+        print(f"Loaded {len(self.primaries)} primaries")
+
+        # Initialize observer genotypes
+        observer_wavelengths = np.arange(380, 781, 5)
+        self.observer_genotypes = ObserverGenotypes(
+            wavelengths=observer_wavelengths, dimensions=[4], seed=42
+        )
+
+        # Get top N genotypes
+        genotypes = self.observer_genotypes.get_genotypes_covering_probability(
+            target_probability=0.999, sex="both"
+        )[:num_observers]
+
+        # Create observers and color spaces
+        self.observers = []
+        self.color_spaces = []
+        for genotype in genotypes:
+            obs = self.observer_genotypes.get_observer_for_genotype(genotype)
+            self.observers.append(obs)
+            cst = ColorSpace(obs, self.primaries)
+            self.color_spaces.append(cst)
+
+        print(f"Created {len(self.observers)} observers")
+
+        # Selected point state
+        self.selected_point_world: Optional[npt.NDArray] = None
+        self.selected_point_hering: Optional[npt.NDArray] = None
+        self.metamer_pairs: List[Tuple[npt.NDArray, npt.NDArray]] = []
+        self.current_gamut_slice_name: Optional[str] = None  # Track current slice name
+        self._last_intersection_cone_point: Optional[npt.NDArray] = None  # Store cone point for intersection
+
+        # Initialize polyscope
+        ps.init()
+        ps.set_transparency_render_passes(24)
+        ps.set_transparency_peel_epsilon(1e-7)
+        ps.set_ground_plane_mode("none")
+        ps.set_always_redraw(True)
+
+        # Register callback
+        ps.set_user_callback(self.callback)
+
+        # Render gamut for reference (use first observer's color space)
+        if len(self.color_spaces) > 0:
+            RenderRYGBGamut(
+                "reference_gamut",
+                self.color_spaces[0],
+                self.display_basis,
+                alpha=0.2,
+            )
+            print("Rendered reference gamut")
+
+            # Render initial gamut slice for the selected luminance
+            self.render_gamut_slice()
+
+    def screen_coords_to_world_ray(self, screen_coords: Tuple[float, float]) -> Tuple[npt.NDArray, npt.NDArray]:
+        """Convert screen coordinates to a world space ray using polyscope's pick_ray.
+
+        Args:
+            screen_coords: (x, y) screen coordinates in pixels
+
+        Returns:
+            Tuple of (ray_origin, ray_direction) in world space
+        """
+        # Use polyscope's built-in pick_ray function
+        x, y = screen_coords
+        try:
+            ray_origin, ray_direction = ps.pick_ray(x, y)
+            return np.array(ray_origin), np.array(ray_direction)
+        except Exception as e:
+            print(f"Error in pick_ray: {e}")
+            # Fallback: use camera to compute ray
+            # Get camera parameters
+            camera = ps.get_view_camera_parameters()
+            # This is a simplified fallback - in practice you'd compute the ray properly
+            # For now, return a default ray
+            return np.array([0.0, 0.0, 0.0]), np.array([0.0, 0.0, 1.0])
+
+    def get_gamut_points_at_luminance(
+        self, luminance: float, grid_resolution: int = 20, tolerance: float = 0.03
+    ) -> Tuple[Optional[npt.NDArray], Optional[npt.NDArray]]:
+        """Sample gamut points at a specific luminance level.
+
+        Args:
+            luminance: Target Hering luminance value
+            grid_resolution: Resolution of sampling grid in DISP space
+            tolerance: Tolerance for luminance matching
+
+        Returns:
+            Tuple of (points in display basis (3D), original cone points), or (None, None) if no points found
+        """
+        if len(self.color_spaces) == 0:
+            return None, None
+
+        cst = self.color_spaces[0]
+
+        # Sample the DISP space [0,1]^4 on a grid
+        grid_1d = np.linspace(0, 1, grid_resolution)
+        disp_points = np.array(list(product(grid_1d, grid_1d, grid_1d, grid_1d)))
+
+        # Convert to CONE space
+        cone_points = cst.convert(disp_points, ColorSpaceType.DISP, ColorSpaceType.CONE)
+
+        # Get Hering transform and compute luminance for each point
+        H = GetHeringMatrix(cst.dim)
+        hering_points = cone_points @ H.T
+        luminances = hering_points[:, 0]  # First coordinate is luminance
+
+        # Find points close to target luminance
+        mask = np.abs(luminances - luminance) < tolerance
+        slice_points_cone = cone_points[mask]
+
+        if len(slice_points_cone) < 10:
+            print(f"Warning: Only {len(slice_points_cone)} points found at luminance {luminance:.2f}")
+            return None, None
+
+        # Convert to visualization space (display basis)
+        slice_points_viz = cst.convert_to_polyscope(
+            slice_points_cone, ColorSpaceType.CONE, self.display_basis
+        )
+
+        return slice_points_viz, slice_points_cone
+
+    def intersect_ray_with_gamut(
+        self, ray_origin: npt.NDArray, ray_direction: npt.NDArray
+    ) -> Optional[npt.NDArray]:
+        """Find intersection of ray with gamut surface at the selected luminance.
+
+        Args:
+            ray_origin: Ray origin in world space (display basis)
+            ray_direction: Ray direction in world space (display basis)
+
+        Returns:
+            Intersection point in world space (display basis), or None if no intersection
+        """
+        # Normalize ray direction
+        if np.linalg.norm(ray_direction) < 1e-6:
+            print("Warning: Ray direction is too small")
+            return None
+
+        ray_direction = ray_direction / np.linalg.norm(ray_direction)
+
+        # Get gamut points at the selected luminance (both display basis and original cone points)
+        gamut_points, gamut_cone_points = self.get_gamut_points_at_luminance(
+            self.luminance, grid_resolution=25, tolerance=0.03
+        )
+
+        if gamut_points is None or len(gamut_points) < 10:
+            print("Warning: Could not sample gamut points, using fallback")
+            # Fallback: use a point along the ray at a reasonable distance
+            t = 0.3
+            point = ray_origin + t * ray_direction
+            point = np.clip(point, -0.8, 0.8)
+            self._last_intersection_cone_point = None  # Can't convert fallback point
+            return point
+
+        # Find the point on the ray that intersects or is closest to the gamut surface
+        try:
+            from scipy.spatial import Delaunay
+
+            # Create Delaunay triangulation for point-in-hull testing
+            delaunay = Delaunay(gamut_points)
+
+            # Sample points along the ray to find intersection
+            # Start from a reasonable distance and sample forward
+            t_start = 0.0
+            t_end = 2.0
+            num_samples = 200
+            t_values = np.linspace(t_start, t_end, num_samples)
+            ray_points = ray_origin + t_values[:, np.newaxis] * ray_direction
+
+            # Find the first point that is inside the gamut (or closest to it)
+            best_t = None
+            best_point = None
+            min_dist_outside = float('inf')
+
+            for i, (t, ray_pt) in enumerate(zip(t_values, ray_points)):
+                # Check if point is inside the convex hull
+                simplex_idx = delaunay.find_simplex(ray_pt)
+
+                if simplex_idx >= 0:
+                    # Point is inside the gamut
+                    # Find the point on the gamut surface along this direction
+                    # by moving backward until we hit the surface
+                    if i > 0:
+                        # Binary search between previous point (outside) and current (inside)
+                        t_prev = t_values[i-1]
+                        t_low, t_high = t_prev, t
+                        for _ in range(10):  # Binary search iterations
+                            t_mid = (t_low + t_high) / 2
+                            pt_mid = ray_origin + t_mid * ray_direction
+                            if delaunay.find_simplex(pt_mid) >= 0:
+                                t_high = t_mid  # Still inside, move boundary inward
+                            else:
+                                t_low = t_mid  # Outside, move boundary outward
+                        best_t = t_low  # Use the last point that was outside (on surface)
+                    else:
+                        # Ray starts inside, use origin
+                        best_t = t_start
+                    break
+                else:
+                    # Point is outside, track the closest one
+                    distances = np.linalg.norm(gamut_points - ray_pt, axis=1)
+                    min_dist = np.min(distances)
+                    if min_dist < min_dist_outside:
+                        min_dist_outside = min_dist
+                        best_t = t
+                        best_point = gamut_points[np.argmin(distances)]
+
+            # If we found an intersection point
+            if best_t is not None:
+                intersection_pt = ray_origin + best_t * ray_direction
+
+                # Project onto gamut surface by finding closest gamut point
+                distances = np.linalg.norm(gamut_points - intersection_pt, axis=1)
+                closest_idx = np.argmin(distances)
+                surface_point = gamut_points[closest_idx]
+
+                # Store the corresponding cone point for later conversion
+                self._last_intersection_cone_point = gamut_cone_points[closest_idx]
+
+                return surface_point
+            elif best_point is not None:
+                # Use the closest point we found
+                distances = np.linalg.norm(gamut_points - best_point, axis=1)
+                closest_idx = np.argmin(distances)
+                self._last_intersection_cone_point = gamut_cone_points[closest_idx]
+                return best_point
+            else:
+                # Fallback: use point at fixed distance
+                t = 0.3
+                point = ray_origin + t * ray_direction
+                return point
+
+        except Exception as e:
+            print(f"Error computing gamut intersection: {e}")
+            import traceback
+            traceback.print_exc()
+            # Fallback: find closest gamut point to ray
+            # Sample points along ray and find closest to any gamut point
+            t_values = np.linspace(0, 2.0, 100)
+            ray_points = ray_origin + t_values[:, np.newaxis] * ray_direction
+
+            min_dist = float('inf')
+            best_point = None
+            best_idx = None
+
+            for ray_pt in ray_points:
+                distances = np.linalg.norm(gamut_points - ray_pt, axis=1)
+                min_dist_to_gamut = np.min(distances)
+                if min_dist_to_gamut < min_dist:
+                    min_dist = min_dist_to_gamut
+                    best_idx = np.argmin(distances)
+                    best_point = gamut_points[best_idx]
+
+            if best_point is not None:
+                self._last_intersection_cone_point = gamut_cone_points[best_idx]
+                return best_point
+
+            # Final fallback
+            t = 0.3
+            point = ray_origin + t * ray_direction
+            # For fallback, we'll need to convert differently
+            self._last_intersection_cone_point = None
+            return point
+
+    def handle_mouse_click(self):
+        """Handle mouse click to select a point on the gamut."""
+        mouse_pos = psim.GetMousePos()
+        screen_coords = (mouse_pos[0], mouse_pos[1])
+        print(f"\n=== Mouse click detected at screen coords: {screen_coords} ===")
+
+        # Convert to world ray
+        try:
+            ray_origin, ray_direction = self.screen_coords_to_world_ray(screen_coords)
+            print(f"Ray origin: {ray_origin}, direction: {ray_direction}")
+
+            # Find intersection with gamut
+            # intersection = self.intersect_ray_with_gamut(ray_origin, ray_direction)
+            intersection = ps.screen_coords_to_world_position(screen_coords)
+            print(f"Intersection result: {intersection}")
+
+            if intersection is not None and len(intersection) > 0:
+                self.selected_point_world = intersection
+                print(f"Selected point in world space: {intersection}")
+
+                # Convert the intersection point to full HERING coordinates
+                # We have the cone point from the intersection, so convert that to HERING
+                hering_full = None
+                if self._last_intersection_cone_point is not None and len(self.color_spaces) > 0:
+                    cst = self.color_spaces[0]
+                    try:
+                        # Convert from CONE to HERING
+                        hering_full = cst.convert(
+                            self._last_intersection_cone_point.reshape(1, -1),
+                            ColorSpaceType.CONE,
+                            ColorSpaceType.HERING,
+                        )[0]
+                        # Ensure luminance matches the selected value
+                        hering_full[0] = self.luminance
+                        print(
+                            f"Converted from cone point {self._last_intersection_cone_point} to HERING: {hering_full}")
+                    except Exception as e:
+                        print(f"Error converting cone point to HERING: {e}")
+                        import traceback
+                        traceback.print_exc()
+                        hering_full = None
+
+                if hering_full is None:
+                    # Fallback: try to reconstruct from display basis point
+                    # This is less accurate but better than nothing
+                    print("Warning: No cone point available or conversion failed, using fallback conversion")
+                    hering_chrom = intersection
+                    if len(hering_chrom) == 3:
+                        # Add luminance to make full HERING coordinate
+                        hering_full = np.array([self.luminance, hering_chrom[0], hering_chrom[1], hering_chrom[2]])
+                    elif len(hering_chrom) == 4:
+                        # Already 4D, just update the luminance
+                        hering_full = hering_chrom.copy()
+                        hering_full[0] = self.luminance
+                    else:
+                        # Pad or truncate as needed
+                        if len(hering_chrom) < 4:
+                            hering_full = np.concatenate(
+                                [[self.luminance], hering_chrom, np.zeros(4 - len(hering_chrom) - 1)])
+                        else:
+                            hering_full = np.concatenate([[self.luminance], hering_chrom[:3]])
+
+                if hering_full is not None:
+                    self.selected_point_hering = hering_full
+                    print(f"Selected point in HERING: {hering_full}")
+                else:
+                    print("ERROR: Failed to convert intersection point to HERING")
+                    return
+
+                # Render the selected point immediately as a visible ball
+                # Convert to display space for visualization
+                if len(self.color_spaces) > 0:
+                    cst = self.color_spaces[0]
+                    try:
+                        cone_point = cst.convert(
+                            hering_full.reshape(1, -1),
+                            ColorSpaceType.HERING,
+                            ColorSpaceType.CONE,
+                        )[0]
+                        disp_point = cst.convert_to_polyscope(
+                            cone_point.reshape(1, -1),
+                            ColorSpaceType.CONE,
+                            self.display_basis,
+                        )[0]
+                        # Render selected point as a visible ball
+                        # Remove old point first
+                        try:
+                            ps.remove_point_cloud("selected_point")
+                        except:
+                            pass
+
+                        RenderPointCloud(
+                            "selected_point",
+                            disp_point.reshape(1, -1),
+                            np.array([[1.0, 1.0, 0.0]]),  # Yellow
+                            radius=0.03,
+                        )
+                        print(f"Rendered selected point at: {disp_point}")
+
+                        # Also render as a larger sphere for visibility
+                        try:
+                            ps.remove_point_cloud("selected_point_large")
+                        except:
+                            pass
+                        RenderPointCloud(
+                            "selected_point_large",
+                            disp_point.reshape(1, -1),
+                            np.array([[1.0, 1.0, 0.0]]),  # Yellow
+                            radius=0.05,
+                        )
+                    except Exception as e:
+                        print(f"Error rendering selected point: {e}")
+                        import traceback
+                        traceback.print_exc()
+
+                # Update visualization - this will recompute metamer pairs and noise balls
+                print("Calling update_visualization() after mouse click...")
+                self.update_visualization()
+                print("Finished update_visualization() after mouse click")
+        except Exception as e:
+            print(f"Error handling mouse click: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def estimate_jacobian(self, func, point, eps=1e-6):
+        """Estimate Jacobian via finite differences."""
+        n = len(point)
+        f0 = func(point)
+        m = len(f0)
+        J = np.zeros((m, n))
+        for i in range(n):
+            perturbed = point.copy()
+            perturbed[i] += eps
+            J[:, i] = (func(perturbed) - f0) / eps
+        return J
+
+    def update_visualization(self):
+        """Update all visualization elements."""
+        print(f"\n=== Updating visualization ===")
+        print(f"Selected HERING point: {self.selected_point_hering}")
+
+        # Clear previous metamer pairs and noise balls
+        self.clear_previous_renders()
+
+        if self.selected_point_hering is None:
+            print("No point selected, skipping visualization update")
+            return
+
+        # Make sure we only process the number of observers specified
+        num_to_process = min(self.num_observers, len(self.observers), len(self.color_spaces))
+        print(f"Processing {num_to_process} observers")
+
+        # Convert HERING point to display space for each observer
+        for i in range(num_to_process):
+            obs = self.observers[i]
+            cst = self.color_spaces[i]
+            print(f"\nProcessing observer {i+1}...")
+            try:
+                # Convert HERING to CONE
+                cone_point = cst.convert(
+                    self.selected_point_hering.reshape(1, -1),
+                    ColorSpaceType.HERING,
+                    ColorSpaceType.CONE,
+                )[0]
+                print(f"  Cone point: {cone_point}")
+
+                # Convert CONE to DISP (actual display space, not polyscope display)
+                disp_point = cst.convert(
+                    cone_point.reshape(1, -1),
+                    ColorSpaceType.CONE,
+                    ColorSpaceType.DISP,
+                )[0]
+                print(f"  DISP point: {disp_point}")
+
+                # Find metameric pair (this expects a point in DISP space)
+                metameric_axis = cst.metameric_axis
+                print(f"  Metameric axis: {metameric_axis}")
+                result = cst.get_maximal_pair_in_disp_from_pt(
+                    pt=disp_point,
+                    metameric_axis=metameric_axis,
+                    input_space=ColorSpaceType.DISP,
+                    output_space=ColorSpaceType.CONE,
+                    proportion=0.8,
+                )
+
+                if result is None:
+                    print(f"  Observer {i+1}: Could not find metameric pair")
+                    continue
+
+                cone1, cone2, metamer_diff = result
+                print(f"  Found metamer pair, diff: {metamer_diff:.4f}")
+
+                # Convert metamer points to display space
+                disp1 = cst.convert_to_polyscope(
+                    cone1.reshape(1, -1), ColorSpaceType.CONE, self.display_basis
+                )[0]
+                disp2 = cst.convert_to_polyscope(
+                    cone2.reshape(1, -1), ColorSpaceType.CONE, self.display_basis
+                )[0]
+                print(f"  Metamer points in display space:")
+                print(f"    disp1: {disp1}")
+                print(f"    disp2: {disp2}")
+
+                self.metamer_pairs.append((disp1, disp2))
+
+                # Use the same color for all elements of this metamer pair
+                # Different colors for different observers to distinguish them
+                observer_colors = [
+                    np.array([1.0, 0.3, 0.3]),  # Red
+                    np.array([0.3, 1.0, 0.3]),  # Green
+                    np.array([0.3, 0.3, 1.0]),  # Blue
+                    np.array([1.0, 1.0, 0.3]),  # Yellow
+                    np.array([1.0, 0.3, 1.0]),  # Magenta
+                    np.array([0.3, 1.0, 1.0]),  # Cyan
+                    np.array([1.0, 0.6, 0.0]),  # Orange
+                    np.array([0.6, 0.3, 1.0]),  # Purple
+                    np.array([0.3, 0.8, 0.8]),  # Teal
+                    np.array([0.8, 0.8, 0.3]),  # Olive
+                ]
+                metamer_color = observer_colors[i % len(observer_colors)]
+
+                # Render metameric line
+                Render3DLine(
+                    f"metamer_line_{i}",
+                    np.array([disp1, disp2]),
+                    metamer_color,
+                    radius=0.003,
+                )
+                print(f"  Rendered metamer line {i}")
+
+                # Render noise balls at the metamer pair points (disp1, disp2)
+                # Apply noise independently per dimension in cone space (L, M, S, Q)
+                # Create noise std array in cone space with individual values
+                # Order: S, M, Q, L (matching cone space order)
+                noise_std_cone = np.array([self.S_noise, self.M_noise, self.Q_noise, self.L_noise])
+                print(f"  Using noise std in cone space: {noise_std_cone}")
+
+                M = self.estimate_jacobian(lambda x: cst.convert_to_polyscope(
+                    np.array([x]).reshape(1, -1), ColorSpaceType.CONE, PolyscopeDisplayType.HERING_RYGB)[0], noise_std_cone)  # 3x3 or compute numerically
+
+                # Build covariance in display space
+                S = np.diag(noise_std_cone)  # assuming 3D for display
+                C = M @ S @ S.T @ M.T
+
+                # Eigendecompose
+                eigenvalues, eigenvectors = np.linalg.eigh(C)
+                semi_axes = np.sqrt(eigenvalues)
+
+                RenderNoiseBall(
+                    f"noise_ball_{i}_1",
+                    disp1,
+                    semi_axes,
+                    rotation=eigenvectors,  # columns are principal directions
+                    color=metamer_color,
+                    num_samples=500,
+                    alpha=0.4,
+                )
+
+                # Render noise ball at second metamer point (same noise ellipsoid)
+                print(f"  Rendering noise ball 2 at {disp2} with semi-axes {semi_axes}")
+                RenderNoiseBall(
+                    f"noise_ball_{i}_2",
+                    disp2,
+                    semi_axes,
+                    rotation=eigenvectors,  # columns are principal directions
+                    color=metamer_color,
+                    num_samples=500,
+                    alpha=0.4,
+                )
+                print(f"  Rendered noise ball {i}_2")
+
+                # Also render the noisy point as a small marker
+                # RenderPointCloud(
+                #     f"noisy_point_{i}",
+                #     disp_point.reshape(1, -1),
+                #     metamer_color.reshape(1, -1),
+                #     radius=0.01,
+                # )
+
+                # Label the metameric direction
+                # Get metameric axis direction in display space
+                metamer_dir = cst.get_metameric_axis_in(
+                    ColorSpaceType.RYGB, metameric_axis_num=metameric_axis
+                )
+                metamer_dir_display = cst.convert_to_polyscope(
+                    metamer_dir.reshape(1, -1), ColorSpaceType.RYGB, self.display_basis
+                )[0]
+                # Normalize the direction
+                metamer_dir_display_norm = metamer_dir_display / (np.linalg.norm(metamer_dir_display) + 1e-8)
+
+                # Position label outside the noise ball
+                # Use the maximum semi-axis length plus a margin to ensure it's outside
+                max_semi_axis = np.max(semi_axes)
+                margin = 0.3  # Additional margin for visibility
+                label_offset = max_semi_axis + margin
+                label_pos = disp2 - metamer_dir_display_norm * label_offset
+
+                # Create billboard text label (same color as metamer line)
+                label_text = f"L_{int(obs.sensors[metameric_axis].peak)}"
+                ps.register_billboard_text(
+                    f"label_{i}",
+                    label_text,
+                    label_pos,
+                    enabled=True,
+                    font_size=8.0,
+                    text_color=metamer_color.tolist(),  # Same color as metamer line
+                )
+
+            except Exception as e:
+                print(f"Error updating observer {i+1}: {e}")
+                import traceback
+                traceback.print_exc()
+
+        print(f"=== Finished updating visualization ===\n")
+
+        # Render display primaries on the luminance plane (only if enabled)
+        if self.show_display_primaries:
+            self.render_display_primaries()
+
+    def render_display_primaries(self):
+        """Render display primaries that lie on the selected luminance plane."""
+        if self.selected_point_hering is None:
+            return
+
+        # Sample display primaries
+        # We'll sample points in DISP space and filter by luminance
+        # Use 8-bit discretization but with a reduced grid for performance
+        # Sample every Nth value from 0-255 to keep computation manageable
+        grid_step = 16  # Sample every 16th value: 0, 16, 32, ..., 240 (16 values)
+        grid_values_8bit = np.arange(0, 256, grid_step)  # 16 values
+        grid_1d = grid_values_8bit / 255.0  # Normalize to [0, 1]
+        from itertools import product
+
+        # This gives us 16^4 = 65,536 points (manageable)
+        disp_points = np.array(list(product(grid_1d, grid_1d, grid_1d, grid_1d)))
+        print(
+            f"Sampling {len(disp_points)} points from 8-bit quantized grid (step={grid_step}, {len(grid_1d)} values per dimension)")
+
+        # Use the first color space for conversion
+        if len(self.color_spaces) == 0:
+            return
+
+        cst = self.color_spaces[0]
+
+        # Convert to CONE space
+        cone_points = cst.convert(disp_points, ColorSpaceType.DISP, ColorSpaceType.CONE)
+
+        # Get Hering transform and compute luminance
+        H = GetHeringMatrix(cst.dim)
+        hering_points = cone_points @ H.T
+        luminances = hering_points[:, 0]
+
+        # Filter points close to selected luminance
+        tolerance = 0.05
+        mask = np.abs(luminances - self.luminance) < tolerance
+        primary_points_cone = cone_points[mask]
+
+        if len(primary_points_cone) == 0:
+            print(f"No display primaries found at L={self.luminance:.2f}")
+            return
+
+        # Convert to display space
+        primary_points_disp = cst.convert_to_polyscope(
+            primary_points_cone, ColorSpaceType.CONE, self.display_basis
+        )
+
+        # Further reduce points by subsampling if there are still too many
+        max_points = 2000  # Maximum number of points to render
+        if len(primary_points_disp) > max_points:
+            # Randomly sample points
+            indices = np.random.choice(len(primary_points_disp), max_points, replace=False)
+            primary_points_disp = primary_points_disp[indices]
+            print(f"Subsampled to {max_points} points from {len(cone_points[mask])}")
+
+        # Render as point cloud with smaller radius
+        primary_colors = np.ones((len(primary_points_disp), 3)) * 0.5  # Gray
+        RenderPointCloud(
+            "display_primaries",
+            primary_points_disp,
+            primary_colors,
+            radius=0.0001,  # Much smaller radius (was 0.008)
+        )
+
+        print(f"Rendered {len(primary_points_disp)} display primary points at L={self.luminance:.2f}")
+
+    def render_gamut_slice(self):
+        """Render the display gamut slice at the current luminance level."""
+        if len(self.color_spaces) == 0:
+            return
+
+        # Clear previous slice if it exists
+        if self.current_gamut_slice_name is not None:
+            try:
+                ps.remove_surface_mesh(self.current_gamut_slice_name)
+            except (RuntimeError, KeyError):
+                pass
+            try:
+                ps.remove_point_cloud(self.current_gamut_slice_name)
+            except (RuntimeError, KeyError):
+                pass
+
+        # Use first color space for rendering the slice
+        cst = self.color_spaces[0]
+
+        # Render the slice at the current luminance
+        # RenderGamutSlices creates names like "gamut_slice_slice_L{target_lum:.2f}"
+        slice_name_base = "gamut_slice"
+        RenderGamutSlices(
+            slice_name_base,
+            cst,
+            display_space=ColorSpaceType.DISP,
+            display_basis=self.display_basis,
+            luminance_values=[self.luminance],
+            grid_resolution=25,
+            tolerance=0.03,
+            alpha=0.4,
+        )
+
+        # Store the actual slice name that was created
+        self.current_gamut_slice_name = f"{slice_name_base}_slice_L{self.luminance:.2f}"
+        print(f"Rendered gamut slice at L={self.luminance:.2f} (name: {self.current_gamut_slice_name})")
+
+    def clear_previous_renders(self):
+        """Clear previously rendered metamer pairs and noise balls."""
+        print("Clearing previous renders...")
+        # Silently ignore errors when removing structures that don't exist
+        # Check up to 10 observers to ensure we remove all
+        max_check = max(self.num_observers, 10)
+        for i in range(max_check):
+            # Remove metamer lines
+            try:
+                ps.remove_curve_network(f"metamer_line_{i}")
+            except (RuntimeError, KeyError):
+                pass
+
+            # Remove noise balls (they might be surface meshes or point clouds)
+            removed_1 = False
+            try:
+                ps.remove_surface_mesh(f"noise_ball_{i}_1")
+                removed_1 = True
+            except (RuntimeError, KeyError):
+                try:
+                    ps.remove_point_cloud(f"noise_ball_{i}_1")
+                    removed_1 = True
+                except (RuntimeError, KeyError):
+                    pass
+            if removed_1:
+                print(f"  Removed noise_ball_{i}_1")
+
+            removed_2 = False
+            try:
+                ps.remove_surface_mesh(f"noise_ball_{i}_2")
+                removed_2 = True
+            except (RuntimeError, KeyError):
+                try:
+                    ps.remove_point_cloud(f"noise_ball_{i}_2")
+                    removed_2 = True
+                except (RuntimeError, KeyError):
+                    pass
+            if removed_2:
+                print(f"  Removed noise_ball_{i}_2")
+
+            # Remove labels
+            try:
+                ps.remove_billboard_text(f"label_{i}")
+            except (RuntimeError, KeyError):
+                pass
+
+        # Remove display primaries
+        try:
+            ps.remove_point_cloud("display_primaries")
+        except (RuntimeError, KeyError):
+            pass
+
+        # Remove selected point
+        try:
+            ps.remove_point_cloud("selected_point")
+        except (RuntimeError, KeyError):
+            pass
+        try:
+            ps.remove_point_cloud("selected_point_large")
+        except (RuntimeError, KeyError):
+            pass
+
+        self.metamer_pairs = []
+
+    def callback(self):
+        """Polyscope callback for GUI and interaction."""
+        # Handle mouse interaction
+        if psim.IsMouseClicked(1):  # Right mouse button
+            ps.set_do_default_mouse_interaction(False)
+            self.doing_interaction = True
+            self.handle_mouse_click()
+
+        if not psim.IsMouseDown(1):
+            if self.doing_interaction:
+                ps.set_do_default_mouse_interaction(True)
+                self.doing_interaction = False
+
+        # GUI
+        opened, self.window_open = psim.Begin("Metamer Noise Visualization", self.window_open)
+
+        if opened:
+            # Luminance slider
+            changed, self.luminance = psim.SliderFloat(
+                "Luminance (L)", self.luminance, 0.0, 2.0
+            )
+            if changed:
+                # Update gamut slice
+                self.render_gamut_slice()
+
+                # Update selected point if it exists
+                if self.selected_point_hering is not None:
+                    self.selected_point_hering[0] = self.luminance
+                    self.update_visualization()
+
+            # Individual noise sliders for each dimension
+            psim.Text("Noise Parameters (per dimension):")
+            changed_L, self.L_noise = psim.SliderFloat(
+                "L Noise", self.L_noise, 0.001, 0.1
+            )
+            changed_M, self.M_noise = psim.SliderFloat(
+                "M Noise", self.M_noise, 0.001, 0.1
+            )
+            changed_S, self.S_noise = psim.SliderFloat(
+                "S Noise", self.S_noise, 0.001, 0.1
+            )
+            changed_Q, self.Q_noise = psim.SliderFloat(
+                "Q Noise", self.Q_noise, 0.001, 0.1
+            )
+            if changed_L or changed_M or changed_S or changed_Q:
+                print(f"\n=== Noise parameters changed ===")
+                print(
+                    f"L_noise={self.L_noise:.4f}, M_noise={self.M_noise:.4f}, S_noise={self.S_noise:.4f}, Q_noise={self.Q_noise:.4f}")
+                self.update_visualization()
+
+            # Display primaries toggle
+            changed_primaries, self.show_display_primaries = psim.Checkbox(
+                "Show Display Primaries", self.show_display_primaries
+            )
+            if changed_primaries:
+                if self.show_display_primaries:
+                    self.render_display_primaries()
+                else:
+                    # Remove display primaries
+                    try:
+                        ps.remove_point_cloud("display_primaries")
+                    except (RuntimeError, KeyError):
+                        pass
+
+            # Number of observers
+            changed, self.num_observers = psim.SliderInt(
+                "Num Observers", self.num_observers, 1, 10
+            )
+
+            psim.Text("Right-click to select a point on the gamut")
+            if self.selected_point_hering is not None:
+                psim.Text(f"Selected point (HERING): {self.selected_point_hering}")
+
+        psim.End()
+
+    def show(self):
+        """Show the polyscope window."""
+        ps.show()
+
+
+def main():
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Interactive metamer noise visualization GUI"
+    )
+    parser.add_argument(
+        "--primaries_dir",
+        type=str,
+        default="../../measurements/2025-12-02/primaries_old_method/",
+        help="Directory containing display primary CSV files",
+    )
+    parser.add_argument(
+        "--num_observers",
+        type=int,
+        default=4,
+        help="Number of observer genotypes to display",
+    )
+    parser.add_argument(
+        "--initial_luminance",
+        type=float,
+        default=0.5,
+        help="Initial luminance value",
+    )
+    parser.add_argument(
+        "--initial_noise_std",
+        type=float,
+        default=0.05,
+        help="Initial noise standard deviation",
+    )
+
+    args = parser.parse_args()
+
+    app = MetamerNoiseGUI(
+        primaries_dir=args.primaries_dir,
+        num_observers=args.num_observers,
+        initial_luminance=args.initial_luminance,
+        initial_noise_std=args.initial_noise_std,
+    )
+
+    app.show()
+
+
+if __name__ == "__main__":
+    main()

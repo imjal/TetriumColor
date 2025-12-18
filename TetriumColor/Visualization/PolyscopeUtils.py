@@ -78,16 +78,19 @@ def Render2DMesh(name: str, points: npt.NDArray, rgb: npt.NDArray) -> float:
     return hull.volume
 
 
-def Render3DMesh(name: str, points: npt.ArrayLike, rgbs: npt.ArrayLike) -> float:
+def Render3DMesh(name: str, points: npt.ArrayLike, rgbs: npt.ArrayLike, back_face_policy: str = 'identical') -> float:
     """Create a 3D mesh from a list of vertices (N x 3) and RGB colors (N x 3)
 
     Args:
         name (str): Name of the mesh
         points (npt.ArrayLike): N x 3 array of vertices
         rgbs (npt.ArrayLike): N x 3 array of RGB colors
+        back_face_policy (str): Polyscope back face policy ('identical', 'cull', 'different'). Defaults to 'identical'.
     """
     mesh = GeometryPrimitives.Create3DMesh(points, rgbs)
-    GeometryPrimitives.ConvertTriangleMeshToPolyscope(name, mesh)
+    ps_mesh = ps.register_surface_mesh(name, np.asarray(mesh.vertices), np.asarray(mesh.triangles),
+                                       back_face_policy=back_face_policy, material='wax', smooth_shade=True)
+    ps_mesh.add_color_quantity(f"{name}_colors", np.asarray(mesh.vertex_colors), defined_on='vertices', enabled=True)
     hull = ConvexHull(points)
     return hull.volume
 
@@ -481,18 +484,18 @@ def RenderMeshFromNonConvexPointCloud(name: str, points: npt.NDArray, rgb: npt.N
 
 
 def RenderNoiseBall(name: str, center: npt.NDArray, noise_std: npt.NDArray,
+                    rotation: npt.NDArray | None = None,  # NEW: columns are principal axes
                     color: npt.NDArray | None = None, num_samples: int = 1000,
                     alpha: float = 0.3, min_std: float = 1e-4) -> None:
     """Render a noise ball (ellipsoid) representing observer uncertainty.
 
     Args:
-        name (str): Name of the noise ball to register with polyscope
-        center (npt.NDArray): Center point of the noise ball (3D or 4D, will be projected if needed)
-        noise_std (npt.NDArray): Standard deviations along each axis (defines ellipsoid shape)
-        color (npt.NDArray | None, optional): RGB color for the ball. Defaults to semi-transparent gray.
-        num_samples (int, optional): Number of points to sample on the ellipsoid surface. Defaults to 1000.
-        alpha (float, optional): Transparency of the mesh. Defaults to 0.3.
-        min_std (float, optional): Minimum standard deviation to prevent degeneracy. Defaults to 1e-4.
+        name: Name of the noise ball to register with polyscope
+        center: Center point of the noise ball (3D)
+        noise_std: Semi-axis lengths (eigenvalues of covariance, sqrt'd)
+        rotation: 3x3 rotation matrix whose columns are principal directions.
+                  If None, assumes axis-aligned.
+        ...
     """
     if color is None:
         color = np.array([0.7, 0.7, 0.7])
@@ -504,29 +507,20 @@ def RenderNoiseBall(name: str, center: npt.NDArray, noise_std: npt.NDArray,
     x = np.sin(theta) * np.cos(phi)
     y = np.sin(theta) * np.sin(phi)
     z = np.cos(theta)
+    sphere_points = np.column_stack([x, y, z])  # (N, 3)
 
-    sphere_points = np.column_stack([x, y, z])
+    # Ensure minimum std to prevent degeneracy
+    noise_std_safe = np.maximum(np.abs(noise_std[:3]), min_std)
 
-    # Scale by noise standard deviations to create ellipsoid
-    if len(noise_std) == 3:
-        # Ensure minimum std to prevent coplanar points
-        noise_std_safe = np.maximum(np.abs(noise_std), min_std)
-        ellipsoid_points = sphere_points * noise_std_safe
-    elif len(noise_std) == 4:
-        # For 4D, project down to 3D by dropping one dimension (typically luminance)
-        sphere_4d = np.random.randn(num_samples, 4)
-        sphere_4d = sphere_4d / np.linalg.norm(sphere_4d, axis=1, keepdims=True)
-        ellipsoid_points_4d = sphere_4d * noise_std
-        # Drop first dimension (luminance) for visualization
-        ellipsoid_points = ellipsoid_points_4d[:, 1:]
-        # Ensure minimum std to prevent coplanar points
-        ellipsoid_points = ellipsoid_points + np.random.randn(*ellipsoid_points.shape) * min_std
-        center = center[1:] if len(center) == 4 else center
-    else:
-        raise ValueError(f"noise_std must be 3D or 4D, got {len(noise_std)}D")
+    # Scale by semi-axes
+    ellipsoid_points = sphere_points * noise_std_safe  # (N, 3)
+
+    # Rotate if non-axis-aligned
+    if rotation is not None:
+        ellipsoid_points = ellipsoid_points @ rotation.T  # (N, 3) @ (3, 3).T
 
     # Translate to center
-    points = ellipsoid_points + center
+    points = ellipsoid_points + center[:3]
 
     # Create mesh and render
     colors = np.tile(color, (len(points), 1))
@@ -546,7 +540,7 @@ def RenderNoiseBall(name: str, center: npt.NDArray, noise_std: npt.NDArray,
 def RenderRYGBGamut(name: str, cst: ColorSpace, display_basis: PolyscopeDisplayType,
                     color: npt.NDArray | None = None, alpha: float = 0.4,
                     vertex_radius: float = 0.015, edge_radius: float = 0.003,
-                    scale: float = 1.0) -> None:
+                    scale: float = 1.0, show_hull: bool = True) -> None:
     """Render the RYGB gamut as a projected hypercube (single unified mesh).
 
     The RYGB gamut is defined by the Red-Yellow-Green-Blue basis with cutpoints
@@ -620,13 +614,14 @@ def RenderRYGBGamut(name: str, cst: ColorSpace, display_basis: PolyscopeDisplayT
     combined_mesh = GeometryPrimitives.CollapseMeshObjects(mesh_objects)
     GeometryPrimitives.ConvertTriangleMeshToPolyscope(name, combined_mesh)
 
-    # Create convex hull mesh
-    try:
-        hull_mesh = GeometryPrimitives.Create3DMesh(vertices_display, vertex_colors)
-        GeometryPrimitives.ConvertTriangleMeshToPolyscope(name + "_hull", hull_mesh)
-        ps.get_surface_mesh(name + "_hull").set_transparency(alpha)
-    except Exception as e:
-        print(f"Warning: Could not create hull mesh for {name}: {e}")
+    # Create convex hull mesh (optional)
+    if show_hull:
+        try:
+            hull_mesh = GeometryPrimitives.Create3DMesh(vertices_display, vertex_colors)
+            GeometryPrimitives.ConvertTriangleMeshToPolyscope(name + "_hull", hull_mesh)
+            ps.get_surface_mesh(name + "_hull").set_transparency(alpha)
+        except Exception as e:
+            print(f"Warning: Could not create hull mesh for {name}: {e}")
 
 
 def RenderGamutSlices(name: str, cst: ColorSpace, display_space: ColorSpaceType, display_basis: PolyscopeDisplayType,
@@ -690,7 +685,7 @@ def RenderGamutSlices(name: str, cst: ColorSpace, display_space: ColorSpaceType,
         # Try to create a convex hull mesh
         try:
             colors = np.tile(color, (len(slice_points_viz), 1))
-            Render3DMesh(f"{name}_slice_L{target_lum:.2f}", slice_points_viz, colors)
+            Render3DMesh(f"{name}_slice_L{target_lum:.2f}", slice_points_viz, colors, back_face_policy='cull')
 
             # Use varying transparency to reduce z-fighting between slices
             slice_alpha = alpha + (slice_idx * 0.05)  # Each slice slightly more/less transparent
