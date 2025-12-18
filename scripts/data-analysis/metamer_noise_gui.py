@@ -340,14 +340,18 @@ class MetamerNoiseGUI:
         screen_coords = (mouse_pos[0], mouse_pos[1])
         print(f"\n=== Mouse click detected at screen coords: {screen_coords} ===")
 
-        # Convert to world ray
+        # Convert to world ray using Polyscope's function
         try:
-            ray_origin, ray_direction = self.screen_coords_to_world_ray(screen_coords)
-            print(f"Ray origin: {ray_origin}, direction: {ray_direction}")
+            # Use Polyscope's screen_coords_to_world_ray to get the ray
+            camera_params = ps.get_view_camera_parameters()
+            ray_origin = camera_params.get_position()
+            ray_direction = ps.screen_coords_to_world_ray(screen_coords)
+            ray_origin = np.array(ray_origin)
+            ray_direction = np.array(ray_direction)
+            print(f"Ray from Polyscope - origin: {ray_origin}, direction: {ray_direction}")
 
-            # Find intersection with gamut
-            # intersection = self.intersect_ray_with_gamut(ray_origin, ray_direction)
-            intersection = ps.screen_coords_to_world_position(screen_coords)
+            # Find intersection with gamut using the ray
+            intersection = self.intersect_ray_with_gamut(ray_origin, ray_direction)
             print(f"Intersection result: {intersection}")
 
             if intersection is not None and len(intersection) > 0:
@@ -486,13 +490,33 @@ class MetamerNoiseGUI:
         num_to_process = min(self.num_observers, len(self.observers), len(self.color_spaces))
         print(f"Processing {num_to_process} observers")
 
+        # Convert the selected HERING point to display space ONCE using the first observer
+        # This gives us a common starting point that all observers will use
+        if len(self.color_spaces) == 0:
+            print("No color spaces available")
+            return
+
+        # Use first observer's color space to get the common starting point in display space
+        reference_cst = self.color_spaces[0]
+        selected_cone_common = reference_cst.convert(
+            self.selected_point_hering.reshape(1, -1),
+            ColorSpaceType.HERING,
+            ColorSpaceType.CONE,
+        )[0]
+        selected_disp_common = reference_cst.convert_to_polyscope(
+            selected_cone_common.reshape(1, -1),
+            ColorSpaceType.CONE,
+            self.display_basis,
+        )[0]
+        print(f"Common selected point in display space: {selected_disp_common}")
+
         # Convert HERING point to display space for each observer
         for i in range(num_to_process):
             obs = self.observers[i]
             cst = self.color_spaces[i]
             print(f"\nProcessing observer {i+1}...")
             try:
-                # Convert HERING to CONE
+                # Convert HERING to CONE for this observer
                 cone_point = cst.convert(
                     self.selected_point_hering.reshape(1, -1),
                     ColorSpaceType.HERING,
@@ -526,18 +550,42 @@ class MetamerNoiseGUI:
                 cone1, cone2, metamer_diff = result
                 print(f"  Found metamer pair, diff: {metamer_diff:.4f}")
 
-                # Convert metamer points to display space
-                disp1 = cst.convert_to_polyscope(
-                    cone1.reshape(1, -1), ColorSpaceType.CONE, self.display_basis
-                )[0]
-                disp2 = cst.convert_to_polyscope(
-                    cone2.reshape(1, -1), ColorSpaceType.CONE, self.display_basis
-                )[0]
-                print(f"  Metamer points in display space:")
-                print(f"    disp1: {disp1}")
-                print(f"    disp2: {disp2}")
+                # Find which metamer point is furthest from the selected point
+                # Compare distances in cone space
+                selected_cone = cone_point
+                dist1 = np.linalg.norm(cone1 - selected_cone)
+                dist2 = np.linalg.norm(cone2 - selected_cone)
 
-                self.metamer_pairs.append((disp1, disp2))
+                if dist2 > dist1:
+                    # cone2 is further, use it as the "other" metamer point
+                    other_cone = cone2
+                    other_disp_cone = cone2
+                else:
+                    # cone1 is further, use it as the "other" metamer point
+                    other_cone = cone1
+                    other_disp_cone = cone1
+
+                print(f"  Selected point cone: {selected_cone}")
+                print(f"  Other metamer cone: {other_cone}")
+                print(f"  Distance to cone1: {dist1:.4f}, to cone2: {dist2:.4f}")
+
+                # Use the common selected point for all observers (so they all start from the same place)
+                # Convert other metamer point to display space
+                other_disp = cst.convert_to_polyscope(
+                    other_disp_cone.reshape(1, -1), ColorSpaceType.CONE, self.display_basis
+                )[0]
+
+                print(f"  Selected point in display space (common): {selected_disp_common}")
+                print(f"  Other metamer point in display space: {other_disp}")
+
+                # All observers share the same starting point, but have different end points
+                self.metamer_pairs.append((selected_disp_common, other_disp))
+
+                # Get the luminance of the other metamer point
+                H = GetHeringMatrix(cst.dim)
+                other_hering = other_cone @ H.T
+                other_luminance = other_hering[0]
+                print(f"  Other metamer luminance: {other_luminance:.4f}")
 
                 # Use the same color for all elements of this metamer pair
                 # Different colors for different observers to distinguish them
@@ -555,14 +603,14 @@ class MetamerNoiseGUI:
                 ]
                 metamer_color = observer_colors[i % len(observer_colors)]
 
-                # Render metameric line
+                # Render metameric line from common selected point to other metamer point
                 Render3DLine(
                     f"metamer_line_{i}",
-                    np.array([disp1, disp2]),
+                    np.array([selected_disp_common, other_disp]),
                     metamer_color,
                     radius=0.003,
                 )
-                print(f"  Rendered metamer line {i}")
+                print(f"  Rendered metamer line {i} from common point to observer {i+1}'s metamer")
 
                 # Render noise balls at the metamer pair points (disp1, disp2)
                 # Apply noise independently per dimension in cone space (L, M, S, Q)
@@ -582,28 +630,18 @@ class MetamerNoiseGUI:
                 eigenvalues, eigenvectors = np.linalg.eigh(C)
                 semi_axes = np.sqrt(eigenvalues)
 
+                # Render noise ball only at the other (furthest) metamer point
+                print(f"  Rendering noise ball at other metamer point {other_disp} with semi-axes {semi_axes}")
                 RenderNoiseBall(
-                    f"noise_ball_{i}_1",
-                    disp1,
+                    f"noise_ball_{i}",
+                    other_disp,
                     semi_axes,
                     rotation=eigenvectors,  # columns are principal directions
                     color=metamer_color,
                     num_samples=500,
                     alpha=0.4,
                 )
-
-                # Render noise ball at second metamer point (same noise ellipsoid)
-                print(f"  Rendering noise ball 2 at {disp2} with semi-axes {semi_axes}")
-                RenderNoiseBall(
-                    f"noise_ball_{i}_2",
-                    disp2,
-                    semi_axes,
-                    rotation=eigenvectors,  # columns are principal directions
-                    color=metamer_color,
-                    num_samples=500,
-                    alpha=0.4,
-                )
-                print(f"  Rendered noise ball {i}_2")
+                print(f"  Rendered noise ball {i}")
 
                 # Also render the noisy point as a small marker
                 # RenderPointCloud(
@@ -629,7 +667,35 @@ class MetamerNoiseGUI:
                 max_semi_axis = np.max(semi_axes)
                 margin = 0.3  # Additional margin for visibility
                 label_offset = max_semi_axis + margin
-                label_pos = disp2 - metamer_dir_display_norm * label_offset
+                label_pos = other_disp - metamer_dir_display_norm * label_offset
+
+                # Render gamut slice at the other metamer's luminance
+                # Use unique name per observer
+                other_slice_name_base = f"other_gamut_slice_{i}"
+                other_slice_name = f"{other_slice_name_base}_slice_L{other_luminance:.2f}"
+
+                # Clear previous "other" gamut slice for this observer if it exists
+                try:
+                    ps.remove_surface_mesh(other_slice_name)
+                except (RuntimeError, KeyError):
+                    pass
+                try:
+                    ps.remove_point_cloud(other_slice_name)
+                except (RuntimeError, KeyError):
+                    pass
+
+                # Render gamut slice at other metamer's luminance
+                RenderGamutSlices(
+                    other_slice_name_base,
+                    cst,
+                    display_space=ColorSpaceType.DISP,
+                    display_basis=self.display_basis,
+                    luminance_values=[other_luminance],
+                    grid_resolution=25,
+                    tolerance=0.03,
+                    alpha=0.2,  # Slightly more transparent to distinguish from main slice
+                )
+                print(f"  Rendered other gamut slice at L={other_luminance:.2f} (name: {other_slice_name})")
 
                 # Create billboard text label (same color as metamer line)
                 label_text = f"L_{int(obs.sensors[metameric_axis].peak)}"
@@ -770,31 +836,21 @@ class MetamerNoiseGUI:
                 pass
 
             # Remove noise balls (they might be surface meshes or point clouds)
-            removed_1 = False
-            try:
-                ps.remove_surface_mesh(f"noise_ball_{i}_1")
-                removed_1 = True
-            except (RuntimeError, KeyError):
+            # Check both old naming (noise_ball_{i}_1, noise_ball_{i}_2) and new naming (noise_ball_{i})
+            for suffix in ["_1", "_2", ""]:
+                ball_name = f"noise_ball_{i}{suffix}"
+                removed = False
                 try:
-                    ps.remove_point_cloud(f"noise_ball_{i}_1")
-                    removed_1 = True
+                    ps.remove_surface_mesh(ball_name)
+                    removed = True
                 except (RuntimeError, KeyError):
-                    pass
-            if removed_1:
-                print(f"  Removed noise_ball_{i}_1")
-
-            removed_2 = False
-            try:
-                ps.remove_surface_mesh(f"noise_ball_{i}_2")
-                removed_2 = True
-            except (RuntimeError, KeyError):
-                try:
-                    ps.remove_point_cloud(f"noise_ball_{i}_2")
-                    removed_2 = True
-                except (RuntimeError, KeyError):
-                    pass
-            if removed_2:
-                print(f"  Removed noise_ball_{i}_2")
+                    try:
+                        ps.remove_point_cloud(ball_name)
+                        removed = True
+                    except (RuntimeError, KeyError):
+                        pass
+                if removed:
+                    print(f"  Removed {ball_name}")
 
             # Remove labels
             try:
@@ -817,6 +873,24 @@ class MetamerNoiseGUI:
             ps.remove_point_cloud("selected_point_large")
         except (RuntimeError, KeyError):
             pass
+
+        # Remove other gamut slices (one per observer)
+        # Try to remove slices for all observers
+        # We'll check a reasonable range of luminance values (0.0 to 2.0 in 0.05 steps)
+        max_check = max(self.num_observers, 10)
+        for i in range(max_check):
+            # Check luminance values from 0.0 to 2.0 in 0.05 steps (41 values)
+            for lum_int in range(0, 41):  # 0.00 to 2.00 in 0.05 steps
+                lum = lum_int / 20.0
+                slice_name = f"other_gamut_slice_{i}_slice_L{lum:.2f}"
+                try:
+                    ps.remove_surface_mesh(slice_name)
+                except (RuntimeError, KeyError):
+                    pass
+                try:
+                    ps.remove_point_cloud(slice_name)
+                except (RuntimeError, KeyError):
+                    pass
 
         self.metamer_pairs = []
 
