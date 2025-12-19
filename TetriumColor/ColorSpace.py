@@ -54,7 +54,8 @@ class ColorSpaceType(Enum):
     DISP_6P = "disp_6p"  # RGO/BGO 6D representation
     DISP = "disp"  # Display space (RGBO)
 
-    SRGB = "srgb"  # sRGB display
+    SRGB = "srgb"  # sRGB display (gamma-encoded)
+    LINEAR_SRGB = "linear_srgb"  # Linear sRGB (no gamma encoding)
     XYZ = "xyz"  # CIE XYZ color space
     OKLAB = 'oklab'
     OKLABM1 = 'oklabm1'  # OKLAB color space with M1 matrix
@@ -63,6 +64,7 @@ class ColorSpaceType(Enum):
     CHROM = "chrom"  # Chromaticity space
     HERING_CHROM = "hering_chrom"  # Hering chromaticity space
     MACLEOD_CHROM = "macleod_chrom"  # MacLeod-Boynton chromaticity space
+    HERING_RYGB = "hering_rygb"  # Hering opponent space of RYGB basis
 
     # Printer gamut primaries (percentages/area coverages)
     PRINT = "print"
@@ -75,7 +77,7 @@ class ColorSpaceType(Enum):
             return 6
         elif self == ColorSpaceType.PRINT:
             return 4
-        elif self == ColorSpaceType.SRGB or self == ColorSpaceType.XYZ or self == ColorSpaceType.OKLAB or self == ColorSpaceType.OKLABM1 or self == ColorSpaceType.CIELAB:
+        elif self == ColorSpaceType.SRGB or self == ColorSpaceType.LINEAR_SRGB or self == ColorSpaceType.XYZ or self == ColorSpaceType.OKLAB or self == ColorSpaceType.OKLABM1 or self == ColorSpaceType.CIELAB:
             return 3
         else:
             return 1
@@ -451,6 +453,14 @@ class ColorSpace:
         if from_space == to_space:
             return points
 
+        # Special case: Direct conversion between HERING_RYGB and RYGB (no CONE routing)
+        if from_space == ColorSpaceType.HERING_RYGB and to_space == ColorSpaceType.RYGB:
+            hering_matrix = GetHeringMatrix(self.dim)
+            return (np.linalg.inv(hering_matrix) @ points.T).T
+        elif from_space == ColorSpaceType.RYGB and to_space == ColorSpaceType.HERING_RYGB:
+            hering_matrix = GetHeringMatrix(self.dim)
+            return (hering_matrix @ points.T).T
+
         # CONE-CENTRIC ROUTING: All conversions go through CONE
 
         # Step 1: Convert FROM source space TO CONE
@@ -478,6 +488,14 @@ class ColorSpace:
             cone_to_rygb = self._get_cone_to_rygb()
             # Use pseudoinverse for non-square matrices
             cone_points = (np.linalg.pinv(cone_to_rygb) @ points.T).T
+        elif from_space == ColorSpaceType.HERING_RYGB:
+            # HERING_RYGB -> RYGB -> CONE
+            # First convert HERING_RYGB -> RYGB (direct, no CONE)
+            hering_matrix = GetHeringMatrix(self.dim)
+            rygb_points = (np.linalg.inv(hering_matrix) @ points.T).T
+            # Then convert RYGB -> CONE
+            cone_to_rygb = self._get_cone_to_rygb()
+            cone_points = (np.linalg.pinv(cone_to_rygb) @ rygb_points.T).T
         elif from_space == ColorSpaceType.DISP:
             # DISP -> CONE
             cone_to_disp = self._get_cone_to_disp()
@@ -502,6 +520,21 @@ class ColorSpace:
             xyz_points = (np.linalg.inv(M_XYZ_to_RGB) @ linear_rgb.T).T
             cone_to_xyz = self._get_cone_to_xyz()
             cone_points = (np.linalg.inv(cone_to_xyz) @ xyz_points.T).T
+        elif from_space == ColorSpaceType.LINEAR_SRGB:
+            # Linear sRGB -> XYZ -> CONE (no gamma decoding needed)
+            xyz_points = (np.linalg.inv(M_XYZ_to_RGB) @ points.T).T
+            cone_to_xyz = self._get_cone_to_xyz()
+            if self.dim > 3:
+                # For 4D, we need to add back the metameric axis dimension
+                # Use a default value or interpolate
+                cone_points_3d = (np.linalg.inv(cone_to_xyz) @ xyz_points.T).T
+                # Pad with zeros for the metameric axis (this is a simplification)
+                cone_points = np.zeros((len(cone_points_3d), self.dim))
+                non_metameric_indices = [i for i in range(self.dim) if i != self.metameric_axis]
+                for idx, orig_idx in enumerate(non_metameric_indices[:3]):
+                    cone_points[:, orig_idx] = cone_points_3d[:, idx]
+            else:
+                cone_points = (np.linalg.inv(cone_to_xyz) @ xyz_points.T).T
         elif from_space == ColorSpaceType.OKLAB:
             # OKLAB -> XYZ -> CONE
             if self.dim != 3:
@@ -564,6 +597,14 @@ class ColorSpace:
             # CONE -> RYGB
             cone_to_rygb = self._get_cone_to_rygb()
             return (cone_to_rygb @ cone_points.T).T
+        elif to_space == ColorSpaceType.HERING_RYGB:
+            # CONE -> RYGB -> HERING_RYGB
+            # First convert CONE -> RYGB
+            cone_to_rygb = self._get_cone_to_rygb()
+            rygb_points = (cone_to_rygb @ cone_points.T).T
+            # Then convert RYGB -> HERING_RYGB (direct, no CONE)
+            hering_matrix = GetHeringMatrix(self.dim)
+            return (hering_matrix @ rygb_points.T).T
         elif to_space == ColorSpaceType.DISP:
             # CONE -> DISP
             cone_to_disp = self._get_cone_to_disp()
@@ -593,6 +634,15 @@ class ColorSpace:
                                    12.92 * linear_rgb,
                                    1.055 * np.power(linear_rgb, 1/2.2) - 0.055)
             return encoded_rgb.T
+        elif to_space == ColorSpaceType.LINEAR_SRGB:
+            # CONE -> XYZ -> Linear sRGB (no gamma encoding)
+            cone_to_xyz = self._get_cone_to_xyz()
+            if self.dim > 3:
+                cone_points = cone_points[:, [i for i in range(self.dim) if i != self.metameric_axis]]
+            xyz_points = (cone_to_xyz @ cone_points.T).T
+            linear_rgb = M_XYZ_to_RGB @ xyz_points.T
+            # Return linear RGB without gamma encoding
+            return linear_rgb.T
         elif to_space == ColorSpaceType.OKLAB:
             # CONE -> XYZ -> OKLAB
             if self.dim != 3:

@@ -348,7 +348,7 @@ def RenderOBS(name: str, cst: ColorSpace, display_basis: PolyscopeDisplayType, n
         csampler = ColorSampler(cst, cubemap_size=128)
         boundary_points = csampler.sample_full_colors(num_samples)
         # boundary_points = cst.convert(boundary_points, ColorSpaceType.HERING, ColorSpaceType.CONE)
-        sRGBs = np.clip(cst.convert(boundary_points, ColorSpaceType.HERING, ColorSpaceType.SRGB), 0, 1)
+        sRGBs = np.clip(cst.convert(boundary_points, ColorSpaceType.HERING, ColorSpaceType.LINEAR_SRGB), 0, 1)
         Render3DMesh(f"{name}", boundary_points[:, 1:], sRGBs)
         # points = cst.convert(boundary_points, ColorSpaceType.CONE, ColorSpaceType.HERING)[:, 1:]
         # Render3DMesh(f"{name}", points, sRGBs)
@@ -571,9 +571,9 @@ def RenderRYGBGamut(name: str, cst: ColorSpace, display_basis: PolyscopeDisplayT
     # Apply scaling
     vertices_display = vertices_display * scale
 
-    # Compute colors for vertices (convert to sRGB)
+    # Compute colors for vertices (convert to linear sRGB)
     vertices_cone = cst.convert(vertices_rygb, ColorSpaceType.RYGB, ColorSpaceType.CONE)
-    vertex_colors = np.clip(cst.convert(vertices_cone, ColorSpaceType.CONE, ColorSpaceType.SRGB), 0, 1)
+    vertex_colors = np.clip(cst.convert(vertices_cone, ColorSpaceType.CONE, ColorSpaceType.LINEAR_SRGB), 0, 1)
 
     # Create mesh objects list
     mesh_objects = []
