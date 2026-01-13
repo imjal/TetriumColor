@@ -84,7 +84,10 @@ class PseudoIsochromaticPlateGenerator(PlateGenerator):
             lum_noise=lum_noise, s_cone_noise=s_cone_noise,
             seed=np.random.randint(0, 1000000)
         )
-        self.plate_generator.ExportPlateTo6P(image, filename)
+        if output_space == ColorSpaceType.DISP_6P:
+            self.plate_generator.ExportPlateTo6P(image, filename)
+        else:
+            image[0].save(f"{filename}_SRGB.png")
 
     def GetPlate(self, previous_result: ColorTestResult,
                  filename: str, hidden_symbol: Union[int, str],
