@@ -772,6 +772,36 @@ class Observer:
 
         return self._lms_to_xyz_matrix
 
+    def to_lab(self, spectra: Spectra) -> npt.NDArray:
+        """Convert a spectrum to CIE Lab color space.
+
+        For tetrachromats, the transformation matrix has the Q cone column (index 2) as zeros,
+        so the Q cone response doesn't contribute to the XYZ values.
+
+        This method:
+        1. Observes the spectrum in the observer's LMS space
+        2. Transforms LMS to CIE XYZ using a cached transformation matrix
+        3. Converts XYZ to Lab color space
+
+        Args:
+            spectra (Spectra): Input spectrum
+
+        Returns:
+            npt.NDArray: 3-element array [L*, a*, b*] in CIE Lab color space
+        """
+        # Observe spectrum in LMS space
+        lms = self.observe(spectra)  # dimension-vector
+
+        # Transform to XYZ using cached matrix
+        # For tetrachromats, M is 3 x 4 with column 2 (Q cone) as zeros
+        M = self.get_lms_to_xyz_matrix()  # 3 x dimension
+        xyz = M @ lms  # 3-vector
+
+        # Convert XYZ to Lab (using D65 illuminant as standard)
+        lab = XYZ_to_Lab(xyz)
+
+        return lab
+
     def delta_E(self, a: Spectra, b: Spectra) -> float:
         """Calculate the perceptual color difference between two spectra using CIE Delta E 2000.
 
@@ -791,19 +821,9 @@ class Observer:
         Returns:
             float: Delta E 2000 value representing perceptual color difference
         """
-        # Observe both spectra in LMS space
-        lms_a = self.observe(a)  # dimension-vector
-        lms_b = self.observe(b)  # dimension-vector
-
-        # Transform to XYZ using cached matrix
-        # For tetrachromats, M is 3 x 4 with column 2 (Q cone) as zeros
-        M = self.get_lms_to_xyz_matrix()  # 3 x dimension
-        xyz_a = M @ lms_a  # 3-vector
-        xyz_b = M @ lms_b  # 3-vector
-
-        # Convert XYZ to Lab (using D65 illuminant as standard)
-        lab_a = XYZ_to_Lab(xyz_a)
-        lab_b = XYZ_to_Lab(xyz_b)
+        # Convert both spectra to Lab
+        lab_a = self.to_lab(a)
+        lab_b = self.to_lab(b)
 
         # Calculate Delta E 2000
         delta_e = delta_E_CIE2000(lab_a, lab_b)
