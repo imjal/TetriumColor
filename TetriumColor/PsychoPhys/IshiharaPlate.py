@@ -70,6 +70,8 @@ class IshiharaPlateGenerator:
                       background_luminance: float = 0.5,
                       dot_size: float = 1.0,
                       seed: int = 42,
+                      print_noise_percentages: Optional[dict] = None,
+                      print_noise_mode: str = "discrete",
                       **kwargs) -> List[Image.Image]:
         """
         Generate plate with specified output color space.
@@ -83,6 +85,10 @@ class IshiharaPlateGenerator:
             s_cone_noise: S-cone noise amount
             metamer_difference: Metamer difference for adaptive noise calculation
             background_luminance: Background luminance level (0.0 to 1.0)
+            dot_size: Scale factor for dot sizes
+            print_noise_percentages: Dictionary with structure {"A": {"incr": [c,m,y,k], "decr": [c,m,y,k]}, 
+                                                                  "B": {"incr": [c,m,y,k], "decr": [c,m,y,k]}}
+            print_noise_mode: "discrete" for 3-bucket sampling or "interpolate" for 5-bucket sampling
             **kwargs: Additional arguments passed to generate_ishihara_plate
         """
         # Get default values or use provided kwargs
@@ -118,6 +124,8 @@ class IshiharaPlateGenerator:
             lum_noise=lum_noise, s_cone_noise=s_cone_noise, corner_label=corner_label,
             metamer_difference=metamer_difference,
             background_color=background_color,
+            print_noise_percentages=print_noise_percentages,
+            print_noise_mode=print_noise_mode,
             seed=seed,  # Pass seed for consistency
             **kwargs
         )
@@ -239,6 +247,8 @@ def _draw_plate(
     input_space: ColorSpaceType = ColorSpaceType.CONE,
     output_space: ColorSpaceType = ColorSpaceType.DISP_6P,
     metamer_difference: Optional[float] = None,
+    print_noise_percentages: Optional[dict] = None,
+    print_noise_mode: str = "discrete",  # "discrete" or "interpolate"
 ) -> None:
     """
     Draw the plate with the computed circle positions and colors.
@@ -252,6 +262,10 @@ def _draw_plate(
     :param lum_noise: Luminance noise amount (ignored if metamer_difference provided)
     :param s_cone_noise: S-cone noise amount (ignored if metamer_difference provided)
     :param metamer_difference: Metamer difference for adaptive noise (applied to all channels except metameric axis)
+    :param print_noise_percentages: Dictionary with structure {"A": {"incr": [c,m,y,k], "decr": [c,m,y,k]}, 
+                                                                 "B": {"incr": [c,m,y,k], "decr": [c,m,y,k]}}
+                                    where A is inside_color and B is outside_color in print space
+    :param print_noise_mode: "discrete" for 3-bucket sampling or "interpolate" for 5-bucket linear interpolation
     """
     for i, [x, y, r] in enumerate(circles):
         in_p, out_p = inside_props[i], outside_props[i]
@@ -286,11 +300,49 @@ def _draw_plate(
             # Use rounding to nearest integer when discretizing to int
             circle_color = np.round(circle_color * 255).astype(int)
         else:
-            noise_vector = np.full((4), np.random.normal(0, lum_noise))
-            noise_vector = color_space.convert(noise_vector, ColorSpaceType.CONE, ColorSpaceType.PRINT)
-            # lum_dir = lum_dir / np.linalg.norm(lum_dir) * noise_vector
-            circle_color = circle_color + noise_vector
-            circle_color = np.round((circle_color)).astype(int)
+            # Print space handling with percentage-based noise
+            if print_noise_percentages is not None:
+                # Determine if this circle is more A (inside) or B (outside)
+                # We use the proportions to decide which color's noise to apply
+                if in_p > out_p:
+                    # This circle is primarily A (inside color)
+                    noise_dict = print_noise_percentages.get("A", {"incr": np.zeros(4), "decr": np.zeros(4)})
+                else:
+                    # This circle is primarily B (outside color)
+                    noise_dict = print_noise_percentages.get("B", {"incr": np.zeros(4), "decr": np.zeros(4)})
+
+                incr_percentages = np.array(noise_dict.get("incr", np.zeros(4)))
+                decr_percentages = np.array(noise_dict.get("decr", np.zeros(4)))
+
+                if print_noise_mode == "discrete":
+                    # 3-bucket sampling: choose metamer, increment, or decrement
+                    choice = np.random.choice([0, 1, 2])  # 0=metamer, 1=incr, 2=decr
+                    if choice == 1:
+                        circle_color = circle_color + incr_percentages
+                    elif choice == 2:
+                        circle_color = circle_color + decr_percentages
+                    # choice == 0: keep metamer (no change)
+                else:  # interpolate mode
+                    # 5-bucket sampling: metamer, ±0.5*adjustment, ±1.0*adjustment
+                    choice = np.random.choice([0, 1, 2, 3, 4])  # 0=metamer, 1=+0.5, 2=+1.0, 3=-0.5, 4=-1.0
+                    if choice == 1:
+                        circle_color = circle_color + 0.5 * incr_percentages
+                    elif choice == 2:
+                        circle_color = circle_color + incr_percentages
+                    elif choice == 3:
+                        circle_color = circle_color + 0.5 * decr_percentages
+                    elif choice == 4:
+                        circle_color = circle_color + decr_percentages
+                    # choice == 0: keep metamer (no change)
+
+                circle_color = np.round(circle_color).astype(int)
+            else:
+                # Legacy print noise handling
+                noise_vector = np.full((4), np.random.normal(0, lum_noise))
+                noise_vector = color_space.convert(noise_vector, ColorSpaceType.CONE, ColorSpaceType.PRINT)
+                # lum_dir = lum_dir / np.linalg.norm(lum_dir) * noise_vector
+                circle_color = circle_color + noise_vector
+                circle_color = np.round((circle_color)).astype(int)
 
         if len(circle_color) > 4:
             for i in range(len(channel_draws)):
@@ -319,7 +371,9 @@ def generate_ishihara_plate(
     corner_color: npt.ArrayLike = np.array([255/2, 255/2, 255/2, 255/2, 0, 0]).astype(int),
     background_color: npt.NDArray = np.array([0, 0, 0, 0, 0, 0]),
     blur_radius: float = 1.0,
-    metamer_difference: Optional[float] = None
+    metamer_difference: Optional[float] = None,
+    print_noise_percentages: Optional[dict] = None,
+    print_noise_mode: str = "discrete"
 ) -> List[Image.Image]:
     """
     Generate an Ishihara Plate with specified properties.
@@ -354,6 +408,16 @@ def generate_ishihara_plate(
         Metamer difference for adaptive noise calculation. When provided,
         adaptive noise (metamer_difference/2) is applied to all channels except
         the metameric axis, and lum_noise/s_cone_noise are ignored.
+    print_noise_percentages : Optional[dict]
+        Dictionary specifying print noise adjustments with structure:
+        {"A": {"incr": [c,m,y,k], "decr": [c,m,y,k]}, 
+         "B": {"incr": [c,m,y,k], "decr": [c,m,y,k]}}
+        where A is inside_color and B is outside_color in print percentage space.
+        Only used when input_space == output_space == PRINT.
+    print_noise_mode : str
+        Either "discrete" for 3-bucket sampling (metamer, incr, decr) or
+        "interpolate" for 5-bucket linear interpolation (metamer, ±0.5, ±1.0).
+        Default is "discrete".
     output_space : ColorSpaceType
         Target color space for output.
     gradient : bool
@@ -414,7 +478,8 @@ def generate_ishihara_plate(
     # Draw plate
     _draw_plate(
         circles, inside_props, outside_props, inside_cone, outside_cone, color_space,
-        channel_draws, lum_noise, s_cone_noise, input_space, output_space, metamer_difference
+        channel_draws, lum_noise, s_cone_noise, input_space, output_space, metamer_difference,
+        print_noise_percentages, print_noise_mode
     )
 
     # Draw corner label if provided

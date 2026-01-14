@@ -2,6 +2,8 @@ from importlib import resources
 from typing import List, Union, Optional
 from scipy.spatial import ConvexHull
 from colour import XYZ_to_RGB, wavelength_to_XYZ, MSDS_CMFS, MultiSpectralDistributions
+from colour import XYZ_to_Lab
+from colour.difference import delta_E_CIE2000
 
 import os
 import pickle
@@ -746,6 +748,124 @@ class Observer:
 
     def dist(self, color1: Union[npt.NDArray, Spectra], color2: Union[npt.NDArray, Spectra]):
         return np.linalg.norm(self.observe(color1) - self.observe(color2))
+
+    def get_lms_to_xyz_matrix(self) -> npt.NDArray:
+        """Get the cached LMS to XYZ transformation matrix.
+
+        For tetrachromats (dimension=4), this creates a 3x4 matrix where the Q cone 
+        column (index 2) is all zeros, effectively ignoring that channel.
+
+        The matrix is computed as: M = T_1931 · (T_lms^T · T_lms)^-1 · T_lms^T
+        where T_1931 is the CIE 1931 XYZ color matching functions and 
+        T_lms is the observer's LMS sensor matrix.
+
+        Returns:
+            npt.NDArray: 3 x dimension transformation matrix from LMS to XYZ
+        """
+        if hasattr(self, '_lms_to_xyz_matrix'):
+            return self._lms_to_xyz_matrix
+
+        # Get CIE 1931 XYZ standard observer
+        cmfs = MSDS_CMFS["CIE 1931 2 Degree Standard Observer"]
+        xyz_wavelengths = cmfs.wavelengths
+        xyz_values = cmfs.values  # (N, 3) array: [X, Y, Z] for each wavelength
+
+        # Interpolate XYZ functions to match observer's wavelengths
+        # Create 3 x N matrix where each row is X, Y, or Z as a function of wavelength
+        xyz_matrix = np.zeros((3, len(self.wavelengths)))
+        for i in range(3):
+            xyz_matrix[i, :] = np.interp(self.wavelengths, xyz_wavelengths, xyz_values[:, i])
+
+        # Get LMS sensor matrix (dimension x N matrix)
+        T_lms = self.sensor_matrix  # dimension x N
+
+        # For tetrachromats, we'll compute the matrix but zero out the Q cone column
+        # First, get the indices to use (drop Q cone at index 2)
+        if self.dimension == 4:
+            # Keep indices [0, 1, 3] (S, M, L), drop index 2 (Q)
+            cone_indices = [0, 1, 3]
+            T_lms_reduced = T_lms[cone_indices, :]  # 3 x N
+        else:
+            T_lms_reduced = T_lms
+            cone_indices = list(range(self.dimension))
+
+        # Compute M = T_1931 · T_lms^T · (T_lms · T_lms^T)^-1
+        # This is a least-squares solution
+        T_lms_T = T_lms_reduced.T  # N x 3 (or dimension)
+        gram_matrix = T_lms_reduced @ T_lms_T  # 3 x 3 (or dimension x dimension)
+        gram_inv = np.linalg.inv(gram_matrix)
+
+        # M_reduced = (3 x N) @ (N x 3) @ (3 x 3) = 3 x 3
+        M_reduced = xyz_matrix @ T_lms_T @ gram_inv
+
+        # For tetrachromats, expand to 3 x 4 with column 2 (Q cone) as zeros
+        if self.dimension == 4:
+            M_full = np.zeros((3, 4))
+            for i, cone_idx in enumerate(cone_indices):
+                M_full[:, cone_idx] = M_reduced[:, i]
+            self._lms_to_xyz_matrix = M_full  # 3 x 4 with column 2 as zeros
+        else:
+            self._lms_to_xyz_matrix = M_reduced
+
+        return self._lms_to_xyz_matrix
+
+    def to_lab(self, spectra: Spectra) -> npt.NDArray:
+        """Convert a spectrum to CIE Lab color space.
+
+        For tetrachromats, the transformation matrix has the Q cone column (index 2) as zeros,
+        so the Q cone response doesn't contribute to the XYZ values.
+
+        This method:
+        1. Observes the spectrum in the observer's LMS space
+        2. Transforms LMS to CIE XYZ using a cached transformation matrix
+        3. Converts XYZ to Lab color space
+
+        Args:
+            spectra (Spectra): Input spectrum
+
+        Returns:
+            npt.NDArray: 3-element array [L*, a*, b*] in CIE Lab color space
+        """
+        # Observe spectrum in LMS space
+        lms = self.observe(spectra)  # dimension-vector
+
+        # Transform to XYZ using cached matrix
+        # For tetrachromats, M is 3 x 4 with column 2 (Q cone) as zeros
+        M = self.get_lms_to_xyz_matrix()  # 3 x dimension
+        xyz = M @ lms  # 3-vector
+
+        # Convert XYZ to Lab (using D65 illuminant as standard)
+        lab = XYZ_to_Lab(xyz)
+
+        return lab
+
+    def delta_E(self, a: Spectra, b: Spectra) -> float:
+        """Calculate the perceptual color difference between two spectra using CIE Delta E 2000.
+
+        For tetrachromats, the transformation matrix has the Q cone column (index 2) as zeros,
+        so the Q cone response doesn't contribute to the XYZ values.
+
+        This method:
+        1. Observes both spectra in the observer's LMS space
+        2. Transforms LMS to CIE XYZ using a cached transformation matrix
+        3. Converts XYZ to Lab color space
+        4. Computes Delta E 2000 between the two Lab colors
+
+        Args:
+            a (Spectra): First spectrum
+            b (Spectra): Second spectrum
+
+        Returns:
+            float: Delta E 2000 value representing perceptual color difference
+        """
+        # Convert both spectra to Lab
+        lab_a = self.to_lab(a)
+        lab_b = self.to_lab(b)
+
+        # Calculate Delta E 2000
+        delta_e = delta_E_CIE2000(lab_a, lab_b)
+
+        return float(delta_e)
 
     def get_optimal_reflectances(self) -> List[Spectra]:
         spectras = []
