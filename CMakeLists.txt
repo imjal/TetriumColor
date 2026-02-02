@@ -38,6 +38,8 @@ message(STATUS "Found Python3_LIBRARIES: ${Python3_LIBRARIES}")
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 # Add the source files
 set(SOURCES
     cpp/src/ColorGenerator.cpp
