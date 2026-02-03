@@ -23,14 +23,8 @@ import matplotlib.colors as mcolors
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 
-def compute_rygb_to_rgbo_matrix(primaries):
-    """
-    Compute the transformation matrix from RYGB to RGBO using spectral conversion.
-    Same logic as in convert_rygb_to_rgbo.py
-    """
-    wavelengths = primaries[0].wavelengths
-
-    # Create RYGB basis spectra (step functions)
+def create_rygb_basis_spectra(wavelengths):
+    """Create RYGB basis spectra (step functions)."""
     rygb_basis = []
     # Red: wavelengths >= 608nm
     red_data = (wavelengths >= RYGB_CUTPOINTS[2]).astype(float)
@@ -44,17 +38,54 @@ def compute_rygb_to_rgbo_matrix(primaries):
     # Blue: wavelengths < 493nm
     blue_data = (wavelengths < RYGB_CUTPOINTS[0]).astype(float)
     rygb_basis.append(Spectra(wavelengths=wavelengths, data=blue_data))
+    return rygb_basis
 
-    # Build primary matrix
+
+def convert_rygb_to_rgbo_for_value(rygb, primaries):
+    """Convert a single RYGB value to RGBO by reconstructing the spectrum."""
+    wavelengths = primaries[0].wavelengths
+    rygb_basis = create_rygb_basis_spectra(wavelengths)
+
+    # Reconstruct target spectrum from RYGB coefficients
+    target_spectrum = np.zeros(len(wavelengths))
+    for i in range(4):
+        target_spectrum += rygb[i] * rygb_basis[i].data
+
+    # Build primary matrix and solve for RGBO weights
     primary_matrix = np.array([p.data for p in primaries]).T
+    rgbo_raw, residuals, rank, s = np.linalg.lstsq(primary_matrix, target_spectrum, rcond=None)
 
-    # Solve for transformation matrix
-    transform_matrix = np.zeros((4, 4))
-    for i, rygb_spectrum in enumerate(rygb_basis):
-        weights = np.linalg.lstsq(primary_matrix, rygb_spectrum.data, rcond=None)[0]
-        transform_matrix[:, i] = weights
+    # Normalize RGBO to match RYGB scale
+    rygb_sum = np.sum(np.abs(rygb))
+    rgbo_sum = np.sum(np.abs(rgbo_raw))
 
-    return transform_matrix
+    if rgbo_sum > 0:
+        scale_factor = rygb_sum / rgbo_sum
+        rgbo = rgbo_raw * scale_factor
+    else:
+        rgbo = rgbo_raw
+
+    return rgbo
+
+
+def convert_rgbo_to_rygb_for_spectrum(spectrum, primaries):
+    """Convert a measured spectrum back to RYGB by projecting onto basis."""
+    wavelengths = primaries[0].wavelengths
+    rygb_basis = create_rygb_basis_spectra(wavelengths)
+
+    # Project spectrum onto each RYGB basis function
+    rygb = np.zeros(4)
+    for i in range(4):
+        # Compute inner product (integral of spectrum * basis)
+        rygb[i] = np.sum(spectrum * rygb_basis[i].data)
+
+    # Normalize by basis norms
+    for i in range(4):
+        norm = np.sum(rygb_basis[i].data ** 2)
+        if norm > 0:
+            rygb[i] /= norm
+
+    return rygb
 
 
 def validate_measurements(
@@ -134,22 +165,19 @@ def validate_measurements(
         # Create observer (ColorSpace not needed for validation)
         observer = observer_genotypes.get_observer_for_peaks(genotype)
 
-        # Compute RYGB to RGBO transformation matrix (spectral conversion)
-        rygb_to_rgbo = compute_rygb_to_rgbo_matrix(primaries)
-
         # Prepare to collect RGBO values for this observer
         observer_rgbo_list = []
         observer_expected_rygb = []
         observer_metamer_pairs = []
 
-        # Convert all RYGB metamers to RGBO using spectral transformation
+        # Convert all RYGB metamers to RGBO using spectral reconstruction
         for metamer in obs_data['metamers']:
             rygb_1 = np.array(metamer['rygb_1'])
             rygb_2 = np.array(metamer['rygb_2'])
 
-            # Convert RYGB to RGBO using matrix multiplication
-            rgbo_1 = rygb_to_rgbo @ rygb_1
-            rgbo_2 = rygb_to_rgbo @ rygb_2
+            # Convert RYGB to RGBO by reconstructing spectrum
+            rgbo_1 = convert_rygb_to_rgbo_for_value(rygb_1, primaries)
+            rgbo_2 = convert_rygb_to_rgbo_for_value(rygb_2, primaries)
 
             # Convert to 8-bit
             rgbo_1_8bit = tuple(np.clip(np.round(rgbo_1 * 255), 0, 255).astype(int))
@@ -197,21 +225,9 @@ def validate_measurements(
         measured_lmsq = observer.observe_spectras(valid_spectra_interp)
         measured_rygb_list = []
 
-        # Compute RGBO to RYGB matrix (inverse of RYGB to RGBO)
-        rgbo_to_rygb = np.linalg.inv(rygb_to_rgbo)
-
         for spectrum in valid_spectra_interp:
-            # Convert spectrum to DISP, then to RYGB
-            # First, compute DISP values by solving primaries
-            disp_vals = np.linalg.lstsq(
-                np.array([p.data for p in primaries]).T,
-                spectrum.data,
-                rcond=None
-            )[0]
-
-            # Convert DISP to RYGB using inverse matrix
-            rygb_measured = rgbo_to_rygb @ disp_vals
-
+            # Convert spectrum to RYGB by projecting onto basis functions
+            rygb_measured = convert_rgbo_to_rygb_for_spectrum(spectrum.data, primaries)
             measured_rygb_list.append(rygb_measured)
 
         measured_rygb = np.array(measured_rygb_list)
