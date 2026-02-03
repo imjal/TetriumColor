@@ -60,17 +60,20 @@ def create_rygb_basis_spectra(wavelengths: np.ndarray) -> list:
     return rygb_basis
 
 
-def compute_rygb_to_rgbo_matrix(primaries: list) -> np.ndarray:
+def convert_rygb_to_rgbo_for_value(rygb: np.ndarray, primaries: list) -> np.ndarray:
     """
-    Compute the transformation matrix from RYGB to RGBO.
+    Convert a single RYGB value to RGBO by reconstructing the spectrum.
 
-    For each RYGB basis function, find the RGBO weights that best reproduce it.
+    The RYGB values are coefficients on the RYGB basis functions.
+    We reconstruct the target spectrum, then solve for RGBO weights,
+    and normalize to match the RYGB scale.
 
     Args:
+        rygb: RYGB coefficients (4-element array)
         primaries: List of 4 Spectra objects (R, G, B, O primaries)
 
     Returns:
-        4x4 transformation matrix
+        RGBO weights (4-element array, normalized to similar scale as RYGB)
     """
     # Get wavelengths from primaries
     wavelengths = primaries[0].wavelengths
@@ -78,23 +81,34 @@ def compute_rygb_to_rgbo_matrix(primaries: list) -> np.ndarray:
     # Create RYGB basis spectra
     rygb_basis = create_rygb_basis_spectra(wavelengths)
 
+    # Reconstruct target spectrum from RYGB coefficients
+    target_spectrum = np.zeros(len(wavelengths))
+    for i in range(4):
+        target_spectrum += rygb[i] * rygb_basis[i].data
+
     # Build primary matrix (each column is a primary spectrum)
     primary_matrix = np.array([p.data for p in primaries]).T  # shape: (n_wavelengths, 4)
 
-    # For each RYGB basis, solve for RGBO weights
-    transform_matrix = np.zeros((4, 4))
+    # Solve for RGBO weights that best reproduce target spectrum
+    # primary_matrix @ rgbo = target_spectrum
+    rgbo_raw, residuals, rank, s = np.linalg.lstsq(
+        primary_matrix,
+        target_spectrum,
+        rcond=None
+    )
 
-    for i, rygb_spectrum in enumerate(rygb_basis):
-        # Solve: primary_matrix @ weights = rygb_spectrum.data
-        # Using least squares since it's overdetermined
-        weights, residuals, rank, s = np.linalg.lstsq(
-            primary_matrix,
-            rygb_spectrum.data,
-            rcond=None
-        )
-        transform_matrix[:, i] = weights
+    # Normalize RGBO to match RYGB scale
+    # Find the scaling factor by comparing the sum of intensities
+    rygb_sum = np.sum(np.abs(rygb))
+    rgbo_sum = np.sum(np.abs(rgbo_raw))
 
-    return transform_matrix
+    if rgbo_sum > 0:
+        scale_factor = rygb_sum / rgbo_sum
+        rgbo = rgbo_raw * scale_factor
+    else:
+        rgbo = rgbo_raw
+
+    return rgbo
 
 
 def convert_rygb_to_rgbo(
@@ -143,11 +157,6 @@ def convert_rygb_to_rgbo(
 
     print(f"  Loaded {len(primaries)} primaries")
     print(f"  Wavelength range: {primaries[0].wavelengths[0]}-{primaries[0].wavelengths[-1]} nm")
-
-    # Compute RYGB to RGBO transformation matrix
-    print("\nComputing RYGB → RGBO transformation matrix...")
-    transform_matrix = compute_rygb_to_rgbo_matrix(primaries)
-    print("  Transformation matrix computed")
     print()
 
     # Convert metamers to RGBO
@@ -168,10 +177,9 @@ def convert_rygb_to_rgbo(
             rygb_1 = np.array(metamer['rygb_1'])
             rygb_2 = np.array(metamer['rygb_2'])
 
-            # Convert RYGB to RGBO using the transformation matrix
-            # RGBO = transform_matrix @ RYGB
-            rgbo_1 = transform_matrix @ rygb_1
-            rgbo_2 = transform_matrix @ rygb_2
+            # Convert RYGB to RGBO by reconstructing spectrum and solving for weights
+            rgbo_1 = convert_rygb_to_rgbo_for_value(rygb_1, primaries)
+            rgbo_2 = convert_rygb_to_rgbo_for_value(rygb_2, primaries)
 
             # Clip to [0, 1] and convert to 8-bit
             rgbo_1_8bit = np.clip(np.round(rgbo_1 * 255), 0, 255).astype(int)
