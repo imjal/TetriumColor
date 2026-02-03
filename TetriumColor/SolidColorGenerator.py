@@ -2,6 +2,7 @@ import numpy as np
 from PIL import Image, ImageDraw
 from typing import Tuple
 from TetriumColor.ColorSpace import ColorSpace, ColorSpaceType
+import tifffile
 
 
 class SolidColorGenerator:
@@ -91,7 +92,108 @@ class SolidColorGenerator:
             rgb_img.save(rgb_path)
             ocv_img.save(ocv_path)
             return rgb_path, ocv_path
-    
+
+    def generate_circle_rygb(
+        self,
+        filename_base: str,
+        r: float,
+        g: float,
+        b: float,
+        o: float,
+        image_size: int = 512,
+        circle_radius_ratio: float = 0.8,
+        has_noisy_boundary: bool = False
+    ) -> str:
+        """
+        Generate a solid color circle in RYGB color space and save as TIFF.
+
+        Args:
+            filename_base: Base filename (without extension)
+            r, g, b, o: RGBO color values (0-255 range)
+            image_size: Size of the output image in pixels
+            circle_radius_ratio: Circle radius as ratio of image size (0-1)
+            has_noisy_boundary: Whether to add noise to the circle boundary
+
+        Returns:
+            Path to the generated RYGB TIFF file
+        """
+        # Normalize RGBO to 0-1 range
+        rgbo_normalized = np.array([r, g, b, o]) / 255.0
+
+        # Convert RGBO (DISP space) to RYGB (maxbasis)
+        rgbo_point = rgbo_normalized.reshape(1, 4)
+        rygb_color = self.color_space.convert(
+            rgbo_point,
+            from_space=ColorSpaceType.DISP,
+            to_space=ColorSpaceType.RYGB
+        )[0]  # Get first (and only) point
+
+        # Create RYGB circle image (4-channel float32)
+        rygb_img = self._create_circle_image_rygb(
+            image_size,
+            circle_radius_ratio,
+            rygb_color,
+            has_noisy_boundary
+        )
+
+        # Save as TIFF (4-channel 32-bit float)
+        tiff_path = filename_base + "_RYGB.tiff"
+        tifffile.imwrite(tiff_path, rygb_img, photometric='rgb')
+
+        return tiff_path
+
+    def _create_circle_image_rygb(
+        self,
+        size: int,
+        radius_ratio: float,
+        rygb_color: np.ndarray,
+        has_noisy_boundary: bool
+    ) -> np.ndarray:
+        """
+        Create a single circle image in RYGB color space.
+
+        Args:
+            size: Image size in pixels
+            radius_ratio: Circle radius as ratio of image size
+            rygb_color: RYGB color array (4 channels, 0-1 range)
+            has_noisy_boundary: Whether to add noise to boundary
+
+        Returns:
+            numpy array of shape (size, size, 4) with float32 dtype
+        """
+        # Create black background (4 channels)
+        img = np.zeros((size, size, 4), dtype=np.float32)
+
+        # Calculate circle parameters
+        center = size // 2
+        radius = int(size * radius_ratio / 2)
+
+        # Create coordinate grid
+        y, x = np.ogrid[:size, :size]
+        dx = x - center
+        dy = y - center
+        dist = np.sqrt(dx*dx + dy*dy)
+
+        # Create circle mask
+        circle_mask = dist <= radius
+
+        # Fill circle with RYGB color
+        for ch in range(4):
+            img[:, :, ch][circle_mask] = rygb_color[ch]
+
+        # Optional: Add noisy boundary
+        if has_noisy_boundary:
+            # Add noise in a band near the radius
+            noise_mask = np.abs(dist - radius) < 5
+            for ch in range(4):
+                noise = np.random.normal(0, 0.02, (size, size))  # 2% noise
+                img[:, :, ch][noise_mask] = np.clip(
+                    img[:, :, ch][noise_mask] + noise[noise_mask],
+                    0.0, 1.0
+                )
+
+        return img
+
     def _create_circle_image(
         self,
         size: int,

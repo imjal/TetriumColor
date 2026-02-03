@@ -296,6 +296,170 @@ double TestGenerator::GetDoubleFromDict(PyObject* dict, const char* key, double 
     return default_val;
 }
 
+std::optional<TrialData> TestGenerator::NewTrialRYGB(
+    const std::string& filename,
+    const std::string& hidden_symbol,
+    float lum_noise,
+    float s_cone_noise,
+    float background_luminance,
+    float dot_size,
+    float degree,
+    const std::string& genotype,
+    int metameric_axis
+)
+{
+    if (!pInstance) {
+        throw std::runtime_error("TestGenerator: Python instance is null");
+    }
+
+    // Call Python NewTestRYGB method using PyObject_Call with tuple and kwargs
+    PyObject* pMethod = PyObject_GetAttrString(pInstance, "NewTestRYGB");
+    if (!pMethod) {
+        PyErr_Print();
+        throw std::runtime_error("TestGenerator: Failed to get NewTestRYGB method");
+    }
+
+    // Build positional arguments tuple: (filename, hidden_symbol)
+    PyObject* pArgs = PyTuple_New(2);
+    PyTuple_SetItem(pArgs, 0, PyUnicode_FromString(filename.c_str()));
+    PyTuple_SetItem(pArgs, 1, PyUnicode_FromString(hidden_symbol.c_str()));
+
+    // Build keyword arguments dict
+    PyObject* pKwargs = PyDict_New();
+    PyDict_SetItemString(pKwargs, "lum_noise", PyFloat_FromDouble(lum_noise));
+    PyDict_SetItemString(pKwargs, "s_cone_noise", PyFloat_FromDouble(s_cone_noise));
+    PyDict_SetItemString(pKwargs, "background_luminance", PyFloat_FromDouble(background_luminance));
+    PyDict_SetItemString(pKwargs, "dot_size", PyFloat_FromDouble(dot_size));
+    PyDict_SetItemString(pKwargs, "degree", PyFloat_FromDouble(degree));
+
+    // Add optional genotype and metameric_axis if provided
+    if (!genotype.empty()) {
+        PyObject* pGenotype
+            = PyRun_String(genotype.c_str(), Py_eval_input, PyDict_New(), PyDict_New());
+        if (pGenotype) {
+            PyDict_SetItemString(pKwargs, "genotype", pGenotype);
+        } else {
+            PyErr_Clear();
+        }
+    }
+    if (metameric_axis >= 0) {
+        PyDict_SetItemString(pKwargs, "metameric_axis", PyLong_FromLong(metameric_axis));
+    }
+
+    PyObject* pResult = PyObject_Call(pMethod, pArgs, pKwargs);
+
+    Py_DECREF(pMethod);
+    Py_DECREF(pArgs);
+    Py_DECREF(pKwargs);
+
+    if (!pResult) {
+        PyErr_Print();
+        throw std::runtime_error("TestGenerator: Failed to call NewTestRYGB()");
+    }
+
+    // Parse the returned dict to TrialData
+    TrialData trial_data = ParseDictToTrialData(pResult);
+    Py_DECREF(pResult);
+
+    return trial_data;
+}
+
+std::optional<TrialData> TestGenerator::GetNextTrialRYGB(
+    ColorTestResult previous_result,
+    const std::string& filename,
+    const std::string& hidden_symbol,
+    float lum_noise,
+    float s_cone_noise,
+    float background_luminance,
+    float dot_size,
+    float degree
+)
+{
+    if (!pInstance) {
+        throw std::runtime_error("TestGenerator: Python instance is null");
+    }
+
+    // Import ColorTestResult enum from Python
+    PyObject* pModule = PyImport_ImportModule("TetriumColor.Utils.CustomTypes");
+    if (!pModule) {
+        PyErr_Print();
+        throw std::runtime_error("TestGenerator: Failed to import CustomTypes module");
+    }
+
+    PyObject* pColorTestResultClass = PyObject_GetAttrString(pModule, "ColorTestResult");
+    Py_DECREF(pModule);
+
+    if (!pColorTestResultClass) {
+        PyErr_Print();
+        throw std::runtime_error("TestGenerator: Failed to get ColorTestResult class");
+    }
+
+    // Get the appropriate enum value
+    const char* result_name;
+    if (previous_result == ColorTestResult::Success) {
+        result_name = "Success";
+    } else if (previous_result == ColorTestResult::Failure) {
+        result_name = "Failure";
+    } else if (previous_result == ColorTestResult::NoAnswer) {
+        result_name = "NoAnswer";
+    } else {
+        Py_DECREF(pColorTestResultClass);
+        throw std::runtime_error("TestGenerator: Unknown ColorTestResult value");
+    }
+    PyObject* pPreviousResult = PyObject_GetAttrString(pColorTestResultClass, result_name);
+    Py_DECREF(pColorTestResultClass);
+
+    if (!pPreviousResult) {
+        PyErr_Print();
+        throw std::runtime_error("TestGenerator: Failed to get ColorTestResult enum value");
+    }
+
+    // Call Python GetTestRYGB method
+    PyObject* pMethod = PyObject_GetAttrString(pInstance, "GetTestRYGB");
+    if (!pMethod) {
+        Py_DECREF(pPreviousResult);
+        PyErr_Print();
+        throw std::runtime_error("TestGenerator: Failed to get GetTestRYGB method");
+    }
+
+    // Build positional arguments tuple
+    PyObject* pArgs = PyTuple_New(3);
+    PyTuple_SetItem(pArgs, 0, pPreviousResult); // Steals reference
+    PyTuple_SetItem(pArgs, 1, PyUnicode_FromString(filename.c_str()));
+    PyTuple_SetItem(pArgs, 2, PyUnicode_FromString(hidden_symbol.c_str()));
+
+    // Build keyword arguments dict
+    PyObject* pKwargs = PyDict_New();
+    PyDict_SetItemString(pKwargs, "lum_noise", PyFloat_FromDouble(lum_noise));
+    PyDict_SetItemString(pKwargs, "s_cone_noise", PyFloat_FromDouble(s_cone_noise));
+    PyDict_SetItemString(pKwargs, "background_luminance", PyFloat_FromDouble(background_luminance));
+    PyDict_SetItemString(pKwargs, "dot_size", PyFloat_FromDouble(dot_size));
+    PyDict_SetItemString(pKwargs, "degree", PyFloat_FromDouble(degree));
+
+    PyObject* pResult = PyObject_Call(pMethod, pArgs, pKwargs);
+
+    Py_DECREF(pMethod);
+    Py_DECREF(pArgs);
+    Py_DECREF(pKwargs);
+
+    if (!pResult) {
+        PyErr_Print();
+        throw std::runtime_error("TestGenerator: Failed to call GetTestRYGB()");
+    }
+
+    // Check if Python returned None (test complete)
+    if (pResult == Py_None) {
+        Py_DECREF(pResult);
+        return std::nullopt;
+    }
+
+    // Parse the returned dict to TrialData
+    TrialData trial_data = ParseDictToTrialData(pResult);
+    Py_DECREF(pResult);
+
+    return trial_data;
+}
+
 TrialData TestGenerator::ParseDictToTrialData(PyObject* dict)
 {
     if (!PyDict_Check(dict)) {
@@ -310,6 +474,7 @@ TrialData TestGenerator::ParseDictToTrialData(PyObject* dict)
         trial.genotype = GetStringFromDict(dict, "genotype", "");
         trial.metameric_axis = GetIntFromDict(dict, "metameric_axis", -1);
         trial.rgb_path = GetStringFromDict(dict, "rgb_path", "");
+        trial.rygb_path = GetStringFromDict(dict, "rygb_path", "");
         trial.ocv_path = GetStringFromDict(dict, "ocv_path", "");
         trial.hidden_symbol = GetStringFromDict(dict, "hidden_symbol", "");
         trial.intensity = GetDoubleFromDict(dict, "intensity", 1.0);

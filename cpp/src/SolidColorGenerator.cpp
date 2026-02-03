@@ -245,4 +245,67 @@ std::pair<std::string, std::string> SolidColorGenerator::GenerateCircle(
     return {rgb_path, ocv_path};
 }
 
+std::string SolidColorGenerator::GenerateCircleRYGB(
+    const std::string& filename_base,
+    float r,
+    float g,
+    float b,
+    float o,
+    int image_size,
+    float circle_radius_ratio,
+    bool has_noisy_boundary
+)
+{
+    if (pInstance == nullptr) {
+        printf("SolidColorGenerator instance is null\n");
+        return "";
+    }
+
+    // Call the generate_circle_rygb method
+    // Format: s=string, f=float (x4), i=int, f=float, i=int (for bool)
+    PyObject* pResult = PyObject_CallMethod(
+        reinterpret_cast<PyObject*>(pInstance),
+        "generate_circle_rygb",
+        "sffffifi",
+        filename_base.c_str(),
+        r,
+        g,
+        b,
+        o,
+        image_size,
+        circle_radius_ratio,
+        has_noisy_boundary ? 1 : 0  // Pass as int (Python will convert to bool)
+    );
+
+    if (!pResult) {
+        PyErr_Print();
+        printf("Failed to call generate_circle_rygb method\n");
+        return "";
+    }
+
+    // Check if result is a string
+    if (!PyUnicode_Check(pResult)) {
+        printf("generate_circle_rygb did not return a string\n");
+        Py_DECREF(pResult);
+        return "";
+    }
+
+    // Extract the returned path
+    const char* path_cstr = PyUnicode_AsUTF8(pResult);
+
+    if (!path_cstr) {
+        printf("Failed to convert path to string\n");
+        Py_DECREF(pResult);
+        return "";
+    }
+
+    std::string rygb_path = path_cstr;
+
+    printf("Generated RYGB texture: %s\n", rygb_path.c_str());
+
+    Py_DECREF(pResult);
+
+    return rygb_path;
+}
+
 } // namespace TetriumColor

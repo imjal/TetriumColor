@@ -47,6 +47,30 @@ class TestGenerator
         float degree = 4.0f
     );
 
+    // RYGB-specific versions (output RYGB textures instead of display space)
+    std::optional<TrialData> NewTrialRYGB(
+        const std::string& filename,
+        const std::string& hidden_symbol = "",
+        float lum_noise = 0.0f,
+        float s_cone_noise = 0.0f,
+        float background_luminance = 0.5f,
+        float dot_size = 1.0f,
+        float degree = 4.0f,
+        const std::string& genotype = "",
+        int metameric_axis = -1
+    );
+
+    std::optional<TrialData> GetNextTrialRYGB(
+        ColorTestResult previous_result,
+        const std::string& filename,
+        const std::string& hidden_symbol,
+        float lum_noise = 0.0f,
+        float s_cone_noise = 0.0f,
+        float background_luminance = 0.5f,
+        float dot_size = 1.0f,
+        float degree = 4.0f
+    );
+
     // Get genotypes list (for CircleGridGenerator and similar)
     // Returns empty vector if method doesn't exist
     std::vector<std::string> GetGenotypes();
