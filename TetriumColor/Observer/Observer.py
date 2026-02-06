@@ -867,6 +867,142 @@ class Observer:
 
         return float(delta_e)
 
+    def rnl_distance(self,
+                     a: Union[npt.NDArray, Spectra],
+                     b: Union[npt.NDArray, Spectra],
+                     background: Optional[Union[npt.NDArray, Spectra]] = None,
+                     eta: Optional[Union[float, npt.NDArray]] = None) -> float:
+        """Calculate the Receptor Noise Limited (RNL) distance between two stimuli.
+
+        The RNL model assumes Weber's law noise and uses logarithmic receptor excitations.
+        Distance formula: ΔS² = Σᵢ (Δfᵢ)² / ωᵢ²
+        where fᵢ = ln(Qᵢ/Qᵢ,₀) and ωᵢ² = 1/(ηᵢ · Qᵢ,₀)
+
+        Two stimuli are considered discriminable when ΔS > 1.
+
+        Args:
+            a: First stimulus (quantum catches or Spectra)
+            b: Second stimulus (quantum catches or Spectra)
+            background: Background/adapting stimulus (defaults to illuminant if None)
+            eta: Receptor efficiency factors (scalar or array). Defaults to 1.0 for all receptors.
+                 Higher eta means lower noise.
+
+        Returns:
+            float: RNL distance ΔS
+
+        Note:
+            This model breaks down for very dark stimuli where quantum catches approach zero.
+        """
+        # Convert inputs to quantum catches if needed
+        if isinstance(a, Spectra):
+            q1 = self.observe(a)
+        else:
+            q1 = np.asarray(a)
+
+        if isinstance(b, Spectra):
+            q2 = self.observe(b)
+        else:
+            q2 = np.asarray(b)
+
+        # Handle background
+        if background is None:
+            # Use illuminant as background (white point)
+            q0 = np.ones(self.dimension)
+        elif isinstance(background, Spectra):
+            q0 = self.observe(background)
+        else:
+            q0 = np.asarray(background)
+
+        # Handle eta (receptor efficiency)
+        if eta is None:
+            eta = np.ones(self.dimension)
+        elif isinstance(eta, (int, float)):
+            eta = np.ones(self.dimension) * eta
+        else:
+            eta = np.asarray(eta)
+
+        # Check for zero or negative quantum catches
+        if np.any(q1 <= 0) or np.any(q2 <= 0) or np.any(q0 <= 0):
+            raise ValueError("RNL model undefined for zero or negative quantum catches. "
+                             "Consider using Poisson model for dark stimuli.")
+
+        # Compute log receptor excitations relative to background
+        f1 = np.log(q1 / q0)
+        f2 = np.log(q2 / q0)
+        delta_f = f2 - f1
+
+        # Noise variance: ω² = 1/(η · Q₀)
+        omega_squared = 1.0 / (eta * q0)
+
+        # RNL distance: ΔS² = Σ (Δf)² / ω²
+        delta_s_squared = np.sum(delta_f**2 / omega_squared)
+
+        return float(np.sqrt(delta_s_squared))
+
+    def poisson_distance(self,
+                         a: Union[npt.NDArray, Spectra],
+                         b: Union[npt.NDArray, Spectra],
+                         dark_noise: Optional[Union[float, npt.NDArray]] = None) -> float:
+        """Calculate the Poisson noise model discriminability (d') between two stimuli.
+
+        The Poisson model is based on photon shot noise statistics. It works across all
+        light levels and handles dark stimuli gracefully.
+
+        Without dark noise:
+            (d')² = 2 Σᵢ (Q₂,ᵢ - Q₁,ᵢ)² / (Q₁,ᵢ + Q₂,ᵢ)
+
+        With dark noise:
+            (d')² = Σᵢ (Q₂,ᵢ - Q₁,ᵢ)² / [(Q₁,ᵢ + Q₂,ᵢ)/2 + σ²_dark,ᵢ]
+
+        Args:
+            a: First stimulus (quantum catches or Spectra)
+            b: Second stimulus (quantum catches or Spectra)
+            dark_noise: Dark noise variance (scalar or array). If None, uses pure Poisson model.
+                       If provided, uses Poisson + dark noise model.
+
+        Returns:
+            float: Discriminability index d'
+
+        Note:
+            d' ≥ 1 indicates reliably discriminable stimuli (~76% correct in 2AFC).
+            d' ≥ 1.5-2 indicates easily discriminable stimuli (~85-92% correct).
+        """
+        # Convert inputs to quantum catches if needed
+        if isinstance(a, Spectra):
+            q1 = self.observe(a)
+        else:
+            q1 = np.asarray(a)
+
+        if isinstance(b, Spectra):
+            q2 = self.observe(b)
+        else:
+            q2 = np.asarray(b)
+
+        # Ensure non-negative quantum catches
+        q1 = np.maximum(q1, 0)
+        q2 = np.maximum(q2, 0)
+
+        delta_q = q2 - q1
+
+        if dark_noise is None:
+            # Pure Poisson model: (d')² = 2 Σ (ΔQ)² / (Q₁ + Q₂)
+            denominator = q1 + q2
+            # Avoid division by zero for completely black stimuli
+            denominator = np.maximum(denominator, 1e-10)
+            d_prime_squared = 2.0 * np.sum(delta_q**2 / denominator)
+        else:
+            # Poisson + dark noise model
+            if isinstance(dark_noise, (int, float)):
+                dark_noise = np.ones(self.dimension) * dark_noise
+            else:
+                dark_noise = np.asarray(dark_noise)
+
+            # (d')² = Σ (ΔQ)² / [(Q₁ + Q₂)/2 + σ²_dark]
+            denominator = (q1 + q2) / 2.0 + dark_noise**2
+            d_prime_squared = np.sum(delta_q**2 / denominator)
+
+        return float(np.sqrt(d_prime_squared))
+
     def get_optimal_reflectances(self) -> List[Spectra]:
         spectras = []
         for cuts, start in self.facet_ids:

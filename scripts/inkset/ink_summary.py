@@ -10,7 +10,7 @@ from TetriumColor import ColorSpace, ColorSpaceType, PolyscopeDisplayType
 from library_registry import registry
 import numpy as np
 import numpy.typing as npt
-from typing import Dict, Tuple, List
+from typing import Dict, Tuple, List, Optional
 import argparse
 import os
 import sys
@@ -19,6 +19,41 @@ from itertools import product, repeat
 
 # Add the project root to the path
 sys.path.append(str(Path(__file__).parent.parent.parent))
+
+
+def try_load_display_primaries() -> Optional[List[Spectra]]:
+    """Try to load display primaries from common measurement directories."""
+    try:
+        from TetriumColor.Measurement import load_primaries_from_csv
+
+        # Try common measurement directories (most recent first)
+        base_path = Path(__file__).parent.parent.parent
+        possible_dirs = [
+            base_path / "measurements" / "2025-12-02" / "primaries",
+            base_path / "measurements" / "2025-12-01" / "primaries",
+            base_path / "measurements" / "2025-11-25" / "primaries",
+            base_path / "measurements" / "2025-11-24" / "primaries",
+            base_path / "measurements" / "2025-11-14" / "primaries",
+            base_path / "measurements" / "2025-10-13" / "primaries",
+            base_path / "measurements" / "2025-10-12" / "primaries",
+            base_path / "measurements" / "2025-10-11" / "primaries",
+            base_path / "measurements" / "2025-10-10" / "primaries",
+            base_path / "measurements" / "2025-10-03" / "primaries",
+        ]
+
+        for primaries_dir in possible_dirs:
+            if primaries_dir.exists() and primaries_dir.is_dir():
+                try:
+                    primaries = load_primaries_from_csv(str(primaries_dir), extract_zero=False)
+                    if primaries and len(primaries) >= 3:
+                        print(f"Loaded display primaries from {primaries_dir}")
+                        return primaries
+                except Exception:
+                    continue
+
+        return None
+    except ImportError:
+        return None
 
 
 # Import optional visualization dependencies
@@ -709,7 +744,10 @@ def analyze_ink_library(library_name: str, args):
         # Set up observer and color space (needed for all modes)
         d65 = Illuminant.get("d65")
         tetrachromat = Observer.tetrachromat(wavelengths=np.arange(400, 710, 10))
-        cs = ColorSpace(tetrachromat)
+
+        # Try to load display primaries for visualization
+        display_primaries = try_load_display_primaries()
+        cs = ColorSpace(tetrachromat, display_primaries=display_primaries)
 
         # Check if user wants to analyze specific inks directly
         analyze_inks = args.analyze_inks if hasattr(args, 'analyze_inks') and args.analyze_inks else []
@@ -781,6 +819,72 @@ def analyze_ink_library(library_name: str, args):
             print(f"Direct analysis complete!")
             print(f"Results saved in {results_dir}/")
             print(f"{'='*60}\n")
+
+            # Visualization for direct analysis (only if tetrapolyscope is available)
+            if HAS_VISUALIZATION:
+                point_cloud = results['point_cloud']
+                all_inks_as_points = tetrachromat.observe_spectras(inkset_library.spectra_objs)
+                all_inks_point_cloud = cs.convert(all_inks_as_points, ColorSpaceType.CONE, ColorSpaceType.HERING)[:, 1:]
+                all_inks_srgbs = cs.convert(all_inks_as_points, ColorSpaceType.CONE, ColorSpaceType.SRGB)
+
+                ps.init()
+                ps.set_always_redraw(False)
+                ps.set_ground_plane_mode('shadow_only')
+                ps.set_SSAA_factor(2)
+                ps.set_window_size(720, 720)
+
+                if args.which_dir == 'q':
+                    ps.set_up_dir('z_up')
+                    ps.set_front_dir('y_front')
+                    metameric_axis = cs.get_metameric_axis_in(ColorSpaceType.HERING)
+                    rotation_mat = np.eye(4)
+                    rotation_mat[:3, :3] = np.linalg.inv(viz.RotateToZAxis(metameric_axis[1:]))
+                    rotation_mat = rotation_mat.T
+                elif args.which_dir == 'saq':
+                    ps.set_up_dir('z_up')
+                    ps.set_front_dir('y_front')
+                    saq = np.array([[1, 0, 1, 0]])
+                    saq_in_hering = cs.convert(saq, ColorSpaceType.MAXBASIS, ColorSpaceType.HERING)[0, 1:]
+                    rotation_mat = np.eye(4)
+                    rotation_mat[:3, :3] = np.linalg.inv(viz.RotateToZAxis(saq_in_hering))
+                    rotation_mat = rotation_mat.T
+                    ps.set_ground_plane_height_factor(0.2, False)
+                else:
+                    rotation_mat = np.eye(4)
+
+                factor = 0.1575
+                viz.ps.set_background_color((factor, factor, factor, 1))
+
+                viz.RenderRYGBGamut("observer", cs, PolyscopeDisplayType.HERING_MAXBASIS)
+                viz.ps.get_surface_mesh("observer").set_transparency(0.3)
+                viz.ps.get_surface_mesh("observer").set_transform(rotation_mat)
+                viz.RenderPointCloud("points_k4", cs.convert(
+                    point_cloud[::10], ColorSpaceType.CONE, ColorSpaceType.HERING)[:, 1:], mode="sphere")
+                viz.ps.get_point_cloud("points_k4").set_transform(rotation_mat)
+
+                viz.RenderPointCloud("all_inks", all_inks_point_cloud, all_inks_srgbs)
+                viz.ps.get_point_cloud("all_inks").set_transform(rotation_mat)
+                viz.RenderMetamericDirection("meta_dir", tetrachromat, PolyscopeDisplayType.HERING_MAXBASIS, 2,
+                                             np.array([0, 0, 0]), radius=0.005, scale=1.2)
+                viz.ps.get_curve_network("meta_dir").set_transform(rotation_mat)
+
+                viz.AnimationUtils.AddObject("observer", "surface_mesh",
+                                             args.position, args.velocity, args.rotation_axis, args.rotation_speed)
+                viz.AnimationUtils.AddObject("points_k4", "point_cloud",
+                                             args.position, args.velocity, args.rotation_axis, args.rotation_speed)
+                viz.AnimationUtils.AddObject("all_inks", "point_cloud",
+                                             args.position, args.velocity, args.rotation_axis, args.rotation_speed)
+                viz.AnimationUtils.AddObject("meta_dir", "curve_network",
+                                             args.position, args.velocity, args.rotation_axis, args.rotation_speed)
+
+                # Save video if requested
+                if hasattr(args, 'total_frames') and args.total_frames > 0:
+                    fd = viz.OpenVideo(os.path.join(results_dir, f"inkset_summary_{library_name}.mp4"))
+                    viz.RenderVideo(fd, args.total_frames, args.fps)
+                    viz.CloseVideo(fd)
+            else:
+                print("Skipping 3D visualization (tetrapolyscope not available)")
+
             return
 
         # Standard search mode
@@ -838,7 +942,8 @@ def analyze_ink_library(library_name: str, args):
                 marker = " [FIXED]" if ink_name in fixed_inks else ""
                 f.write(f"{i:2d}. {ink_name}{marker}\n")
 
-        cs = ColorSpace(tetrachromat)
+        # Use the ColorSpace already created (with primaries if available)
+        # cs is already defined in outer scope
 
         # Analyze top 10 gamuts
         print(f"\n{'='*60}")
@@ -1020,7 +1125,8 @@ def analyze_ink_library(library_name: str, args):
             factor = 0.1575  # 0.1/5.25
             viz.ps.set_background_color((factor, factor, factor, 1))
 
-            viz.RenderOBS("observer", cs, PolyscopeDisplayType.HERING_MAXBASIS, num_samples=1000)
+            # viz.RenderOBS("observer", cs, PolyscopeDisplayType.HERING_MAXBASIS, num_samples=1000)
+            viz.RenderRYGBGamut("observer", cs, PolyscopeDisplayType.HERING_MAXBASIS)
             viz.ps.get_surface_mesh("observer").set_transparency(0.3)
             viz.ps.get_surface_mesh("observer").set_transform(rotation_mat)
             viz.RenderPointCloud("points_k4", cs.convert(

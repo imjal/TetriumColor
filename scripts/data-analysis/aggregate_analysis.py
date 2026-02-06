@@ -250,6 +250,106 @@ def analyze_pseudoisochromatic(df, output_dir, subject_id):
     print(f"  Saved: {output_path}")
 
 
+def plot_pseudoisochromatic_clean(df, output_dir, subject_id):
+    """Create a clean, single-graph visualization with genotypes on x-axis."""
+    # Check if metameric_axis exists
+    if 'metameric_axis' not in df.columns:
+        print(f"    Warning: No 'metameric_axis' column found, skipping analysis")
+        return
+
+    # Create genotype tuple (if genotype columns exist)
+    if 'genotype_1' in df.columns and 'genotype_2' in df.columns:
+        df['genotype'] = df.apply(lambda row: f"({row['genotype_1']}, {row['genotype_2']})", axis=1)
+    else:
+        df['genotype'] = 'Unknown'
+
+    # Filter out (nan, nan) genotypes
+    df = df[df['genotype'] != '(nan, nan)']
+
+    # Calculate accuracy and counts by genotype and metameric_axis
+    grouped = df.groupby(['genotype', 'metameric_axis']).agg({
+        'correct': ['mean', 'sum', 'count']
+    }).reset_index()
+    grouped.columns = ['genotype', 'metameric_axis', 'accuracy', 'n_correct', 'n_total']
+
+    # Get unique genotypes and metameric axes
+    genotypes = sorted(grouped['genotype'].unique())
+    metameric_axes = sorted(grouped['metameric_axis'].unique())
+
+    # Map axis numbers to labels
+    axis_labels = {0: 'S', 1: 'M', 2: 'Q', 3: 'L'}
+
+    # Create single figure
+    fig, ax = plt.subplots(figsize=(max(10, len(genotypes) * 2), 4.0))
+
+    # Color palette for metameric axes
+    colors = plt.cm.viridis(np.linspace(0.2, 0.9, len(metameric_axes)))
+
+    # Bar width and positions
+    bar_width = 0.8 / len(metameric_axes)
+    x = np.arange(len(genotypes))
+
+    # Plot grouped bars
+    for i, axis in enumerate(metameric_axes):
+        axis_data = grouped[grouped['metameric_axis'] == axis]
+        accuracies = []
+        n_correct_list = []
+        n_total_list = []
+
+        for genotype in genotypes:
+            geno_data = axis_data[axis_data['genotype'] == genotype]
+            if len(geno_data) > 0:
+                accuracies.append(geno_data['accuracy'].values[0])
+                n_correct_list.append(geno_data['n_correct'].values[0])
+                n_total_list.append(geno_data['n_total'].values[0])
+            else:
+                accuracies.append(0)
+                n_correct_list.append(0)
+                n_total_list.append(0)
+
+        offset = (i - len(metameric_axes)/2 + 0.5) * bar_width
+        bars = ax.bar(x + offset, accuracies, bar_width,
+                      label=axis_labels.get(axis, f'Axis {axis}'), color=colors[i],
+                      alpha=0.85, edgecolor='black', linewidth=1.2)
+
+        # Add value labels
+        for j, (bar, acc, nc, nt) in enumerate(zip(bars, accuracies, n_correct_list, n_total_list)):
+            if acc > 0:
+                height = bar.get_height()
+                ax.text(bar.get_x() + bar.get_width()/2., height + 0.01,
+                        f'{acc:.0%}', ha='center', va='bottom',
+                        fontsize=9, fontweight='bold')
+
+    # Add chance line (25% for 4AFC)
+    ax.axhline(y=0.25, color='#D62728', linestyle='--', linewidth=2.5,
+               label='Chance (25%)', alpha=0.8, zorder=0)
+
+    # Styling
+    ax.set_xlabel('Genotype', fontsize=14, fontweight='bold')
+    ax.set_ylabel('Accuracy', fontsize=14, fontweight='bold')
+    ax.set_title(f'Pseudoisochromatic Plate Test - {subject_id}',
+                 fontsize=16, fontweight='bold', pad=20)
+    ax.set_xticks(x)
+    ax.set_xticklabels(genotypes, fontsize=12)
+    ax.set_ylim(0, 1.05)
+    ax.grid(True, alpha=0.3, axis='y', linestyle=':', linewidth=1)
+    ax.legend(fontsize=11, loc='upper center', bbox_to_anchor=(0.5, -0.38),
+              ncol=5, framealpha=0.95, edgecolor='black', columnspacing=1.0)
+
+    # Spine styling
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.spines['left'].set_linewidth(1.5)
+    ax.spines['bottom'].set_linewidth(1.5)
+
+    plt.tight_layout()
+    output_path = output_dir / 'AppPseudoIsochromaticTest_Clean.png'
+    plt.savefig(output_path, dpi=300, bbox_inches='tight', facecolor='white')
+    plt.close()
+
+    print(f"  Saved: {output_path}")
+
+
 def analyze_scrambled_face(df, output_dir, subject_id):
     """Analyze AppScrambledFaceTest data (3AFC, 33% guessing rate)."""
     # Check if metameric_axis exists
@@ -367,6 +467,7 @@ def analyze_subject(subject_id, task_files, results_dir):
             analyze_temporal_afc(df, subject_dir, subject_id)
         elif task_name == 'AppPseudoIsochromaticTest':
             analyze_pseudoisochromatic(df, subject_dir, subject_id)
+            plot_pseudoisochromatic_clean(df, subject_dir, subject_id)
         elif task_name == 'AppScrambledFaceTest':
             analyze_scrambled_face(df, subject_dir, subject_id)
         else:
@@ -399,6 +500,7 @@ def aggregate_across_subjects(latest_files, results_dir):
             analyze_temporal_afc(combined_df, aggregate_dir, 'All Subjects')
         elif task_name == 'AppPseudoIsochromaticTest':
             analyze_pseudoisochromatic(combined_df, aggregate_dir, 'All Subjects')
+            plot_pseudoisochromatic_clean(combined_df, aggregate_dir, 'All Subjects')
         elif task_name == 'AppScrambledFaceTest':
             analyze_scrambled_face(combined_df, aggregate_dir, 'All Subjects')
 
