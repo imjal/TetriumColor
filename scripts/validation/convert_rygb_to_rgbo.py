@@ -146,7 +146,7 @@ def convert_rygb_to_rgbo(
 
     if primaries_path_obj.is_dir():
         # Directory containing primary measurements
-        primaries = load_primaries_from_csv(str(primaries_path))
+        primaries = load_primaries_from_csv(str(primaries_path), extract_zero=False)
     elif primaries_path_obj.is_file() and primaries_path_obj.suffix == '.csv':
         raise NotImplementedError("Single CSV file loading not yet implemented. Please provide a directory.")
     else:
