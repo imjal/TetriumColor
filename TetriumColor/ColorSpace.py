@@ -45,7 +45,8 @@ class ColorSpaceType(Enum):
     """ColorSpaceType is the core of the color space system. It defines the different types of color spaces
     that can be used in the system. Each color space type is represented by a string value.
     """
-    VSH = "vsh"  # Value-Saturation-Hue
+    VSH = "vsh"  # Value-Saturation-Hue (for DISP/MAXBASIS)
+    VSH_RYGB = "vsh_rygb"  # Value-Saturation-Hue (for RYGB basis)
     HERING = "hering"  # Hering opponent color space
     MAXBASIS = "maxbasis"  # Display space (RYGB)
     CONE = "cone"  # Cone responses (SMQL)
@@ -322,6 +323,13 @@ class ColorSpace:
         # hering_to_disp = cone_to_disp @ inv(cone_to_hering)
         return cone_to_disp @ np.linalg.inv(cone_to_hering)
 
+    def _get_hering_to_rygb(self) -> npt.NDArray:
+        """Compute HERING->RYGB transformation matrix."""
+        cone_to_hering = self._get_cone_to_hering()
+        cone_to_rygb = self._get_cone_to_rygb()
+        # hering_to_rygb = cone_to_rygb @ inv(cone_to_hering)
+        return cone_to_rygb @ np.linalg.inv(cone_to_hering)
+
     def _get_maxbasis_to_disp(self) -> npt.NDArray:
         """Compute MAXBASIS->DISP transformation matrix."""
         cone_to_maxbasis = self._get_cone_to_maxbasis()
@@ -342,9 +350,9 @@ class ColorSpace:
             float: Maximum luminance value in HERING space
         """
         if self._max_L is None:
-            if self.display_primaries is None:
-                # Without display primaries, use unit cone response
-                white_cone = np.ones(self.dim)
+            # if self.display_primaries is None:
+            # Without display primaries, use unit cone response
+            white_cone = np.ones(self.dim)
             # else:
             #     # Convert maximum display point to cone space
             #     max_disp = np.ones(self.dim)
@@ -373,7 +381,7 @@ class ColorSpace:
         metameric_axis[metameric_axis_num] = 1
 
         direction = self.convert(metameric_axis, ColorSpaceType.CONE, color_space_type)
-        if color_space_type == ColorSpaceType.VSH:
+        if color_space_type == ColorSpaceType.VSH or color_space_type == ColorSpaceType.VSH_RYGB:
             normalized_direction = direction
             normalized_direction[1] = 1.0  # make saturation 1
         else:
@@ -460,6 +468,11 @@ class ColorSpace:
         elif from_space == ColorSpaceType.RYGB and to_space == ColorSpaceType.HERING_RYGB:
             hering_matrix = GetHeringMatrix(self.dim)
             return (hering_matrix @ points.T).T
+        # Special case: Direct conversion between VSH_RYGB and HERING_RYGB (no CONE routing)
+        elif from_space == ColorSpaceType.VSH_RYGB and to_space == ColorSpaceType.HERING_RYGB:
+            return self._vsh_to_hering(points)
+        elif from_space == ColorSpaceType.HERING_RYGB and to_space == ColorSpaceType.VSH_RYGB:
+            return self._hering_to_vsh(points)
 
         # CONE-CENTRIC ROUTING: All conversions go through CONE
 
@@ -505,6 +518,15 @@ class ColorSpace:
             hering_points = self._vsh_to_hering(points)
             cone_to_hering = self._get_cone_to_hering()
             cone_points = (np.linalg.inv(cone_to_hering) @ hering_points.T).T
+        elif from_space == ColorSpaceType.VSH_RYGB:
+            # VSH_RYGB -> HERING_RYGB -> RYGB -> CONE
+            hering_rygb_points = self._vsh_to_hering(points)  # Same geometric transformation
+            # Convert HERING_RYGB -> RYGB
+            hering_matrix = GetHeringMatrix(self.dim)
+            rygb_points = (np.linalg.inv(hering_matrix) @ hering_rygb_points.T).T
+            # Convert RYGB -> CONE
+            cone_to_rygb = self._get_cone_to_rygb()
+            cone_points = (np.linalg.pinv(cone_to_rygb) @ rygb_points.T).T
         elif from_space == ColorSpaceType.XYZ:
             # XYZ -> CONE
             if self.dim != 3:
@@ -576,6 +598,9 @@ class ColorSpace:
         # Special case: if converting from HERING to VSH, use direct path (no roundtrip through CONE)
         elif from_space == ColorSpaceType.HERING and to_space == ColorSpaceType.VSH:
             return self._hering_to_vsh(points)
+        # Special case: if converting from HERING_RYGB to VSH_RYGB, use direct path
+        elif from_space == ColorSpaceType.HERING_RYGB and to_space == ColorSpaceType.VSH_RYGB:
+            return self._hering_to_vsh(points)
         elif to_space == ColorSpaceType.PRINT:
             # CONE -> PRINT via InkGamut
             if ink_gamut is None:
@@ -614,6 +639,16 @@ class ColorSpace:
             cone_to_hering = self._get_cone_to_hering()
             hering_points = (cone_to_hering @ cone_points.T).T
             return self._hering_to_vsh(hering_points)
+        elif to_space == ColorSpaceType.VSH_RYGB:
+            # CONE -> RYGB -> HERING_RYGB -> VSH_RYGB
+            # First convert CONE -> RYGB
+            cone_to_rygb = self._get_cone_to_rygb()
+            rygb_points = (cone_to_rygb @ cone_points.T).T
+            # Then convert RYGB -> HERING_RYGB
+            hering_matrix = GetHeringMatrix(self.dim)
+            hering_rygb_points = (hering_matrix @ rygb_points.T).T
+            # Finally convert HERING_RYGB -> VSH_RYGB (same geometric transformation)
+            return self._hering_to_vsh(hering_rygb_points)
         elif to_space == ColorSpaceType.XYZ:
             # CONE -> XYZ
             if self.dim != 3:

@@ -26,15 +26,20 @@ class ColorSampler:
     gamut mapping by computing and caching the gamut boundary information.
     """
 
-    def __init__(self, color_space: ColorSpace, cubemap_size: int = 64, disable: bool = True):
+    def __init__(self, color_space: ColorSpace, cubemap_size: int = 64,
+                 sampling_space: Optional[ColorSpaceType] = None, disable: bool = True):
         """
         Initialize the ColorSampler with a ColorSpace.
 
         Parameters:
             color_space (ColorSpace): The color space to sample from
             cubemap_size (int): Size of the lookup table (cubemap size for 4D, circle resolution for 3D)
+            sampling_space (ColorSpaceType, optional): Space to sample in (RYGB or DISP).
+                If None, auto-detects: RYGB for 4D without primaries, DISP otherwise.
             disable (bool): Whether to disable progress bars
         """
+        from TetriumColor.ColorSpace import ColorSpaceType
+
         self.color_space = color_space
         self.disable = disable
         self._gamut_lut = None
@@ -42,6 +47,14 @@ class ColorSampler:
         self._sat_range = None
         self._cubemap_size = cubemap_size  # For 4D: cubemap size, for 3D: circle resolution
         self._max_L = color_space.max_L
+
+        # Auto-detect sampling space if not provided
+        if sampling_space is None:
+            if color_space.dim == 4 and color_space.display_primaries is None:
+                sampling_space = ColorSpaceType.RYGB
+            else:
+                sampling_space = ColorSpaceType.DISP
+        self.sampling_space = sampling_space
 
         # Try to load LUT from cache during initialization
         if not self._load_from_cache():
@@ -199,9 +212,10 @@ class ColorSampler:
                 # Find cusp point for this hue angle
                 hue_cartesian = self.color_space.convert(
                     np.array([[0, 1, *angle]]), ColorSpaceType.VSH, ColorSpaceType.HERING)
+                hering_to_sampling = self._get_hering_to_sampling_space()
                 max_sat_point = self._find_maximal_saturation(
-                    (self.color_space._get_hering_to_disp() @ hue_cartesian.T).T[0])
-                max_sat_hering = np.linalg.inv(self.color_space._get_hering_to_disp()) @ max_sat_point
+                    (hering_to_sampling @ hue_cartesian.T).T[0])
+                max_sat_hering = np.linalg.inv(hering_to_sampling) @ max_sat_point
                 max_sat_vsh = self.color_space.convert(
                     max_sat_hering[np.newaxis, :], ColorSpaceType.HERING, ColorSpaceType.VSH)[0]
                 lum_cusp, sat_cusp = max_sat_vsh[0], max_sat_vsh[1]
@@ -413,9 +427,10 @@ class ColorSampler:
                 # Find cusp point for this hue angle
                 hue_cartesian = self.color_space.convert(
                     np.array([[0, 1, *angle]]), ColorSpaceType.VSH, ColorSpaceType.HERING)
+                hering_to_sampling = self._get_hering_to_sampling_space()
                 max_sat_point = self._find_maximal_saturation(
-                    (self.color_space._get_hering_to_disp() @ hue_cartesian.T).T[0])
-                max_sat_hering = np.linalg.inv(self.color_space._get_hering_to_disp()) @ max_sat_point
+                    (hering_to_sampling @ hue_cartesian.T).T[0])
+                max_sat_hering = np.linalg.inv(hering_to_sampling) @ max_sat_point
                 max_sat_vsh = self.color_space.convert(
                     max_sat_hering[np.newaxis, :], ColorSpaceType.HERING, ColorSpaceType.VSH)[0]
                 lum_cusp, sat_cusp = max_sat_vsh[0], max_sat_vsh[1]
@@ -633,6 +648,22 @@ class ColorSampler:
             ColorSpaceType.HERING, metameric_axis_num=metameric_axis)
         return Geometry.RotateToZAxis(normalized_direction[1:])
 
+    def _get_hering_to_sampling_space(self) -> npt.NDArray:
+        """
+        Get the HERING->sampling space transformation matrix.
+
+        Returns the appropriate transformation based on self.sampling_space:
+        - RYGB: Returns HERING->RYGB transformation
+        - DISP: Returns HERING->DISP transformation
+
+        Returns:
+            npt.NDArray: Transformation matrix
+        """
+        if self.sampling_space == ColorSpaceType.RYGB:
+            return self.color_space._get_hering_to_rygb()
+        else:
+            return self.color_space._get_hering_to_disp()
+
     def _find_maximal_saturation(self, hue_direction: npt.NDArray) -> npt.NDArray:
         """
         Find the point with maximal saturation in the given hue direction.
@@ -664,10 +695,11 @@ class ColorSampler:
         """
         # Find the cusp point for this hue angle
         hue_cartesian = self.color_space.convert(np.array([[0, 1, *angle]]), ColorSpaceType.VSH, ColorSpaceType.HERING)
+        hering_to_sampling = self._get_hering_to_sampling_space()
         max_sat_point = self._find_maximal_saturation(
-            (self.color_space._get_hering_to_disp() @ hue_cartesian.T).T[0]
+            (hering_to_sampling @ hue_cartesian.T).T[0]
         )
-        max_sat_hering = np.linalg.inv(self.color_space._get_hering_to_disp()) @ max_sat_point
+        max_sat_hering = np.linalg.inv(hering_to_sampling) @ max_sat_point
         max_sat_vsh = self.color_space.convert(
             max_sat_hering[np.newaxis, :], ColorSpaceType.HERING, ColorSpaceType.VSH)[0]
         lum_cusp, sat_cusp = max_sat_vsh[0], max_sat_vsh[1]
@@ -726,16 +758,22 @@ class ColorSampler:
 
         return sat_maxes[0] if is_single else sat_maxes
 
-    def remap_to_gamut(self, vshh: npt.NDArray) -> npt.NDArray:
+    def remap_to_gamut(self, vshh: npt.NDArray, vsh_type: Optional[ColorSpaceType] = None) -> npt.NDArray:
         """
         Remap points to be within the gamut.
 
         Parameters:
             vshh (npt.NDArray): Points in VSH space
+            vsh_type (ColorSpaceType, optional): VSH type (VSH or VSH_RYGB). Defaults to VSH.
 
         Returns:
             npt.NDArray: Remapped points that are in gamut
         """
+        from TetriumColor.ColorSpace import ColorSpaceType
+
+        if vsh_type is None:
+            vsh_type = ColorSpaceType.VSH
+
         # Copy the input to avoid modifying it
         remapped_vshh = vshh.copy()
 
@@ -1073,6 +1111,8 @@ class ColorSampler:
     def _output_cubemap_values_4d(self, luminance: float, saturation: float,
                                   display_color_space: ColorSpaceType, metameric_axis: int) -> List[npt.NDArray]:
         """Generate cubemap values within the gamut boundaries (4D only)"""
+        from TetriumColor.ColorSpace import ColorSpaceType
+
         # Generate grid of UV coordinates
         all_us = (np.arange(self._cubemap_size) + 0.5) / self._cubemap_size
         all_vs = (np.arange(self._cubemap_size) + 0.5) / self._cubemap_size
@@ -1081,6 +1121,14 @@ class ColorSampler:
         # Get metameric direction matrix
         metamericDirMat = self._get_transform_chrom_to_metameric_dir(metameric_axis)
         invMetamericDirMat = np.linalg.inv(metamericDirMat)
+
+        # Determine VSH and HERING types based on sampling space
+        if self.sampling_space == ColorSpaceType.RYGB:
+            vsh_type = ColorSpaceType.VSH_RYGB
+            hering_type = ColorSpaceType.HERING_RYGB
+        else:
+            vsh_type = ColorSpaceType.VSH
+            hering_type = ColorSpaceType.HERING
 
         # Process each face of the cube
         colors = []
@@ -1097,12 +1145,12 @@ class ColorSampler:
             lum_vector = np.ones(self._cubemap_size * self._cubemap_size) * luminance
             vxyz = np.hstack((lum_vector[np.newaxis, :].T, xyz))
 
-            # Convert to VSH space
-            vshh = self.color_space.convert(vxyz, ColorSpaceType.HERING, ColorSpaceType.VSH)
+            # Convert to VSH space (using appropriate type)
+            vshh = self.color_space.convert(vxyz, hering_type, vsh_type)
             vshh[:, 1] = np.min(
                 np.vstack((np.full(normalized_saturations.shape, saturation), normalized_saturations)), axis=0)
-            remapped_points = self.remap_to_gamut(vshh)
-            colors += [self.color_space.convert(remapped_points, ColorSpaceType.VSH, display_color_space)]
+            remapped_points = self.remap_to_gamut(vshh, vsh_type=vsh_type)
+            colors += [self.color_space.convert(remapped_points, vsh_type, display_color_space)]
         return colors
 
     def _output_square_values_3d(self, luminance: float, saturation: float,
@@ -1332,27 +1380,32 @@ class ColorSampler:
             metameric_axis (int): metameric axis to use
 
         Returns:
-            Tuple[npt.NDArray, npt.NDArray]: metamers_in_disp, cones
+            Tuple[npt.NDArray, npt.NDArray]: metamers_in_sampling_space, cones
         """
+        from TetriumColor.ColorSpace import ColorSpaceType
+
         if self.color_space.dim != 4:
             raise ValueError("get_metameric_pairs only works for 4D color spaces")
-        disp_points = self._output_cubemap_values_4d(
-            luminance, saturation, ColorSpaceType.DISP, metameric_axis=metameric_axis)[cube_idx]
-        metamer_dir_in_disp = self.color_space.get_metameric_axis_in(
-            ColorSpaceType.DISP, metameric_axis_num=metameric_axis)
+
+        # Get points in the sampling space (RYGB or DISP)
+        sampling_points = self._output_cubemap_values_4d(
+            luminance, saturation, self.sampling_space, metameric_axis=metameric_axis)[cube_idx]
+        metamer_dir = self.color_space.get_metameric_axis_in(
+            self.sampling_space, metameric_axis_num=metameric_axis)
 
         vec = np.zeros(self.color_space.dim)
         vec[0] = luminance
 
-        metamers_in_disp = np.zeros((disp_points.shape[0], 2, self.color_space.dim))
-        for i in range(metamers_in_disp.shape[0]):
-            # points in contention in disp space, bounded by unit cube scaled by vectors, direction is the metameric axis
-            metamers_in_disp[i] = np.array(FindMaximumIn1DimDirection(
-                disp_points[i], metamer_dir_in_disp, np.eye(self.color_space.dim)))
+        metamers_in_sampling_space = np.zeros((sampling_points.shape[0], 2, self.color_space.dim))
+        for i in range(metamers_in_sampling_space.shape[0]):
+            # Find metamer pairs in sampling space, bounded by unit cube [0,1]^4
+            metamers_in_sampling_space[i] = np.array(FindMaximumIn1DimDirection(
+                sampling_points[i], metamer_dir, np.eye(self.color_space.dim)))
 
-        cones = self.color_space.convert(metamers_in_disp.reshape(-1, self.color_space.dim),
-                                         ColorSpaceType.DISP, ColorSpaceType.CONE)
-        return metamers_in_disp, cones.reshape(-1, 2, self.color_space.dim)
+        # Convert to CONE space
+        cones = self.color_space.convert(metamers_in_sampling_space.reshape(-1, self.color_space.dim),
+                                         self.sampling_space, ColorSpaceType.CONE)
+        return metamers_in_sampling_space, cones.reshape(-1, 2, self.color_space.dim)
 
     def get_metameric_grid_plates(self, luminance: float, saturation: float,
                                   cube_idx: int, secrets: Optional[List[int]] = None,

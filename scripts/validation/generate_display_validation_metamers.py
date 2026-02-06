@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
 """
-Generate fixed RYGB metamer pairs for display validation.
+Generate fixed RYGB metamer pairs for display validation using ColorSampler.
 
 This script creates a configuration file containing metamer pairs in RYGB space
 for the top 5 tetrachromat observer genotypes. These metamers are fixed and will
 be converted to RGBO daily based on measured display primaries.
+
+Uses ColorSampler to efficiently generate a grid of metamer pairs on a cubemap face.
 """
 
-from typing import Any
-
+from TetriumColor.ColorSampler import ColorSampler
+from TetriumColor.ColorSpace import ColorSpace, ColorSpaceType
+from TetriumColor.Observer.ObserverGenotypes import ObserverGenotypes
+from TetriumColor.Observer import Observer
+from typing import Any, Tuple
 
 import argparse
 import json
@@ -19,35 +24,34 @@ import sys
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from TetriumColor.Observer import Observer
-from TetriumColor.Observer.ObserverGenotypes import ObserverGenotypes
-from TetriumColor.ColorSpace import ColorSpace, ColorSpaceType
-from TetriumColor.ColorSampler import ColorSampler
-
 
 def generate_metamers(
     num_observers: int = 5,
-    num_pairs_per_observer: int = 3,
     sex: str = 'both',
-    cubemap_size: int = 5,
+    grid_size: int = 5,
     luminance: float = 1.0,
     saturation: float = 0.5,
+    cube_face: int = 4,
     metameric_axis: int = 2,
     seed: int = 42
 ):
     """
-    Generate fixed RYGB metamer pairs for validation.
-    
+    Generate fixed RYGB metamer pairs for validation using ColorSampler.
+
+    For each observer, this creates a grid×grid array of metamer pairs on a cubemap
+    face perpendicular to the Q-metameric direction. The ColorSampler handles the
+    grid sampling and metamer finding efficiently.
+
     Args:
         num_observers: Number of top observers to generate metamers for
-        num_pairs_per_observer: Number of metamer pairs per observer (default: 3 for center row)
         sex: Population to sample from ('male', 'female', 'both')
-        cubemap_size: Size of cubemap grid (default: 5)
-        luminance: Luminance level for metamer generation
-        saturation: Saturation level for metamer generation
+        grid_size: Size of grid (e.g., 5 for 5×5 = 25 pairs per observer)
+        luminance: Luminance level in VSH space for the sampling plane
+        saturation: Saturation level in VSH space (controls distance from gray)
+        cube_face: Which cubemap face to sample (0-5, default 4 is +Z face)
         metameric_axis: Axis to be metameric over (default: 2 for Q cone)
         seed: Random seed for reproducibility
-        
+
     Returns:
         Dictionary with structure:
         {
@@ -59,158 +63,151 @@ def generate_metamers(
                     'metamers': [
                         {
                             'pair_index': 0,
-                            'rygb_1': [0.5, 0.5, 0.5, 0.5],
-                            'rygb_2': [0.5, 0.5, 0.5, 0.5]
+                            'grid_position': [2, 2],  # (row, col)
+                            'rygb_1': [...],
+                            'rygb_2': [...],
+                            'cone_1': [...],
+                            'cone_2': [...]
                         },
-                        ...
+                        ...  # 25 total pairs for 5×5 grid
                     ]
                 },
                 ...
             ]
         }
     """
-    print(f"Generating RYGB metamers for top {num_observers} observers...")
-    print(f"Parameters: sex={sex}, cubemap_size={cubemap_size}, seed={seed}")
-    print(f"Luminance={luminance}, Saturation={saturation}, Metameric axis={metameric_axis}")
+    print(f"Generating RYGB metamer grid for top {num_observers} observers using ColorSampler...")
+    print(f"Parameters: sex={sex}, grid_size={grid_size}×{grid_size}, seed={seed}")
+    print(f"Luminance={luminance}, saturation={saturation}, cube_face={cube_face}")
+    print(f"Metameric axis={metameric_axis}")
     print()
-    
+
     # Initialize ObserverGenotypes for tetrachromats
     observer_genotypes = ObserverGenotypes(dimensions=[3], seed=seed)
-    
+
     # Get top N observers
     genotypes = list[Any](observer_genotypes.get_pdf(sex).keys())[:num_observers]
-    genotypes = [genotype + (547,) for genotype in genotypes] # add Q cone at 547nm to make tetrachromat
+    genotypes = [genotype + (547,) for genotype in genotypes]  # add Q cone at 547nm to make tetrachromat
     probabilities = list(observer_genotypes.get_pdf(sex).values())[:num_observers]
-    
+
     print(f"Selected {len(genotypes)} observers:")
     for i, (genotype, prob) in enumerate(zip(genotypes, probabilities)):
         print(f"  {i+1}. {genotype} (probability: {prob:.4f})")
     print()
-    
+
     # Generate wavelengths for observers
     wavelengths = np.arange(360, 831, 1)
-    
-    # Calculate center indices for 5x5 grid
-    # Middle row (row 2 of 0-4) has indices: 2*5+0, 2*5+1, 2*5+2, 2*5+3, 2*5+4
-    # We want center 3: 2*5+1, 2*5+2, 2*5+3 = indices 11, 12, 13
-    center_indices = [11, 12, 13][:num_pairs_per_observer]
-    
-    print(f"Using center indices: {center_indices} from {cubemap_size}x{cubemap_size} grid")
+
+    # Total number of metamer pairs per observer
+    num_pairs_per_observer = grid_size * grid_size
+
+    print(f"Generating {num_pairs_per_observer} metamer pairs per observer from cube face {cube_face}")
     print()
-    
+
     observers_data = []
-    
+
     for observer_idx, (genotype, probability) in enumerate(zip(genotypes, probabilities)):
         print(f"Processing observer {observer_idx+1}/{num_observers}: {genotype}")
-        
+
         # Create observer (add S cone at 420nm if not present)
         observer = observer_genotypes.get_observer_for_peaks(genotype)
-        
-        # Create ColorSpace (no primaries needed for abstract RYGB space)
+
+        # Create ColorSpace WITHOUT display primaries
+        # This will make ColorSampler automatically use RYGB space for sampling
         color_space = ColorSpace(observer, metameric_axis=metameric_axis)
-        
-        # Generate metamer pairs directly in RYGB space
-        # For a 5x5 grid, center row is at y=2, with x positions 1, 2, 3
-        # We'll use these as points in RYGB space
-        metamer_pairs = []
-        
-        for idx, center_idx in enumerate(center_indices):
-            # Calculate grid position (row, col) from flat index
-            row = center_idx // cubemap_size
-            col = center_idx % cubemap_size
-            
-            # Convert grid position to normalized coordinates [0, 1]
-            # Use middle of each cell
-            x = (col + 0.5) / cubemap_size
-            y = (row + 0.5) / cubemap_size
-            
-            # Create a point in RYGB space
-            # We'll use a simple pattern: vary R and Y based on grid position,
-            # keep G and B at middle values
-            rygb_pt = np.array([x, y, 0.5, 0.5])
-            
-            print(f"  Generating pair {idx} at grid position ({row}, {col}), RYGB point: {rygb_pt}")
-            
-            # Find maximal metamer pair in RYGB space
-            try:
-                result = color_space.get_maximal_pair_in_disp_from_pt(
-                    pt=rygb_pt,
-                    metameric_axis=metameric_axis,
-                    input_space=ColorSpaceType.RYGB,
-                    output_space=ColorSpaceType.RYGB,  # Get results back in RYGB
-                    proportion=1.0
-                )
-                
-                if result is None:
-                    print(f"    Warning: Could not find metamer pair at {rygb_pt}")
-                    continue
-                    
-                rygb_1, rygb_2, metamer_diff = result
-                
-                # Also get cone responses for validation
-                cone_result = color_space.get_maximal_pair_in_disp_from_pt(
-                    pt=rygb_pt,
-                    metameric_axis=metameric_axis,
-                    input_space=ColorSpaceType.RYGB,
-                    output_space=ColorSpaceType.CONE,
-                    proportion=1.0
-                )
-                cone_1, cone_2, _ = cone_result
-                
-                # Store as lists for JSON serialization
+
+        # Create ColorSampler with the specified grid size
+        # sampling_space will auto-detect to RYGB since no display primaries
+        color_sampler = ColorSampler(color_space, cubemap_size=grid_size, disable=False)
+
+        print(f"  Using ColorSampler with {grid_size}×{grid_size} grid on cube face {cube_face}")
+
+        try:
+            # Get metamer pairs for the specified cube face
+            # This returns (metamers_in_sampling_space, cones) where:
+            # - metamers_in_sampling_space: shape (grid_size^2, 2, 4) - pairs in RYGB space
+            # - cones: shape (grid_size^2, 2, 4) - pairs in CONE space
+            metamers_in_rygb, cones = color_sampler.get_metameric_pairs(
+                luminance=luminance,
+                saturation=saturation,
+                cube_idx=cube_face,
+                metameric_axis=metameric_axis
+            )
+
+            print(f"  Generated {len(metamers_in_rygb)} metamer pairs")
+
+            # metamers_in_rygb is already in RYGB space since sampling_space=RYGB
+            n_points = len(metamers_in_rygb)
+            rygb_pairs = metamers_in_rygb  # Already in correct format
+
+            # Package into metamer list
+            metamer_pairs = []
+            for i in range(n_points):
+                # Calculate grid position from flat index
+                row = i // grid_size
+                col = i % grid_size
+
+                # Get the two metamers
+                rygb_1 = rygb_pairs[i, 0]
+                rygb_2 = rygb_pairs[i, 1]
+                cone_1 = cones[i, 0]
+                cone_2 = cones[i, 1]
+
+                # Calculate metamer difference (Q channel)
+                metamer_diff = abs(cone_1[metameric_axis] - cone_2[metameric_axis])
+
                 metamer_pairs.append({
-                    'pair_index': idx,
+                    'pair_index': i,
                     'grid_position': [int(row), int(col)],
-                    'rygb_center': rygb_pt.tolist(),
                     'rygb_1': rygb_1.tolist(),
                     'rygb_2': rygb_2.tolist(),
                     'cone_1': cone_1.tolist(),
                     'cone_2': cone_2.tolist(),
                     'metamer_difference': float(metamer_diff)
                 })
-                
-                print(f"    RYGB1: {rygb_1}")
-                print(f"    RYGB2: {rygb_2}")
-                print(f"    Metamer diff (Q): {metamer_diff:.4f}")
-                
-            except Exception as e:
-                print(f"    Error finding metamer pair: {e}")
-                import traceback
-                traceback.print_exc()
-                continue
-        
-        if len(metamer_pairs) == 0:
-            print(f"  Warning: No metamer pairs generated for observer {genotype}")
+
+                if i < 3 or i == n_points // 2:  # Print first few and middle
+                    print(f"  Pair {i} at grid ({row}, {col})")
+                    print(f"    RYGB1: {rygb_1}")
+                    print(f"    RYGB2: {rygb_2}")
+                    print(f"    Metamer diff (Q): {metamer_diff:.4f}")
+
+            observers_data.append({
+                'observer_index': observer_idx,
+                'genotype': list(genotype),
+                'probability': float(probability),
+                'metamers': metamer_pairs
+            })
+
+            print(f"  Successfully generated {len(metamer_pairs)} metamer pairs")
+            print()
+
+        except Exception as e:
+            print(f"  Error generating metamers for observer {genotype}: {e}")
+            import traceback
+            traceback.print_exc()
             continue
-        
-        observers_data.append({
-            'observer_index': observer_idx,
-            'genotype': list(genotype),
-            'probability': float(probability),
-            'metamers': metamer_pairs
-        })
-        
-        print(f"  Generated {len(metamer_pairs)} metamer pairs")
-        print()
-    
+
     # Create output structure
     output = {
         'metadata': {
             'num_observers': num_observers,
             'num_pairs_per_observer': num_pairs_per_observer,
             'sex': sex,
-            'cubemap_size': cubemap_size,
+            'grid_size': grid_size,
             'luminance': luminance,
             'saturation': saturation,
+            'cube_face': cube_face,
             'metameric_axis': metameric_axis,
             'seed': seed,
-            'center_indices': center_indices,
             'wavelength_range': [int(wavelengths[0]), int(wavelengths[-1])],
-            'total_metamer_pairs': sum(len(obs['metamers']) for obs in observers_data)
+            'total_metamer_pairs': sum(len(obs['metamers']) for obs in observers_data),
+            'description': f'Grid of {grid_size}×{grid_size} metamer pairs per observer, sampled using ColorSampler on cube face {cube_face} at luminance={luminance}, saturation={saturation}',
+            'method': 'ColorSampler.get_metameric_pairs()'
         },
         'observers': observers_data
     }
-    
+
     return output
 
 
@@ -223,10 +220,13 @@ Example:
   python generate_display_validation_metamers.py \\
     --output config/display_validation_metamers.json \\
     --num-observers 5 \\
-    --num-pairs 3
+    --grid-size 5 \\
+    --luminance 1.0 \\
+    --saturation 0.5 \\
+    --cube-face 4
         """
     )
-    
+
     parser.add_argument(
         '--output',
         type=str,
@@ -240,12 +240,6 @@ Example:
         help='Number of top observers to generate metamers for (default: 5)'
     )
     parser.add_argument(
-        '--num-pairs',
-        type=int,
-        default=3,
-        help='Number of metamer pairs per observer (default: 3)'
-    )
-    parser.add_argument(
         '--sex',
         type=str,
         default='both',
@@ -253,22 +247,29 @@ Example:
         help='Population to sample observers from (default: both)'
     )
     parser.add_argument(
-        '--cubemap-size',
+        '--grid-size',
         type=int,
         default=5,
-        help='Size of cubemap grid (default: 5)'
+        help='Size of nxn grid (e.g., 5 for 5×5 = 25 pairs per observer) (default: 5)'
     )
     parser.add_argument(
         '--luminance',
         type=float,
         default=1.0,
-        help='Luminance level for metamer generation (default: 1.0)'
+        help='Luminance level in VSH space (default: 1.0)'
     )
     parser.add_argument(
         '--saturation',
         type=float,
         default=0.5,
-        help='Saturation level for metamer generation (default: 0.5)'
+        help='Saturation level in VSH space (controls distance from gray) (default: 0.5)'
+    )
+    parser.add_argument(
+        '--cube-face',
+        type=int,
+        default=4,
+        choices=[0, 1, 2, 3, 4, 5],
+        help='Cubemap face to sample (0-5, default: 4 which is +Z face)'
     )
     parser.add_argument(
         '--metameric-axis',
@@ -282,28 +283,28 @@ Example:
         default=42,
         help='Random seed for reproducibility (default: 42)'
     )
-    
+
     args = parser.parse_args()
-    
+
     # Generate metamers
     output = generate_metamers(
         num_observers=args.num_observers,
-        num_pairs_per_observer=args.num_pairs,
         sex=args.sex,
-        cubemap_size=args.cubemap_size,
+        grid_size=args.grid_size,
         luminance=args.luminance,
         saturation=args.saturation,
+        cube_face=args.cube_face,
         metameric_axis=args.metameric_axis,
         seed=args.seed
     )
-    
+
     # Save to file
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    
+
     with open(output_path, 'w') as f:
         json.dump(output, f, indent=2)
-    
+
     print(f"Saved metamer configuration to: {output_path}")
     print(f"Total observers: {len(output['observers'])}")
     print(f"Total metamer pairs: {output['metadata']['total_metamer_pairs']}")
@@ -315,4 +316,3 @@ Example:
 
 if __name__ == '__main__':
     main()
-

@@ -185,7 +185,7 @@ class PseudoIsochromaticPlateGenerator(PlateGenerator):
             hidden_symbol, output_space,
             lum_noise=lum_noise, s_cone_noise=s_cone_noise,
             background_luminance=background_luminance,
-            dot_size=dot_size, degree=degree, **kwargs,
+            dot_size=dot_size, **kwargs,
             seed=np.random.randint(0, 1000000)
         )
 
@@ -641,8 +641,10 @@ if __name__ == "__main__":
         primaries = load_primaries_from_csv("./measurements/2025-10-10/primaries/")
         testing_dim = 3
         color_generator = GeneticColorGenerator(
-            sex='both', percentage_screened=0.999, display_primaries=primaries, dimensions=[testing_dim],
-            metameric_axes=list(range(1, testing_dim + 1)), trials_per_direction=1, randomize_genotypes=False)
+            sex='both', percentage_screened=0.99, display_primaries=primaries, dimensions=[testing_dim],
+            metameric_axes=[2],
+            # list(range(1, testing_dim + 1)),
+            trials_per_direction=1, randomize_genotypes=False)
 
         print("Number of Genotypes: ", len(color_generator.genotypes))
 
