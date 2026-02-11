@@ -18,18 +18,18 @@ def generate_tetrium_matrices(observer, primaries):
 
     cs = ColorSpace(observer, display_primaries=primaries, metameric_axis=2)
 
-    rygb_to_rgb, rygb_to_ocv = cs.get_RYGB_to_DISP_6P()
+    bgyr_to_rgb, bgyr_to_ocv = cs.get_BGYR_to_DISP_6P()
 
-    print(rygb_to_rgb.T)
-    print(rygb_to_ocv.T)
+    print(bgyr_to_rgb.T)
+    print(bgyr_to_ocv.T)
 
-    print_glm_format(rygb_to_rgb)
+    print_glm_format(bgyr_to_rgb)
 
-    print_glm_format(rygb_to_ocv)
+    print_glm_format(bgyr_to_ocv)
 
-    # rygb_to_sRGB = np.flip(cs.get_RYGB_to_sRGB().T, axis=0)
+    # bgyr_to_sRGB = np.flip(cs.get_BGYR_to_sRGB().T, axis=0)
 
-    # print_glm_format(rygb_to_sRGB)
+    # print_glm_format(bgyr_to_sRGB)
 
 
 if __name__ == "__main__":

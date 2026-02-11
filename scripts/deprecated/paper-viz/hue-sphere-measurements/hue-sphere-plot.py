@@ -129,7 +129,7 @@ def main():
     #     basis_responses = viz.ConvertPointsToBasis(cone_responses, observer, args.display_basis)
     #     viz.RenderPointCloud(f"metamer-spectra-{test_char}", basis_responses, normalized_sRGBs)
 
-    RYGB_to_sRGB = np.array([[0.77920324,  0.90917001, -0.37526135,  0.04545921],
+    BGYR_to_sRGB = np.array([[0.77920324,  0.90917001, -0.37526135,  0.04545921],
                              [-0.07345655,  0.28421096,  0.86285929, -0.07311962],
                              [-0.0127013, -0.053994,  0.03159406,  1.03177691]])
     # data = load_image(
@@ -138,9 +138,9 @@ def main():
     #                                                                                                   4)[::1000, [3, 2, 1, 0]]
     data = load_image(
         '../../../data/jennifer-drawing/melon/snapshot2025-01-21_21-18-58.tiff').reshape(-1, 4)[::1000]
-    sRGBs = data@RYGB_to_sRGB.T
+    sRGBs = data@BGYR_to_sRGB.T
     basis_responses = data[:, [3, 2, 1, 0]]@GetHeringMatrix(observer.dimension).T[:, 1:]
-    # plot Jennifers RYGB data
+    # plot Jennifers BGYR data
     viz.RenderPointCloud(f"jennifer_data", basis_responses, sRGBs)
 
     # predicted

@@ -36,9 +36,11 @@ IPT_M1 = np.array([
 
 M_XYZ_to_RGB = RGB_COLOURSPACE_BT709.matrix_XYZ_to_RGB
 
-# RYGB cutpoints from Observer.tetrachromat() MaxBasis
-# These define the spectral transitions for Red-Yellow-Green-Blue basis
-RYGB_CUTPOINTS = [493.0, 563.0, 608.0]  # in nanometers
+# BGYR cutpoints from Observer.tetrachromat() MaxBasis
+# These define the spectral transitions for Blue-Green-Yellow-Red basis
+
+# BGYR cutpoints (same values, but BGYR is the natural order from low to high wavelength)
+BGYR_CUTPOINTS = [493.0, 563.0, 608.0]  # in nanometers
 
 
 class ColorSpaceType(Enum):
@@ -46,11 +48,11 @@ class ColorSpaceType(Enum):
     that can be used in the system. Each color space type is represented by a string value.
     """
     VSH = "vsh"  # Value-Saturation-Hue (for DISP/MAXBASIS)
-    VSH_RYGB = "vsh_rygb"  # Value-Saturation-Hue (for RYGB basis)
+    VSH_BGYR = "vsh_bgyr"  # Value-Saturation-Hue (for BGYR basis)
     HERING = "hering"  # Hering opponent color space
-    MAXBASIS = "maxbasis"  # Display space (RYGB)
+    MAXBASIS = "maxbasis"  # Display space (BGYR)
     CONE = "cone"  # Cone responses (SMQL)
-    RYGB = "rygb"  # Red-Yellow-Green-Blue basis (tetrachromat MaxBasis)
+    BGYR = "bgyr"  # Blue-Green-Yellow-Red basis (tetrachromat MaxBasis, spectral order)
 
     DISP_6P = "disp_6p"  # RGO/BGO 6D representation
     DISP = "disp"  # Display space (RGBO)
@@ -65,7 +67,7 @@ class ColorSpaceType(Enum):
     CHROM = "chrom"  # Chromaticity space
     HERING_CHROM = "hering_chrom"  # Hering chromaticity space
     MACLEOD_CHROM = "macleod_chrom"  # MacLeod-Boynton chromaticity space
-    HERING_RYGB = "hering_rygb"  # Hering opponent space of RYGB basis
+    HERING_BGYR = "hering_bgyr"  # Hering opponent space of BGYR basis
 
     # Printer gamut primaries (percentages/area coverages)
     PRINT = "print"
@@ -98,7 +100,7 @@ class PolyscopeDisplayType(Enum):
     HERING_MAXBASIS = ColorSpaceType.HERING  # this is HERING_MAXBASIS
     HERING_DISP = "hering_disp"
     HERING_CONE = "hering_cone"
-    HERING_RYGB = "hering_rygb"
+    HERING_BGYR = "hering_bgyr"
 
 
 class ColorSpace:
@@ -160,7 +162,7 @@ class ColorSpace:
         self._cone_to_hering = None
         self._cone_to_disp = None
         self._cone_to_xyz = None
-        self._cone_to_rygb = None
+        self._cone_to_bgyr = None
         self._disp_metadata = None
 
         # Lazy-computed gamut properties
@@ -183,53 +185,53 @@ class ColorSpace:
             self._cone_to_hering = hering_matrix @ cone_to_maxbasis
         return self._cone_to_hering
 
-    def _get_cone_to_rygb(self) -> npt.NDArray:
-        """Lazy compute CONE->RYGB transformation matrix.
+    def _get_cone_to_bgyr(self) -> npt.NDArray:
+        """Lazy compute CONE->BGYR transformation matrix.
 
-        RYGB is the Red-Yellow-Green-Blue basis derived from the MaxBasis 
-        of Observer.tetrachromat() with cutpoints at [493, 563, 608] nm.
-        This creates 4 spectral basis functions corresponding to:
-        - Blue: wavelengths < 493 nm
-        - Green: 493-563 nm  
-        - Yellow: 563-608 nm
-        - Red: wavelengths > 608 nm
+        BGYR is the Blue-Green-Yellow-Red basis defined by step functions with
+        cutpoints at [493, 563, 608] nm (see create_bgyr_basis_spectra).
 
-        Note: RYGB is defined for any observer dimension using the same cutpoints.
-        For non-tetrachromat observers, the transformation will still be computed
-        based on how that observer responds to the RYGB spectral basis.
+        This method is constructed so that, for any spectrum S in the span of the
+        BGYR basis, the following two paths agree (up to numerical precision):
+
+          1) S -> cones -> CONE->BGYR  (this matrix)
+          2) S -> convert_spectrum_to_bgyr (spectral projection)
+
+        i.e., for such spectra:
+
+            self._cone_to_bgyr @ observer.observe(S) == convert_spectrum_to_bgyr(S)
+
+        which reconciles the "ColorSpace" BGYR coordinates with the
+        convert_spectrum_to_bgyr definition.
         """
-        if self._cone_to_rygb is None:
-            # Get cutpoint transitions
-            cutpoints = RYGB_CUTPOINTS
-            transitions = self._get_rygb_transitions(cutpoints)
+        if self._cone_to_bgyr is None:
+            # Build the same step-function BGYR basis that convert_spectrum_to_bgyr uses
+            wavelengths = self.observer.wavelengths
+            bgyr_basis = create_bgyr_basis_spectra(wavelengths)  # 4 Spectra
 
-            # Create spectral basis functions from transitions
-            # Each transition defines a spectral region (step function)
-            rygb_basis = []
-            for i, transition in enumerate(transitions):
-                spectrum = Spectra.from_transitions(
-                    transition,
-                    1 if i == 0 else 0,  # First region starts at 1, others at 0
-                    self.observer.wavelengths
-                )
-                rygb_basis.append(spectrum)
+            # Cone responses to each BGYR basis spectrum
+            # observe_spectras returns (n_spectra, dim)
+            cone_responses = self.observer.observe_spectras(bgyr_basis)  # (4, dim)
+            L = cone_responses.T  # shape: (dim, 4)
 
-            # Compute cone responses to each RYGB basis function
-            # Shape: (num_cones, 4) for 4 RYGB basis functions
-            cone_responses = self.observer.observe_spectras(rygb_basis)
+            # Q matrix: spectral BGYR coordinates of each basis spectrum
+            # columns Q[:, j] = convert_spectrum_to_bgyr(basis_j)
+            Q = np.zeros((4, 4))
+            for j, basis in enumerate(bgyr_basis):
+                Q[:, j] = convert_spectrum_to_bgyr(basis.data, wavelengths)
 
-            # For tetrachromat (4D), this is a square matrix and we can invert
-            # For other dimensions, we use the pseudoinverse (least-squares solution)
-            if self.observer.dimension == 4 and cone_responses.shape == (4, 4):
-                self._cone_to_rygb = np.linalg.inv(cone_responses.T)
+            # We want C such that C @ cones(S) = convert_spectrum_to_bgyr(S)
+            # For any S in span{basis}, cones(S) = L @ a, and convert_spectrum_to_bgyr(S) = Q @ a.
+            # Thus C L = Q  =>  C = Q @ L^{-1}  (or Q @ pinv(L) if not square).
+            if L.shape == (4, 4):
+                self._cone_to_bgyr = Q @ np.linalg.inv(L)
             else:
-                # Use pseudoinverse for non-square cases
-                self._cone_to_rygb = np.linalg.pinv(cone_responses.T)
+                self._cone_to_bgyr = Q @ np.linalg.pinv(L)
 
-        return self._cone_to_rygb
+        return self._cone_to_bgyr
 
-    def _get_rygb_transitions(self, cutpoints: List[float]) -> List[List[float]]:
-        """Get spectral transitions from cutpoints for RYGB basis.
+    def _get_bgyr_transitions(self, cutpoints: List[float]) -> List[List[float]]:
+        """Get spectral transitions from cutpoints for BGYR basis.
 
         Creates 4 spectral regions (for tetrachromats):
         - Blue: wavelengths < cutpoints[0]  
@@ -323,12 +325,12 @@ class ColorSpace:
         # hering_to_disp = cone_to_disp @ inv(cone_to_hering)
         return cone_to_disp @ np.linalg.inv(cone_to_hering)
 
-    def _get_hering_to_rygb(self) -> npt.NDArray:
-        """Compute HERING->RYGB transformation matrix."""
+    def _get_hering_to_bgyr(self) -> npt.NDArray:
+        """Compute HERING->BGYR transformation matrix."""
         cone_to_hering = self._get_cone_to_hering()
-        cone_to_rygb = self._get_cone_to_rygb()
-        # hering_to_rygb = cone_to_rygb @ inv(cone_to_hering)
-        return cone_to_rygb @ np.linalg.inv(cone_to_hering)
+        cone_to_bgyr = self._get_cone_to_bgyr()
+        # hering_to_bgyr = cone_to_bgyr @ inv(cone_to_hering)
+        return cone_to_bgyr @ np.linalg.inv(cone_to_hering)
 
     def _get_maxbasis_to_disp(self) -> npt.NDArray:
         """Compute MAXBASIS->DISP transformation matrix."""
@@ -381,7 +383,7 @@ class ColorSpace:
         metameric_axis[metameric_axis_num] = 1
 
         direction = self.convert(metameric_axis, ColorSpaceType.CONE, color_space_type)
-        if color_space_type == ColorSpaceType.VSH or color_space_type == ColorSpaceType.VSH_RYGB:
+        if color_space_type == ColorSpaceType.VSH or color_space_type == ColorSpaceType.VSH_BGYR:
             normalized_direction = direction
             normalized_direction[1] = 1.0  # make saturation 1
         else:
@@ -461,17 +463,17 @@ class ColorSpace:
         if from_space == to_space:
             return points
 
-        # Special case: Direct conversion between HERING_RYGB and RYGB (no CONE routing)
-        if from_space == ColorSpaceType.HERING_RYGB and to_space == ColorSpaceType.RYGB:
+        # Special case: Direct conversion between HERING_BGYR and BGYR (no CONE routing)
+        if from_space == ColorSpaceType.HERING_BGYR and to_space == ColorSpaceType.BGYR:
             hering_matrix = GetHeringMatrix(self.dim)
             return (np.linalg.inv(hering_matrix) @ points.T).T
-        elif from_space == ColorSpaceType.RYGB and to_space == ColorSpaceType.HERING_RYGB:
+        elif from_space == ColorSpaceType.BGYR and to_space == ColorSpaceType.HERING_BGYR:
             hering_matrix = GetHeringMatrix(self.dim)
             return (hering_matrix @ points.T).T
-        # Special case: Direct conversion between VSH_RYGB and HERING_RYGB (no CONE routing)
-        elif from_space == ColorSpaceType.VSH_RYGB and to_space == ColorSpaceType.HERING_RYGB:
+        # Special case: Direct conversion between VSH_BGYR and HERING_BGYR (no CONE routing)
+        elif from_space == ColorSpaceType.VSH_BGYR and to_space == ColorSpaceType.HERING_BGYR:
             return self._vsh_to_hering(points)
-        elif from_space == ColorSpaceType.HERING_RYGB and to_space == ColorSpaceType.VSH_RYGB:
+        elif from_space == ColorSpaceType.HERING_BGYR and to_space == ColorSpaceType.VSH_BGYR:
             return self._hering_to_vsh(points)
 
         # CONE-CENTRIC ROUTING: All conversions go through CONE
@@ -496,19 +498,19 @@ class ColorSpace:
             # HERING -> CONE
             cone_to_hering = self._get_cone_to_hering()
             cone_points = (np.linalg.inv(cone_to_hering) @ points.T).T
-        elif from_space == ColorSpaceType.RYGB:
-            # RYGB -> CONE
-            cone_to_rygb = self._get_cone_to_rygb()
+        elif from_space == ColorSpaceType.BGYR:
+            # BGYR -> CONE
+            cone_to_bgyr = self._get_cone_to_bgyr()
             # Use pseudoinverse for non-square matrices
-            cone_points = (np.linalg.pinv(cone_to_rygb) @ points.T).T
-        elif from_space == ColorSpaceType.HERING_RYGB:
-            # HERING_RYGB -> RYGB -> CONE
-            # First convert HERING_RYGB -> RYGB (direct, no CONE)
+            cone_points = (np.linalg.pinv(cone_to_bgyr) @ points.T).T
+        elif from_space == ColorSpaceType.HERING_BGYR:
+            # HERING_BGYR -> BGYR -> CONE
+            # First convert HERING_BGYR -> BGYR (direct, no CONE)
             hering_matrix = GetHeringMatrix(self.dim)
-            rygb_points = (np.linalg.inv(hering_matrix) @ points.T).T
-            # Then convert RYGB -> CONE
-            cone_to_rygb = self._get_cone_to_rygb()
-            cone_points = (np.linalg.pinv(cone_to_rygb) @ rygb_points.T).T
+            bgyr_points = (np.linalg.inv(hering_matrix) @ points.T).T
+            # Then convert BGYR -> CONE
+            cone_to_bgyr = self._get_cone_to_bgyr()
+            cone_points = (np.linalg.pinv(cone_to_bgyr) @ bgyr_points.T).T
         elif from_space == ColorSpaceType.DISP:
             # DISP -> CONE
             cone_to_disp = self._get_cone_to_disp()
@@ -518,15 +520,15 @@ class ColorSpace:
             hering_points = self._vsh_to_hering(points)
             cone_to_hering = self._get_cone_to_hering()
             cone_points = (np.linalg.inv(cone_to_hering) @ hering_points.T).T
-        elif from_space == ColorSpaceType.VSH_RYGB:
-            # VSH_RYGB -> HERING_RYGB -> RYGB -> CONE
-            hering_rygb_points = self._vsh_to_hering(points)  # Same geometric transformation
-            # Convert HERING_RYGB -> RYGB
+        elif from_space == ColorSpaceType.VSH_BGYR:
+            # VSH_BGYR -> HERING_BGYR -> BGYR -> CONE
+            hering_bgyr_points = self._vsh_to_hering(points)  # Same geometric transformation
+            # Convert HERING_BGYR -> BGYR
             hering_matrix = GetHeringMatrix(self.dim)
-            rygb_points = (np.linalg.inv(hering_matrix) @ hering_rygb_points.T).T
-            # Convert RYGB -> CONE
-            cone_to_rygb = self._get_cone_to_rygb()
-            cone_points = (np.linalg.pinv(cone_to_rygb) @ rygb_points.T).T
+            bgyr_points = (np.linalg.inv(hering_matrix) @ hering_bgyr_points.T).T
+            # Convert BGYR -> CONE
+            cone_to_bgyr = self._get_cone_to_bgyr()
+            cone_points = (np.linalg.pinv(cone_to_bgyr) @ bgyr_points.T).T
         elif from_space == ColorSpaceType.XYZ:
             # XYZ -> CONE
             if self.dim != 3:
@@ -598,8 +600,8 @@ class ColorSpace:
         # Special case: if converting from HERING to VSH, use direct path (no roundtrip through CONE)
         elif from_space == ColorSpaceType.HERING and to_space == ColorSpaceType.VSH:
             return self._hering_to_vsh(points)
-        # Special case: if converting from HERING_RYGB to VSH_RYGB, use direct path
-        elif from_space == ColorSpaceType.HERING_RYGB and to_space == ColorSpaceType.VSH_RYGB:
+        # Special case: if converting from HERING_BGYR to VSH_BGYR, use direct path
+        elif from_space == ColorSpaceType.HERING_BGYR and to_space == ColorSpaceType.VSH_BGYR:
             return self._hering_to_vsh(points)
         elif to_space == ColorSpaceType.PRINT:
             # CONE -> PRINT via InkGamut
@@ -618,18 +620,26 @@ class ColorSpace:
             # CONE -> HERING
             cone_to_hering = self._get_cone_to_hering()
             return (cone_to_hering @ cone_points.T).T
-        elif to_space == ColorSpaceType.RYGB:
-            # CONE -> RYGB
-            cone_to_rygb = self._get_cone_to_rygb()
-            return (cone_to_rygb @ cone_points.T).T
-        elif to_space == ColorSpaceType.HERING_RYGB:
-            # CONE -> RYGB -> HERING_RYGB
-            # First convert CONE -> RYGB
-            cone_to_rygb = self._get_cone_to_rygb()
-            rygb_points = (cone_to_rygb @ cone_points.T).T
-            # Then convert RYGB -> HERING_RYGB (direct, no CONE)
+        elif to_space == ColorSpaceType.BGYR:
+            # CONE -> BGYR
+            cone_to_bgyr = self._get_cone_to_bgyr()
+            bgyr_points = (cone_to_bgyr @ cone_points.T).T
+
+            # Normalize by white point (cone white = [1,1,1,1] -> BGYR white)
+            white_cone = np.ones(self.dim)
+            white_bgyr = (cone_to_bgyr @ white_cone)
+            # Normalize each BGYR vector by white point (so white = [1,1,1,1] in BGYR)
+            bgyr_points = bgyr_points / (white_bgyr + 1e-10)  # avoid division by zero
+
+            return bgyr_points
+        elif to_space == ColorSpaceType.HERING_BGYR:
+            # CONE -> BGYR -> HERING_BGYR
+            # First convert CONE -> BGYR
+            cone_to_bgyr = self._get_cone_to_bgyr()
+            bgyr_points = (cone_to_bgyr @ cone_points.T).T
+            # Then convert BGYR -> HERING_BGYR (direct, no CONE)
             hering_matrix = GetHeringMatrix(self.dim)
-            return (hering_matrix @ rygb_points.T).T
+            return (hering_matrix @ bgyr_points.T).T
         elif to_space == ColorSpaceType.DISP:
             # CONE -> DISP
             cone_to_disp = self._get_cone_to_disp()
@@ -639,16 +649,16 @@ class ColorSpace:
             cone_to_hering = self._get_cone_to_hering()
             hering_points = (cone_to_hering @ cone_points.T).T
             return self._hering_to_vsh(hering_points)
-        elif to_space == ColorSpaceType.VSH_RYGB:
-            # CONE -> RYGB -> HERING_RYGB -> VSH_RYGB
-            # First convert CONE -> RYGB
-            cone_to_rygb = self._get_cone_to_rygb()
-            rygb_points = (cone_to_rygb @ cone_points.T).T
-            # Then convert RYGB -> HERING_RYGB
+        elif to_space == ColorSpaceType.VSH_BGYR:
+            # CONE -> BGYR -> HERING_BGYR -> VSH_BGYR
+            # First convert CONE -> BGYR
+            cone_to_bgyr = self._get_cone_to_bgyr()
+            bgyr_points = (cone_to_bgyr @ cone_points.T).T
+            # Then convert BGYR -> HERING_BGYR
             hering_matrix = GetHeringMatrix(self.dim)
-            hering_rygb_points = (hering_matrix @ rygb_points.T).T
-            # Finally convert HERING_RYGB -> VSH_RYGB (same geometric transformation)
-            return self._hering_to_vsh(hering_rygb_points)
+            hering_bgyr_points = (hering_matrix @ bgyr_points.T).T
+            # Finally convert HERING_BGYR -> VSH_BGYR (same geometric transformation)
+            return self._hering_to_vsh(hering_bgyr_points)
         elif to_space == ColorSpaceType.XYZ:
             # CONE -> XYZ
             if self.dim != 3:
@@ -883,6 +893,71 @@ class ColorSpace:
         ]
         # Join all components with a separator
         return "|".join(components)
+
+
+def create_bgyr_basis_spectra(wavelengths: np.ndarray) -> List[Spectra]:
+    """
+    Create the 4 BGYR basis spectra (step functions).
+
+    Args:
+        wavelengths: Array of wavelengths
+
+    Returns:
+        List of 4 Spectra objects representing B, G, Y, R basis functions
+    """
+    bgyr_basis = []
+
+    # Blue: wavelengths < 493nm
+    blue_data = (wavelengths < BGYR_CUTPOINTS[0]).astype(float)
+    bgyr_basis.append(Spectra(wavelengths=wavelengths, data=blue_data))
+
+    # Green: 493nm <= wavelengths < 563nm
+    green_data = ((wavelengths >= BGYR_CUTPOINTS[0]) & (wavelengths < BGYR_CUTPOINTS[1])).astype(float)
+    bgyr_basis.append(Spectra(wavelengths=wavelengths, data=green_data))
+
+    # Yellow: 563nm <= wavelengths < 608nm
+    yellow_data = ((wavelengths >= BGYR_CUTPOINTS[1]) & (wavelengths < BGYR_CUTPOINTS[2])).astype(float)
+    bgyr_basis.append(Spectra(wavelengths=wavelengths, data=yellow_data))
+
+    # Red: wavelengths >= 608nm
+    red_data = (wavelengths >= BGYR_CUTPOINTS[2]).astype(float)
+    bgyr_basis.append(Spectra(wavelengths=wavelengths, data=red_data))
+
+    return bgyr_basis
+
+
+def convert_spectrum_to_bgyr(spectrum_data: np.ndarray, wavelengths: np.ndarray) -> np.ndarray:
+    """
+    Convert a measured spectrum back to BGYR by projecting onto basis.
+
+    Args:
+        spectrum_data: Spectrum data array
+        wavelengths: Wavelength array
+
+    Returns:
+        BGYR coefficients (4-element array)
+    """
+    bgyr_basis = create_bgyr_basis_spectra(wavelengths)
+
+    # Project spectrum onto each BGYR basis function
+    bgyr = np.zeros(4)
+    for i in range(4):
+        # Compute inner product (integral of spectrum * basis)
+        bgyr[i] = np.sum(spectrum_data * bgyr_basis[i].data)
+
+    return bgyr
+
+
+def compute_bgyr_to_display_matrix(primaries):
+    wavelengths = primaries[0].wavelengths
+
+    P_raw = np.column_stack([p.data for p in primaries[:4]])
+    global_scale = np.max(P_raw)
+
+    P = np.zeros((4, 4))
+    for j in range(4):
+        P[:, j] = convert_spectrum_to_bgyr(primaries[j].data, wavelengths)
+    return np.linalg.inv(P)
 
 
 if __name__ == "__main__":

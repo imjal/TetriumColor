@@ -296,7 +296,7 @@ double TestGenerator::GetDoubleFromDict(PyObject* dict, const char* key, double 
     return default_val;
 }
 
-std::optional<TrialData> TestGenerator::NewTrialRYGB(
+std::optional<TrialData> TestGenerator::NewTrialBGYR(
     const std::string& filename,
     const std::string& hidden_symbol,
     float lum_noise,
@@ -312,11 +312,11 @@ std::optional<TrialData> TestGenerator::NewTrialRYGB(
         throw std::runtime_error("TestGenerator: Python instance is null");
     }
 
-    // Call Python NewTestRYGB method using PyObject_Call with tuple and kwargs
-    PyObject* pMethod = PyObject_GetAttrString(pInstance, "NewTestRYGB");
+    // Call Python NewTestBGYR method using PyObject_Call with tuple and kwargs
+    PyObject* pMethod = PyObject_GetAttrString(pInstance, "NewTestBGYR");
     if (!pMethod) {
         PyErr_Print();
-        throw std::runtime_error("TestGenerator: Failed to get NewTestRYGB method");
+        throw std::runtime_error("TestGenerator: Failed to get NewTestBGYR method");
     }
 
     // Build positional arguments tuple: (filename, hidden_symbol)
@@ -354,7 +354,7 @@ std::optional<TrialData> TestGenerator::NewTrialRYGB(
 
     if (!pResult) {
         PyErr_Print();
-        throw std::runtime_error("TestGenerator: Failed to call NewTestRYGB()");
+        throw std::runtime_error("TestGenerator: Failed to call NewTestBGYR()");
     }
 
     // Parse the returned dict to TrialData
@@ -364,7 +364,7 @@ std::optional<TrialData> TestGenerator::NewTrialRYGB(
     return trial_data;
 }
 
-std::optional<TrialData> TestGenerator::GetNextTrialRYGB(
+std::optional<TrialData> TestGenerator::GetNextTrialBGYR(
     ColorTestResult previous_result,
     const std::string& filename,
     const std::string& hidden_symbol,
@@ -414,12 +414,12 @@ std::optional<TrialData> TestGenerator::GetNextTrialRYGB(
         throw std::runtime_error("TestGenerator: Failed to get ColorTestResult enum value");
     }
 
-    // Call Python GetTestRYGB method
-    PyObject* pMethod = PyObject_GetAttrString(pInstance, "GetTestRYGB");
+    // Call Python GetTestBGYR method
+    PyObject* pMethod = PyObject_GetAttrString(pInstance, "GetTestBGYR");
     if (!pMethod) {
         Py_DECREF(pPreviousResult);
         PyErr_Print();
-        throw std::runtime_error("TestGenerator: Failed to get GetTestRYGB method");
+        throw std::runtime_error("TestGenerator: Failed to get GetTestBGYR method");
     }
 
     // Build positional arguments tuple
@@ -444,7 +444,7 @@ std::optional<TrialData> TestGenerator::GetNextTrialRYGB(
 
     if (!pResult) {
         PyErr_Print();
-        throw std::runtime_error("TestGenerator: Failed to call GetTestRYGB()");
+        throw std::runtime_error("TestGenerator: Failed to call GetTestBGYR()");
     }
 
     // Check if Python returned None (test complete)
@@ -474,7 +474,7 @@ TrialData TestGenerator::ParseDictToTrialData(PyObject* dict)
         trial.genotype = GetStringFromDict(dict, "genotype", "");
         trial.metameric_axis = GetIntFromDict(dict, "metameric_axis", -1);
         trial.rgb_path = GetStringFromDict(dict, "rgb_path", "");
-        trial.rygb_path = GetStringFromDict(dict, "rygb_path", "");
+        trial.bgyr_path = GetStringFromDict(dict, "bgyr_path", "");
         trial.ocv_path = GetStringFromDict(dict, "ocv_path", "");
         trial.hidden_symbol = GetStringFromDict(dict, "hidden_symbol", "");
         trial.intensity = GetDoubleFromDict(dict, "intensity", 1.0);

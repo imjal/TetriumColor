@@ -245,7 +245,7 @@ std::pair<std::string, std::string> SolidColorGenerator::GenerateCircle(
     return {rgb_path, ocv_path};
 }
 
-std::string SolidColorGenerator::GenerateCircleRYGB(
+std::string SolidColorGenerator::GenerateCircleBGYR(
     const std::string& filename_base,
     float r,
     float g,
@@ -261,11 +261,11 @@ std::string SolidColorGenerator::GenerateCircleRYGB(
         return "";
     }
 
-    // Call the generate_circle_rygb method
+    // Call the generate_circle_bgyr method
     // Format: s=string, f=float (x4), i=int, f=float, i=int (for bool)
     PyObject* pResult = PyObject_CallMethod(
         reinterpret_cast<PyObject*>(pInstance),
-        "generate_circle_rygb",
+        "generate_circle_bgyr",
         "sffffifi",
         filename_base.c_str(),
         r,
@@ -279,13 +279,13 @@ std::string SolidColorGenerator::GenerateCircleRYGB(
 
     if (!pResult) {
         PyErr_Print();
-        printf("Failed to call generate_circle_rygb method\n");
+        printf("Failed to call generate_circle_bgyr method\n");
         return "";
     }
 
     // Check if result is a string
     if (!PyUnicode_Check(pResult)) {
-        printf("generate_circle_rygb did not return a string\n");
+        printf("generate_circle_bgyr did not return a string\n");
         Py_DECREF(pResult);
         return "";
     }
@@ -299,13 +299,13 @@ std::string SolidColorGenerator::GenerateCircleRYGB(
         return "";
     }
 
-    std::string rygb_path = path_cstr;
+    std::string bgyr_path = path_cstr;
 
-    printf("Generated RYGB texture: %s\n", rygb_path.c_str());
+    printf("Generated BGYR texture: %s\n", bgyr_path.c_str());
 
     Py_DECREF(pResult);
 
-    return rygb_path;
+    return bgyr_path;
 }
 
 } // namespace TetriumColor

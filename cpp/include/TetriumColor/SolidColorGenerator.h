@@ -28,10 +28,10 @@ class SolidColorGenerator
         ColorSpaceType output_space = ColorSpaceType::DISP_6P
     );
 
-    // Generate a solid color circle in RYGB color space and return path to TIFF
+    // Generate a solid color circle in BGYR color space and return path to TIFF
     // r, g, b, o: RGBO color values (0-255 range)
-    // Returns: path to RYGB TIFF file
-    std::string GenerateCircleRYGB(
+    // Returns: path to BGYR TIFF file
+    std::string GenerateCircleBGYR(
         const std::string& filename_base,
         float r,
         float g,

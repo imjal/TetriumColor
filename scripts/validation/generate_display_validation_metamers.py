@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Generate fixed RYGB metamer pairs for display validation using ColorSampler.
+Generate fixed BGYR metamer pairs for display validation using ColorSampler.
 
-This script creates a configuration file containing metamer pairs in RYGB space
+This script creates a configuration file containing metamer pairs in BGYR space
 for the top 5 tetrachromat observer genotypes. These metamers are fixed and will
 be converted to RGBO daily based on measured display primaries.
 
@@ -33,10 +33,15 @@ def generate_metamers(
     saturation: float = 0.5,
     cube_face: int = 4,
     metameric_axis: int = 2,
-    seed: int = 42
+    seed: int = 42,
+    primaries_path: str = None
 ):
     """
-    Generate fixed RYGB metamer pairs for validation using ColorSampler.
+    Generate fixed metamer pairs for validation using ColorSampler.
+
+    Generates metamers in DISP space (RGBO/BGOR) for each observer using their specific
+    ColorSpace, then converts to BGYR for storage. This ensures each observer's metamers
+    are generated in their own display space.
 
     For each observer, this creates a grid×grid array of metamer pairs on a cubemap
     face perpendicular to the Q-metameric direction. The ColorSampler handles the
@@ -51,6 +56,7 @@ def generate_metamers(
         cube_face: Which cubemap face to sample (0-5, default 4 is +Z face)
         metameric_axis: Axis to be metameric over (default: 2 for Q cone)
         seed: Random seed for reproducibility
+        primaries_path: Path to directory with display primaries (required)
 
     Returns:
         Dictionary with structure:
@@ -64,8 +70,10 @@ def generate_metamers(
                         {
                             'pair_index': 0,
                             'grid_position': [2, 2],  # (row, col)
-                            'rygb_1': [...],
-                            'rygb_2': [...],
+                            'bgyr_1': [...],  # Converted from DISP for storage
+                            'bgyr_2': [...],
+                            'rgbo_1': [...],  # Original DISP values
+                            'rgbo_2': [...],
                             'cone_1': [...],
                             'cone_2': [...]
                         },
@@ -76,7 +84,17 @@ def generate_metamers(
             ]
         }
     """
-    print(f"Generating RYGB metamer grid for top {num_observers} observers using ColorSampler...")
+    # Load display primaries (required)
+    if not primaries_path:
+        raise ValueError("--primaries-path is required. Metamers must be generated in DISP space.")
+
+    from TetriumColor.Measurement.TetriumMeasurementRoutines import load_primaries_from_csv
+    print(f"Loading display primaries from: {primaries_path}")
+    display_primaries = load_primaries_from_csv(primaries_path, extract_zero=False)
+    print(f"Loaded {len(display_primaries)} primaries (BGOR order)")
+    print(f"Generating metamer grid in DISPLAY PRIMARY space (RGBO)")
+
+    print(f"Top {num_observers} observers using ColorSampler...")
     print(f"Parameters: sex={sex}, grid_size={grid_size}×{grid_size}, seed={seed}")
     print(f"Luminance={luminance}, saturation={saturation}, cube_face={cube_face}")
     print(f"Metameric axis={metameric_axis}")
@@ -112,12 +130,10 @@ def generate_metamers(
         # Create observer (add S cone at 420nm if not present)
         observer = observer_genotypes.get_observer_for_peaks(genotype)
 
-        # Create ColorSpace WITHOUT display primaries
-        # This will make ColorSampler automatically use RYGB space for sampling
-        color_space = ColorSpace(observer, metameric_axis=metameric_axis)
+        # Create ColorSpace with display primaries (always use DISP space)
+        color_space = ColorSpace(observer, display_primaries=display_primaries, metameric_axis=metameric_axis)
 
         # Create ColorSampler with the specified grid size
-        # sampling_space will auto-detect to RYGB since no display primaries
         color_sampler = ColorSampler(color_space, cubemap_size=grid_size, disable=False)
 
         print(f"  Using ColorSampler with {grid_size}×{grid_size} grid on cube face {cube_face}")
@@ -125,20 +141,26 @@ def generate_metamers(
         try:
             # Get metamer pairs for the specified cube face
             # This returns (metamers_in_sampling_space, cones) where:
-            # - metamers_in_sampling_space: shape (grid_size^2, 2, 4) - pairs in RYGB space
+            # - metamers_in_sampling_space: shape (grid_size^2, 2, 4) - pairs in DISP space (BGOR order)
             # - cones: shape (grid_size^2, 2, 4) - pairs in CONE space
-            metamers_in_rygb, cones = color_sampler.get_metameric_pairs(
+            metamers_in_disp_space, cones = color_sampler.get_metameric_pairs(
                 luminance=luminance,
                 saturation=saturation,
                 cube_idx=cube_face,
                 metameric_axis=metameric_axis
             )
 
-            print(f"  Generated {len(metamers_in_rygb)} metamer pairs")
+            print(f"  Generated {len(metamers_in_disp_space)} metamer pairs in DISP space")
 
-            # metamers_in_rygb is already in RYGB space since sampling_space=RYGB
-            n_points = len(metamers_in_rygb)
-            rygb_pairs = metamers_in_rygb  # Already in correct format
+            # Convert DISP (BGOR) to BGYR for storage using observer-specific ColorSpace
+            print(f"  Converting DISP → BGYR for storage...")
+            # Reshape for conversion: (n_pairs * 2, 4) -> convert -> reshape back
+            n_pairs = len(metamers_in_disp_space)
+            disp_flat = metamers_in_disp_space.reshape(-1, 4)  # (n_pairs * 2, 4)
+            bgyr_flat = color_space.convert(disp_flat, ColorSpaceType.DISP, ColorSpaceType.BGYR)
+            bgyr_reshaped = bgyr_flat.reshape(n_pairs, 2, 4)  # (n_pairs, 2, 4)
+
+            n_points = len(metamers_in_disp_space)
 
             # Package into metamer list
             metamer_pairs = []
@@ -147,30 +169,46 @@ def generate_metamers(
                 row = i // grid_size
                 col = i % grid_size
 
-                # Get the two metamers
-                rygb_1 = rygb_pairs[i, 0]
-                rygb_2 = rygb_pairs[i, 1]
+                # Get the two metamers in DISP space (BGOR order)
+                disp_1 = metamers_in_disp_space[i, 0]  # BGOR order
+                disp_2 = metamers_in_disp_space[i, 1]  # BGOR order
+
+                # Get converted BGYR values
+                bgyr_1 = bgyr_reshaped[i, 0]
+                bgyr_2 = bgyr_reshaped[i, 1]
+
                 cone_1 = cones[i, 0]
                 cone_2 = cones[i, 1]
 
                 # Calculate metamer difference (Q channel)
                 metamer_diff = abs(cone_1[metameric_axis] - cone_2[metameric_axis])
 
-                metamer_pairs.append({
+                # Convert BGOR to RGBO for output
+                rgbo_1 = np.array([disp_1[3], disp_1[1], disp_1[0], disp_1[2]])  # R, G, B, O
+                rgbo_2 = np.array([disp_2[3], disp_2[1], disp_2[0], disp_2[2]])
+
+                metamer_dict = {
                     'pair_index': i,
                     'grid_position': [int(row), int(col)],
-                    'rygb_1': rygb_1.tolist(),
-                    'rygb_2': rygb_2.tolist(),
                     'cone_1': cone_1.tolist(),
                     'cone_2': cone_2.tolist(),
-                    'metamer_difference': float(metamer_diff)
-                })
+                    'metamer_difference': float(metamer_diff),
+                    'rgbo_1': rgbo_1.tolist(),  # Original DISP values (RGBO order)
+                    'rgbo_2': rgbo_2.tolist(),
+                    'bgyr_1': bgyr_1.tolist(),  # Converted to BGYR for storage
+                    'bgyr_2': bgyr_2.tolist()
+                }
+
+                metamer_pairs.append(metamer_dict)
 
                 if i < 3 or i == n_points // 2:  # Print first few and middle
                     print(f"  Pair {i} at grid ({row}, {col})")
-                    print(f"    RYGB1: {rygb_1}")
-                    print(f"    RYGB2: {rygb_2}")
-                    print(f"    Metamer diff (Q): {metamer_diff:.4f}")
+                    print(f"    DISP (BGOR) raw: M1={disp_1}, M2={disp_2}")
+                    print(f"    RGBO1: {metamer_dict['rgbo_1']}")
+                    print(f"    RGBO2: {metamer_dict['rgbo_2']}")
+                    print(f"    BGYR1: {metamer_dict['bgyr_1']}")
+                    print(f"    BGYR2: {metamer_dict['bgyr_2']}")
+                    print(f"    Metamer diff ({['S', 'M', 'Q', 'L'][metameric_axis]}): {metamer_diff:.4f}")
 
             observers_data.append({
                 'observer_index': observer_idx,
@@ -200,10 +238,13 @@ def generate_metamers(
             'cube_face': cube_face,
             'metameric_axis': metameric_axis,
             'seed': seed,
+            'sampling_space': 'RGBO',
+            'storage_space': 'BGYR',
+            'used_display_primaries': True,
             'wavelength_range': [int(wavelengths[0]), int(wavelengths[-1])],
             'total_metamer_pairs': sum(len(obs['metamers']) for obs in observers_data),
-            'description': f'Grid of {grid_size}×{grid_size} metamer pairs per observer, sampled using ColorSampler on cube face {cube_face} at luminance={luminance}, saturation={saturation}',
-            'method': 'ColorSampler.get_metameric_pairs()'
+            'description': f'Grid of {grid_size}×{grid_size} metamer pairs per observer. Generated in DISP space (RGBO) using observer-specific ColorSpace, then converted to BGYR for storage. Sampled using ColorSampler on cube face {cube_face} at luminance={luminance}, saturation={saturation}',
+            'method': 'ColorSampler.get_metameric_pairs() in DISP space, converted to BGYR via ColorSpace.convert()'
         },
         'observers': observers_data
     }
@@ -213,7 +254,7 @@ def generate_metamers(
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Generate fixed RYGB metamer pairs for display validation',
+        description='Generate fixed BGYR metamer pairs for display validation',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Example:
@@ -283,6 +324,12 @@ Example:
         default=42,
         help='Random seed for reproducibility (default: 42)'
     )
+    parser.add_argument(
+        '--primaries-path',
+        type=str,
+        required=True,
+        help='Path to directory with display primaries (required). Metamers are generated in DISP space (RGBO) for each observer, then converted to BGYR for storage.'
+    )
 
     args = parser.parse_args()
 
@@ -295,7 +342,8 @@ Example:
         saturation=args.saturation,
         cube_face=args.cube_face,
         metameric_axis=args.metameric_axis,
-        seed=args.seed
+        seed=args.seed,
+        primaries_path=args.primaries_path
     )
 
     # Save to file

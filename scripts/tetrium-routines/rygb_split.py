@@ -4,14 +4,14 @@ import tifffile
 
 
 # Define the 4x4 transformation matrices
-mat_rygb_to_rgb = np.array([
+mat_bgyr_to_rgb = np.array([
  [ 0.982,-0.021,-0.01 ,0],
  [-0.083, 0.092,-0.011,0],
  [ 0.099, 0.825, 0.083,0],
  [ 0.002, 0.02,  0.841,0],
 ])
 
-mat_rygb_to_ocv = np.array(
+mat_bgyr_to_ocv = np.array(
 [[ 0.068, 0.,    0.  ,0],
  [ 0.955, 0.,    0.  ,0],
  [-0.304, 0.,    0.  ,0],
@@ -28,7 +28,7 @@ def load_image(image_path):
     return img
 
 def apply_matrix_to_pixels(img_data, matrix):
-    # The image data is assumed to be in the format of 4 channels per pixel (RYGB)
+    # The image data is assumed to be in the format of 4 channels per pixel (BGYR)
     height, width, _ = img_data.shape
     #print(img_data)
     transformed_data = np.zeros_like(img_data, dtype=np.float32)
@@ -62,8 +62,8 @@ def main(input_path, output_rgb_path, output_ocv_path):
     img_data = load_image(input_path)
     
     # Apply the transformation matrices
-    rgb_data = apply_matrix_to_pixels(img_data, mat_rygb_to_rgb)
-    ocv_data = apply_matrix_to_pixels(img_data, mat_rygb_to_ocv)
+    rgb_data = apply_matrix_to_pixels(img_data, mat_bgyr_to_rgb)
+    ocv_data = apply_matrix_to_pixels(img_data, mat_bgyr_to_ocv)
     
     # Normalize and save both transformed images
     normalize_and_save_image(rgb_data, output_rgb_path)

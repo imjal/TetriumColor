@@ -537,13 +537,13 @@ def RenderNoiseBall(name: str, center: npt.NDArray, noise_std: npt.NDArray,
             raise
 
 
-def RenderRYGBGamut(name: str, cst: ColorSpace, display_basis: PolyscopeDisplayType,
+def RenderBGYRGamut(name: str, cst: ColorSpace, display_basis: PolyscopeDisplayType,
                     color: npt.NDArray | None = None, alpha: float = 0.4,
                     vertex_radius: float = 0.015, edge_radius: float = 0.003,
                     scale: float = 1.0, show_hull: bool = True) -> None:
-    """Render the RYGB gamut as a projected hypercube (single unified mesh).
+    """Render the BGYR gamut as a projected hypercube (single unified mesh).
 
-    The RYGB gamut is defined by the Red-Yellow-Green-Blue basis with cutpoints
+    The BGYR gamut is defined by the Blue-Green-Yellow-Red basis with cutpoints
     at [493, 563, 608] nm. This forms a 4D hypercube that is projected into 3D.
 
     Args:
@@ -559,20 +559,20 @@ def RenderRYGBGamut(name: str, cst: ColorSpace, display_basis: PolyscopeDisplayT
     if color is None:
         color = np.array([1, 1, 1])
 
-    # Generate all vertices of the unit hypercube in RYGB space
-    vertices_rygb = np.array([[r, y, g, b] for r in [0, 1]
-                              for y in [0, 1]
+    # Generate all vertices of the unit hypercube in BGYR space
+    vertices_bgyr = np.array([[b, g, y, r] for b in [0, 1]
                               for g in [0, 1]
-                              for b in [0, 1]])
+                              for y in [0, 1]
+                              for r in [0, 1]])
 
     # Convert to target display basis
-    vertices_display = cst.convert_to_polyscope(vertices_rygb, ColorSpaceType.RYGB, display_basis)
+    vertices_display = cst.convert_to_polyscope(vertices_bgyr, ColorSpaceType.BGYR, display_basis)
 
     # Apply scaling
     vertices_display = vertices_display * scale
 
     # Compute colors for vertices (convert to linear sRGB)
-    vertices_cone = cst.convert(vertices_rygb, ColorSpaceType.RYGB, ColorSpaceType.CONE)
+    vertices_cone = cst.convert(vertices_bgyr, ColorSpaceType.BGYR, ColorSpaceType.CONE)
     vertex_colors = np.clip(cst.convert(vertices_cone, ColorSpaceType.CONE, ColorSpaceType.LINEAR_SRGB), 0, 1)
 
     # Create mesh objects list
@@ -596,7 +596,7 @@ def RenderRYGBGamut(name: str, cst: ColorSpace, display_basis: PolyscopeDisplayT
     edges = []
     for i in range(16):
         for j in range(i+1, 16):
-            diff = np.sum(vertices_rygb[i] != vertices_rygb[j])
+            diff = np.sum(vertices_bgyr[i] != vertices_bgyr[j])
             if diff == 1:
                 edges.append((i, j))
 

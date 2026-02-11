@@ -3,8 +3,8 @@
 Test the full display validation pipeline.
 
 This script demonstrates the complete workflow:
-1. Generate RYGB metamers (already done, loads from config)
-2. Convert RYGB to RGBO using primaries
+1. Generate BGYR metamers (already done, loads from config)
+2. Convert BGYR to RGBO using primaries
 3. Simulate measurements (for testing, uses primaries to generate expected spectra)
 4. Validate measurements
 """
@@ -104,13 +104,13 @@ def run_full_pipeline(
     print("="*80)
     print()
 
-    # Step 1: Convert RYGB to RGBO (already done, but show the command)
-    print("Step 1: Convert RYGB metamers to RGBO display values")
+    # Step 1: Convert BGYR to RGBO (already done, but show the command)
+    print("Step 1: Convert BGYR metamers to RGBO display values")
     print("-" * 80)
     rgbo_targets_path = test_path / "display_targets.csv"
 
-    from convert_rygb_to_rgbo import convert_rygb_to_rgbo
-    convert_rygb_to_rgbo(
+    from extern.TetriumColor.scripts.validation.convert_bgyr_to_bgor import convert_bgyr_to_bgor
+    convert_bgyr_to_bgor(
         metamers_config_path=metamers_config,
         primaries_path=primaries_path,
         output_path=str(rgbo_targets_path)
@@ -163,7 +163,7 @@ def run_full_pipeline(
     print(f"  Pairs tested: {results['summary']['total_pairs_tested']}")
     print(f"  Mean LMS RMSE: {results['summary']['mean_lms_rmse']:.4f}")
     print(f"  Mean Q difference: {results['summary']['mean_q_difference']:.4f}")
-    print(f"  Mean RYGB RMSE: {results['summary']['mean_rygb_rmse']:.4f}")
+    print(f"  Mean BGYR RMSE: {results['summary']['mean_bgyr_rmse']:.4f}")
     print()
 
     return results
@@ -177,8 +177,8 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 This script tests the complete workflow:
-1. Loads RYGB metamer configuration
-2. Converts RYGB to RGBO using measured primaries
+1. Loads BGYR metamer configuration
+2. Converts BGYR to RGBO using measured primaries
 3. Simulates measurements (generates synthetic spectra)
 4. Validates that measurements produce expected LMSQ responses
 
@@ -198,7 +198,7 @@ Example:
         '--metamers',
         type=str,
         default='config/display_validation_metamers.json',
-        help='Path to RYGB metamer configuration (default: config/display_validation_metamers.json)'
+        help='Path to BGYR metamer configuration (default: config/display_validation_metamers.json)'
     )
     parser.add_argument(
         '--output',

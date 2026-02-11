@@ -22,7 +22,7 @@ def save_primaries_into_csv(primaries_dir: str, primaries_filename: str):
 
 
 def load_primaries_from_csv(primaries_dir: str,
-                            extract_zero: bool = True,
+                            extract_zero: bool = False,
                             smooth_method: Optional[str] = 'gaussian') -> List[Spectra]:
     """Load primaries from a csv file with optional zero extraction and smoothing.
 
@@ -46,9 +46,10 @@ def load_primaries_from_csv(primaries_dir: str,
             return primaries
 
         # Standard loading: average last 4 measurements
+        # Order is BGOR (Blue, Green, Orange, Red) for ColorSpace
         primaries = get_spectras_from_rgbo_list(
             primaries_dir,
-            [(255, 0, 0, 0), (0, 255, 0, 0), (0, 0, 255, 0), (0, 0, 0, 255)]
+            [(0, 0, 255, 0), (0, 255, 0, 0), (0, 0, 0, 255), (255, 0, 0, 0)]
         )
 
         # Apply smoothing/interpolation to 1nm resolution
@@ -298,33 +299,25 @@ def get_spectras_from_rgbo_list(
         # Sort by timestamp (embedded in filename)
         matching_files.sort()
 
-        # Take the last 4 measurements
-        files_to_average = matching_files[-4:]
+        # Instead of averaging, just use the most recent (last) matching file
+        filename = matching_files[-1]  # most recent file after sorting
+        filepath = os.path.join(directory, filename)
+        power_values = []
+        with open(filepath, newline='') as csvfile:
+            reader = csv.reader(csvfile)
+            next(reader, None)  # Skip header if present
+            for row in reader:
+                if len(row) < 2:
+                    continue
+                try:
+                    power = float(row[1])
+                    power_values.append(power)
+                except ValueError:
+                    continue  # Skip malformed rows
 
-        # Read and average power values from the last 4 files
-        all_power_values = []
-        for filename in files_to_average:
-            filepath = os.path.join(directory, filename)
-            power_values = []
-            with open(filepath, newline='') as csvfile:
-                reader = csv.reader(csvfile)
-                next(reader, None)  # Skip header if present
-                for row in reader:
-                    if len(row) < 2:
-                        continue
-                    try:
-                        power = float(row[1])
-                        power_values.append(power)
-                    except ValueError:
-                        continue  # Skip malformed rows
-
-            if len(power_values) > len(wavelengths):
-                power_values = power_values[-len(wavelengths):]
-            all_power_values.append(power_values)
-
-        # Average the power values across the last 4 measurements
-        averaged_power = np.mean(all_power_values, axis=0)
-        results.append(Spectra(wavelengths=wavelengths, data=averaged_power))
+        if len(power_values) > len(wavelengths):
+            power_values = power_values[-len(wavelengths):]
+        results.append(Spectra(wavelengths=wavelengths, data=np.array(power_values)))
 
     return results
 

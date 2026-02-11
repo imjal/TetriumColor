@@ -855,7 +855,7 @@ def analyze_ink_library(library_name: str, args):
                 factor = 0.1575
                 viz.ps.set_background_color((factor, factor, factor, 1))
 
-                viz.RenderRYGBGamut("observer", cs, PolyscopeDisplayType.HERING_MAXBASIS)
+                viz.RenderBGYRGamut("observer", cs, PolyscopeDisplayType.HERING_MAXBASIS)
                 viz.ps.get_surface_mesh("observer").set_transparency(0.3)
                 viz.ps.get_surface_mesh("observer").set_transform(rotation_mat)
                 viz.RenderPointCloud("points_k4", cs.convert(
@@ -1126,7 +1126,7 @@ def analyze_ink_library(library_name: str, args):
             viz.ps.set_background_color((factor, factor, factor, 1))
 
             # viz.RenderOBS("observer", cs, PolyscopeDisplayType.HERING_MAXBASIS, num_samples=1000)
-            viz.RenderRYGBGamut("observer", cs, PolyscopeDisplayType.HERING_MAXBASIS)
+            viz.RenderBGYRGamut("observer", cs, PolyscopeDisplayType.HERING_MAXBASIS)
             viz.ps.get_surface_mesh("observer").set_transparency(0.3)
             viz.ps.get_surface_mesh("observer").set_transform(rotation_mat)
             viz.RenderPointCloud("points_k4", cs.convert(

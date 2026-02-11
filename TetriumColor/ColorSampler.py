@@ -34,8 +34,8 @@ class ColorSampler:
         Parameters:
             color_space (ColorSpace): The color space to sample from
             cubemap_size (int): Size of the lookup table (cubemap size for 4D, circle resolution for 3D)
-            sampling_space (ColorSpaceType, optional): Space to sample in (RYGB or DISP).
-                If None, auto-detects: RYGB for 4D without primaries, DISP otherwise.
+            sampling_space (ColorSpaceType, optional): Space to sample in (BGYR or DISP).
+                If None, auto-detects: BGYR for 4D without primaries, DISP otherwise.
             disable (bool): Whether to disable progress bars
         """
         from TetriumColor.ColorSpace import ColorSpaceType
@@ -51,7 +51,7 @@ class ColorSampler:
         # Auto-detect sampling space if not provided
         if sampling_space is None:
             if color_space.dim == 4 and color_space.display_primaries is None:
-                sampling_space = ColorSpaceType.RYGB
+                sampling_space = ColorSpaceType.BGYR
             else:
                 sampling_space = ColorSpaceType.DISP
         self.sampling_space = sampling_space
@@ -653,14 +653,14 @@ class ColorSampler:
         Get the HERING->sampling space transformation matrix.
 
         Returns the appropriate transformation based on self.sampling_space:
-        - RYGB: Returns HERING->RYGB transformation
+        - BGYR: Returns HERING->BGYR transformation
         - DISP: Returns HERING->DISP transformation
 
         Returns:
             npt.NDArray: Transformation matrix
         """
-        if self.sampling_space == ColorSpaceType.RYGB:
-            return self.color_space._get_hering_to_rygb()
+        if self.sampling_space == ColorSpaceType.BGYR:
+            return self.color_space._get_hering_to_bgyr()
         else:
             return self.color_space._get_hering_to_disp()
 
@@ -764,7 +764,7 @@ class ColorSampler:
 
         Parameters:
             vshh (npt.NDArray): Points in VSH space
-            vsh_type (ColorSpaceType, optional): VSH type (VSH or VSH_RYGB). Defaults to VSH.
+            vsh_type (ColorSpaceType, optional): VSH type (VSH or VSH_BGYR). Defaults to VSH.
 
         Returns:
             npt.NDArray: Remapped points that are in gamut
@@ -1123,9 +1123,9 @@ class ColorSampler:
         invMetamericDirMat = np.linalg.inv(metamericDirMat)
 
         # Determine VSH and HERING types based on sampling space
-        if self.sampling_space == ColorSpaceType.RYGB:
-            vsh_type = ColorSpaceType.VSH_RYGB
-            hering_type = ColorSpaceType.HERING_RYGB
+        if self.sampling_space == ColorSpaceType.BGYR:
+            vsh_type = ColorSpaceType.VSH_BGYR
+            hering_type = ColorSpaceType.HERING_BGYR
         else:
             vsh_type = ColorSpaceType.VSH
             hering_type = ColorSpaceType.HERING
@@ -1387,7 +1387,7 @@ class ColorSampler:
         if self.color_space.dim != 4:
             raise ValueError("get_metameric_pairs only works for 4D color spaces")
 
-        # Get points in the sampling space (RYGB or DISP)
+        # Get points in the sampling space (BGYR or DISP)
         sampling_points = self._output_cubemap_values_4d(
             luminance, saturation, self.sampling_space, metameric_axis=metameric_axis)[cube_idx]
         metamer_dir = self.color_space.get_metameric_axis_in(

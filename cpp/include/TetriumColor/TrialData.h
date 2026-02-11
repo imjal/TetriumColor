@@ -14,7 +14,7 @@ struct PseudoIsochromaticTrial
     std::string genotype;
     int metameric_axis;
     std::string rgb_path;
-    std::string rygb_path;
+    std::string bgyr_path;
     std::string ocv_path;
     std::string hidden_symbol;
     double intensity;

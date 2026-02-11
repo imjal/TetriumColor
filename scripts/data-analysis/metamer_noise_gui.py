@@ -29,7 +29,7 @@ from TetriumColor.Visualization.PolyscopeUtils import (
     RenderNoiseBall,
     RenderPointCloud,
     Render3DLine,
-    RenderRYGBGamut,
+    RenderBGYRGamut,
     RenderGamutSlices,
 )
 
@@ -41,7 +41,7 @@ class MetamerNoiseGUI:
         num_observers: int = 4,
         initial_luminance: float = 0.5,
         initial_noise_std: float = 0.01,
-        display_basis: PolyscopeDisplayType = PolyscopeDisplayType.HERING_RYGB,
+        display_basis: PolyscopeDisplayType = PolyscopeDisplayType.HERING_BGYR,
     ):
         """Initialize the GUI application.
 
@@ -94,7 +94,7 @@ class MetamerNoiseGUI:
 
         # Selected point state
         self.selected_point_world: Optional[npt.NDArray] = None
-        self.selected_point_rygb: Optional[npt.NDArray] = None
+        self.selected_point_bgyr: Optional[npt.NDArray] = None
         self.metamer_pairs: List[Tuple[npt.NDArray, npt.NDArray]] = []
         self.current_gamut_slice_name: Optional[str] = None  # Track current slice name
         self._last_intersection_cone_point: Optional[npt.NDArray] = None  # Store cone point for intersection
@@ -111,7 +111,7 @@ class MetamerNoiseGUI:
 
         # Render gamut for reference (use first observer's color space)
         if len(self.color_spaces) > 0:
-            RenderRYGBGamut(
+            RenderBGYRGamut(
                 "reference_gamut",
                 self.color_spaces[0],
                 self.display_basis,
@@ -417,11 +417,11 @@ class MetamerNoiseGUI:
 
             if intersection is not None and len(intersection) > 0:
                 self.selected_point_world = intersection
-                print(f"Selected point in world space (HERING_RYGB display, 3D): {intersection}")
+                print(f"Selected point in world space (HERING_BGYR display, 3D): {intersection}")
 
-                # Convert the intersection point to RYGB coordinates
-                # The intersection is in HERING_RYGB display space (3D chromatic coordinates)
-                # Process: intersection (3D HERING chromatic) -> add L=x -> HERING (4D) -> RYGB -> store
+                # Convert the intersection point to BGYR coordinates
+                # The intersection is in HERING_BGYR display space (3D chromatic coordinates)
+                # Process: intersection (3D HERING chromatic) -> add L=x -> HERING (4D) -> BGYR -> store
                 if len(self.color_spaces) > 0:
                     cst = self.color_spaces[0]
                     try:
@@ -445,19 +445,19 @@ class MetamerNoiseGUI:
 
                         print(f"Reconstructed full HERING coordinate: {hering_full}")
 
-                        # Convert HERING -> RYGB (goes through CONE as intermediate)
+                        # Convert HERING -> BGYR (goes through CONE as intermediate)
                         # Note: hering_full is in HERING space (CONE transformed by Hering matrix)
-                        # HERING_RYGB would be RYGB transformed by Hering matrix, which is different
-                        rygb_point = cst.convert(
+                        # HERING_BGYR would be BGYR transformed by Hering matrix, which is different
+                        bgyr_point = cst.convert(
                             hering_full.reshape(1, -1),
-                            ColorSpaceType.HERING_RYGB,
-                            ColorSpaceType.RYGB,
+                            ColorSpaceType.HERING_BGYR,
+                            ColorSpaceType.BGYR,
                         )[0]
 
-                        self.selected_point_rygb = rygb_point
-                        print(f"Selected point in RYGB: {rygb_point}")
+                        self.selected_point_bgyr = bgyr_point
+                        print(f"Selected point in BGYR: {bgyr_point}")
                     except Exception as e:
-                        print(f"Error converting intersection point to RYGB: {e}")
+                        print(f"Error converting intersection point to BGYR: {e}")
                         import traceback
                         traceback.print_exc()
                         return
@@ -470,10 +470,10 @@ class MetamerNoiseGUI:
                 if len(self.color_spaces) > 0:
                     cst = self.color_spaces[0]
                     try:
-                        # Convert RYGB -> CONE -> display basis
+                        # Convert BGYR -> CONE -> display basis
                         cone_point = cst.convert(
-                            self.selected_point_rygb.reshape(1, -1),
-                            ColorSpaceType.RYGB,
+                            self.selected_point_bgyr.reshape(1, -1),
+                            ColorSpaceType.BGYR,
                             ColorSpaceType.CONE,
                         )[0]
                         disp_point = cst.convert_to_polyscope(
@@ -536,12 +536,12 @@ class MetamerNoiseGUI:
     def update_visualization(self):
         """Update all visualization elements."""
         print(f"\n=== Updating visualization ===")
-        print(f"Selected RYGB point: {self.selected_point_rygb}")
+        print(f"Selected BGYR point: {self.selected_point_bgyr}")
 
         # Clear previous metamer pairs and noise balls
         self.clear_previous_renders()
 
-        if self.selected_point_rygb is None:
+        if self.selected_point_bgyr is None:
             print("No point selected, skipping visualization update")
             return
 
@@ -553,12 +553,12 @@ class MetamerNoiseGUI:
             print("No color spaces available")
             return
 
-        # Convert the selected RYGB point to display space ONCE using the first observer
+        # Convert the selected BGYR point to display space ONCE using the first observer
         # This gives us a common starting point that all observers will use
         reference_cst = self.color_spaces[0]
         selected_cone_common = reference_cst.convert(
-            self.selected_point_rygb.reshape(1, -1),
-            ColorSpaceType.RYGB,
+            self.selected_point_bgyr.reshape(1, -1),
+            ColorSpaceType.BGYR,
             ColorSpaceType.CONE,
         )[0]
         selected_disp_common = reference_cst.convert_to_polyscope(
@@ -568,20 +568,20 @@ class MetamerNoiseGUI:
         )[0]
         print(f"Common selected point in display space: {selected_disp_common}")
 
-        # Convert RYGB point to display space for each observer
+        # Convert BGYR point to display space for each observer
         for i in range(num_to_process):
             obs = self.observers[i]
             cst = self.color_spaces[i]
             print(f"\nProcessing observer {i+1}...")
             try:
-                # Find metameric pair directly from RYGB space (matching notebook approach)
+                # Find metameric pair directly from BGYR space (matching notebook approach)
                 # This ensures we get the same results as the notebook
                 metameric_axis = cst.metameric_axis
                 print(f"  Metameric axis: {metameric_axis}")
                 result = cst.get_maximal_pair_in_disp_from_pt(
-                    pt=self.selected_point_rygb,
+                    pt=self.selected_point_bgyr,
                     metameric_axis=metameric_axis,
-                    input_space=ColorSpaceType.RYGB,  # Use RYGB directly, like notebook
+                    input_space=ColorSpaceType.BGYR,  # Use BGYR directly, like notebook
                     output_space=ColorSpaceType.CONE,
                     proportion=0.8,
                 )
@@ -606,10 +606,10 @@ class MetamerNoiseGUI:
                 print(f"  Metamer point 2 in display space: {disp2}")
 
                 # Find which metamer point is furthest from the selected point
-                # Convert selected RYGB point to CONE for distance comparison
+                # Convert selected BGYR point to CONE for distance comparison
                 selected_cone = cst.convert(
-                    self.selected_point_rygb.reshape(1, -1),
-                    ColorSpaceType.RYGB,
+                    self.selected_point_bgyr.reshape(1, -1),
+                    ColorSpaceType.BGYR,
                     ColorSpaceType.CONE,
                 )[0]
                 dist1 = np.linalg.norm(cone1 - selected_cone)
@@ -676,7 +676,7 @@ class MetamerNoiseGUI:
                 print(f"  Using noise std in cone space: {noise_std_cone}")
 
                 M = self.estimate_jacobian(lambda x: cst.convert_to_polyscope(
-                    np.array([x]).reshape(1, -1), ColorSpaceType.CONE, PolyscopeDisplayType.HERING_RYGB)[0], noise_std_cone)  # 3x3 or compute numerically
+                    np.array([x]).reshape(1, -1), ColorSpaceType.CONE, PolyscopeDisplayType.HERING_BGYR)[0], noise_std_cone)  # 3x3 or compute numerically
 
                 # Build covariance in display space
                 S = np.diag(noise_std_cone)  # assuming 3D for display
@@ -774,7 +774,7 @@ class MetamerNoiseGUI:
 
     def render_display_primaries(self):
         """Render display primaries that lie on the selected luminance plane."""
-        if self.selected_point_rygb is None:
+        if self.selected_point_bgyr is None:
             return
 
         # Sample display primaries
@@ -973,8 +973,8 @@ class MetamerNoiseGUI:
                 self.render_gamut_slice()
 
                 # Update selected point if it exists
-                # RYGB doesn't have luminance, but we should still update visualization
-                if self.selected_point_rygb is not None:
+                # BGYR doesn't have luminance, but we should still update visualization
+                if self.selected_point_bgyr is not None:
                     self.update_visualization()
 
             # Individual noise sliders for each dimension
@@ -1046,7 +1046,7 @@ class MetamerNoiseGUI:
                 # Recreate observers with new parameters
                 self._create_observers()
                 # Update visualization if a point is selected
-                if self.selected_point_rygb is not None:
+                if self.selected_point_bgyr is not None:
                     self.update_visualization()
 
             # Number of observers
@@ -1060,12 +1060,12 @@ class MetamerNoiseGUI:
             if changed:
                 print(f"Number of observers changed to {self.num_observers}")
                 # Update visualization to show/hide observers based on new count
-                if self.selected_point_rygb is not None:
+                if self.selected_point_bgyr is not None:
                     self.update_visualization()
 
             psim.Text("Right-click to select a point on the gamut")
-            if self.selected_point_rygb is not None:
-                psim.Text(f"Selected point (RYGB): {self.selected_point_rygb}")
+            if self.selected_point_bgyr is not None:
+                psim.Text(f"Selected point (BGYR): {self.selected_point_bgyr}")
 
         psim.End()
 

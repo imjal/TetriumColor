@@ -2,472 +2,284 @@
 """
 Validate display measurements against expected LMSQ responses.
 
-This script loads measured spectra and validates that they produce the expected
-LMSQ (cone response) values for each observer's metamer pairs.
+For each metamer pair (BGYR), this script:
+1. Converts BGYR -> BGOR display primary weights, reconstructs the predicted spectrum,
+   and plots it against the measured spectrum.
+2. Projects both predicted and measured spectra into BGYR and computes RMSE.
+3. Projects both spectra into LMSQ for each observer and computes RMSE.
+   (LMS difference should be ~0, Q difference should be large for valid metamers.)
+
+All three panels are output as a single figure per metamer pair.
 """
 
 from TetriumColor.Measurement import load_primaries_from_csv, get_spectras_from_rgbo_list
-from TetriumColor.ColorSpace import ColorSpace, ColorSpaceType, RYGB_CUTPOINTS
+from TetriumColor.ColorSpace import ColorSpace, ColorSpaceType, convert_spectrum_to_bgyr
 from TetriumColor.Observer.ObserverGenotypes import ObserverGenotypes
 from TetriumColor.Observer import Observer, Spectra
+
 import argparse
 import json
 import numpy as np
 from pathlib import Path
 import sys
-from datetime import datetime
 import matplotlib.pyplot as plt
-import matplotlib.colors as mcolors
 
-# Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-
-def create_rygb_basis_spectra(wavelengths):
-    """Create RYGB basis spectra (step functions)."""
-    rygb_basis = []
-    # Red: wavelengths >= 608nm
-    red_data = (wavelengths >= RYGB_CUTPOINTS[2]).astype(float)
-    rygb_basis.append(Spectra(wavelengths=wavelengths, data=red_data))
-    # Yellow: 563nm <= wavelengths < 608nm
-    yellow_data = ((wavelengths >= RYGB_CUTPOINTS[1]) & (wavelengths < RYGB_CUTPOINTS[2])).astype(float)
-    rygb_basis.append(Spectra(wavelengths=wavelengths, data=yellow_data))
-    # Green: 493nm <= wavelengths < 563nm
-    green_data = ((wavelengths >= RYGB_CUTPOINTS[0]) & (wavelengths < RYGB_CUTPOINTS[1])).astype(float)
-    rygb_basis.append(Spectra(wavelengths=wavelengths, data=green_data))
-    # Blue: wavelengths < 493nm
-    blue_data = (wavelengths < RYGB_CUTPOINTS[0]).astype(float)
-    rygb_basis.append(Spectra(wavelengths=wavelengths, data=blue_data))
-    return rygb_basis
-
-
-def convert_rygb_to_rgbo_for_value(rygb, primaries):
-    """Convert a single RYGB value to RGBO by reconstructing the spectrum."""
-    wavelengths = primaries[0].wavelengths
-    rygb_basis = create_rygb_basis_spectra(wavelengths)
-
-    # Reconstruct target spectrum from RYGB coefficients
-    target_spectrum = np.zeros(len(wavelengths))
-    for i in range(4):
-        target_spectrum += rygb[i] * rygb_basis[i].data
-
-    # Build primary matrix and solve for RGBO weights
-    primary_matrix = np.array([p.data for p in primaries]).T
-    rgbo_raw, residuals, rank, s = np.linalg.lstsq(primary_matrix, target_spectrum, rcond=None)
-
-    # Normalize RGBO to match RYGB scale
-    rygb_sum = np.sum(np.abs(rygb))
-    rgbo_sum = np.sum(np.abs(rgbo_raw))
-
-    if rgbo_sum > 0:
-        scale_factor = rygb_sum / rgbo_sum
-        rgbo = rgbo_raw * scale_factor
-    else:
-        rgbo = rgbo_raw
-
-    return rgbo
-
-
-def convert_rgbo_to_rygb_for_spectrum(spectrum, primaries):
-    """Convert a measured spectrum back to RYGB by projecting onto basis."""
-    wavelengths = primaries[0].wavelengths
-    rygb_basis = create_rygb_basis_spectra(wavelengths)
-
-    # Project spectrum onto each RYGB basis function
-    rygb = np.zeros(4)
-    for i in range(4):
-        # Compute inner product (integral of spectrum * basis)
-        rygb[i] = np.sum(spectrum * rygb_basis[i].data)
-
-    # Normalize by basis norms
-    for i in range(4):
-        norm = np.sum(rygb_basis[i].data ** 2)
-        if norm > 0:
-            rygb[i] /= norm
-
-    return rygb
+plt.rcParams['figure.dpi'] = 150
+plt.rcParams['font.size'] = 10
+plt.rcParams['font.family'] = 'sans-serif'
 
 
 def validate_measurements(
     metamers_config_path: str,
     primaries_path: str,
-    measurements_dir: str,
-    output_report_path: str = None,
-    plots_dir: str = None
+    measurements_dir: str | None,
+    plots_dir: str,
+    synthetic_epsilon: float = 0.01,
 ):
     """
-    Validate measured spectra against expected LMSQ responses.
+    Validate measured spectra against predicted spectra from BGYR metamer pairs.
 
     Args:
-        metamers_config_path: Path to RYGB metamer configuration JSON
-        primaries_path: Path to directory with display primaries
+        metamers_config_path: Path to BGYR metamer configuration JSON
+        primaries_path: Path to directory with display primaries (BGOR order)
         measurements_dir: Directory containing measured spectra CSV files
-        output_report_path: Path to output JSON report (optional)
-        plots_dir: Directory to save validation plots (optional)
-
-    Returns:
-        Dictionary with validation results
+            (if None, synthetic spectra are generated from primaries)
+        plots_dir: Directory to save validation plots
+        synthetic_epsilon: Noise level for synthetic BGOR weights (only used when
+            measurements_dir is None)
     """
-    # Load metamer configuration
-    print(f"Loading metamer configuration from: {metamers_config_path}")
+    # --- Load inputs ---
+    print(f"Loading metamer config from: {metamers_config_path}")
     with open(metamers_config_path, 'r') as f:
         config = json.load(f)
 
     print(f"  Observers: {len(config['observers'])}")
     print(f"  Total metamer pairs: {config['metadata']['total_metamer_pairs']}")
-    print()
 
-    # Load display primaries
     print(f"Loading display primaries from: {primaries_path}")
-    primaries = load_primaries_from_csv(primaries_path)
+    primaries = load_primaries_from_csv(primaries_path, extract_zero=False)
+    assert len(primaries) >= 4, f"Expected 4 primaries (BGOR), got {len(primaries)}"
+    print(f"  Loaded {len(primaries)} primaries (BGOR order)")
 
-    if len(primaries) < 4:
-        raise ValueError(f"Expected 4 primaries (RGBO), but got {len(primaries)}")
-
-    print(f"  Loaded {len(primaries)} primaries")
-    print()
-
-    # Initialize ObserverGenotypes
+    # Set up observers
     wavelengths = primaries[0].wavelengths
     observer_genotypes = ObserverGenotypes(
         wavelengths=wavelengths,
         dimensions=[3],
-        seed=config['metadata']['seed']
+        seed=config['metadata'].get('seed', 42)
     )
+    metameric_axis = config['metadata'].get('metameric_axis', 2)
 
-    # White spectrum for Delta-E calculations
-    white_spectrum_data = np.sum([primary.data for primary in primaries], axis=0)
-    white_spectrum = Spectra(wavelengths=wavelengths, data=white_spectrum_data)
+    plots_path = Path(plots_dir)
+    plots_path.mkdir(parents=True, exist_ok=True)
 
-    # Process each observer
-    validation_results = {
-        'date': datetime.now().isoformat(),
-        'primaries_path': str(primaries_path),
-        'measurements_dir': str(measurements_dir),
-        'observers': []
-    }
+    if measurements_dir is None:
+        print(f"Using SYNTHETIC spectra (epsilon={synthetic_epsilon} BGOR units)")
+    else:
+        print(f"Loading measured spectra from: {measurements_dir}")
 
-    all_metamers_valid = True
-    total_lms_rmse = []
-    total_q_diff = []
-    total_rygb_rmse = []
-
+    # --- Process each observer ---
     for obs_data in config['observers']:
-        genotype = tuple(sorted(tuple(obs_data['genotype'])))  # sort genotype (already includes Q at 547nm)
+        genotype = tuple(sorted(obs_data['genotype']))
+        obs_idx = obs_data['observer_index']
+        observer = observer_genotypes.get_observer_for_peaks(genotype)
 
-        # Calculate Q index: Observer will add S cone at 420nm and sort all peaks
+        # Create observer-specific ColorSpace with display primaries
+        color_space = ColorSpace(observer, display_primaries=primaries, metameric_axis=metameric_axis)
+
+        # Determine Q index in the sorted LMSQ ordering
         sorted_with_s = tuple(sorted((420,) + genotype))
         q_index = sorted_with_s.index(547)
         lms_indices = [i for i in range(len(sorted_with_s)) if i != q_index]
 
-        print(f"Processing observer {obs_data['observer_index']}: {genotype} (Q at index {q_index})")
+        print(f"\nObserver {obs_idx}: genotype={genotype}, Q at index {q_index}")
+        print(f"  Using observer-specific ColorSpace for BGYR→BGOR conversion")
 
-        # Create observer (ColorSpace not needed for validation)
-        observer = observer_genotypes.get_observer_for_peaks(genotype)
-
-        # Prepare to collect RGBO values for this observer
-        observer_rgbo_list = []
-        observer_expected_rygb = []
-        observer_metamer_pairs = []
-
-        # Convert all RYGB metamers to RGBO using spectral reconstruction
         for metamer in obs_data['metamers']:
-            rygb_1 = np.array(metamer['rygb_1'])
-            rygb_2 = np.array(metamer['rygb_2'])
+            pair_idx = metamer['pair_index']
+            bgyr_1 = np.array(metamer['bgyr_1'])
+            bgyr_2 = np.array(metamer['bgyr_2'])
 
-            # Convert RYGB to RGBO by reconstructing spectrum
-            rgbo_1 = convert_rygb_to_rgbo_for_value(rygb_1, primaries)
-            rgbo_2 = convert_rygb_to_rgbo_for_value(rygb_2, primaries)
+            # Check if RGBO values are stored (from generation in DISP space)
+            # If available, use them directly since they're already in the correct normalized [0, 1] range
+            # This avoids conversion errors from BGYR → DISP
+            if 'rgbo_1' in metamer and 'rgbo_2' in metamer:
+                # Use stored RGBO values (already normalized [0, 1] from ColorSampler)
+                rgbo_1_raw = np.array(metamer['rgbo_1'])  # RGBO order
+                rgbo_2_raw = np.array(metamer['rgbo_2'])  # RGBO order
 
-            # Convert to 8-bit
-            rgbo_1_8bit = tuple(np.clip(np.round(rgbo_1 * 255), 0, 255).astype(int))
-            rgbo_2_8bit = tuple(np.clip(np.round(rgbo_2 * 255), 0, 255).astype(int))
+                # Convert RGBO to BGOR: RGBO=[R,G,B,O] -> BGOR=[B,G,O,R]
+                bgor_1 = np.array([rgbo_1_raw[2], rgbo_1_raw[1], rgbo_1_raw[3], rgbo_1_raw[0]])  # B, G, O, R
+                bgor_2 = np.array([rgbo_2_raw[2], rgbo_2_raw[1], rgbo_2_raw[3], rgbo_2_raw[0]])  # B, G, O, R
 
-            observer_rgbo_list.extend([rgbo_1_8bit, rgbo_2_8bit])
-            observer_expected_rygb.extend([rygb_1, rygb_2])
-            observer_metamer_pairs.append({
-                'pair_index': metamer['pair_index'],
-                'rgbo_1': rgbo_1_8bit,
-                'rgbo_2': rgbo_2_8bit,
-                'rygb_1': rygb_1,
-                'rygb_2': rygb_2
-            })
-
-        # Load measured spectra for this observer's RGBO values
-        print(f"  Loading {len(observer_rgbo_list)} measured spectra...")
-        measured_spectra = get_spectras_from_rgbo_list(measurements_dir, observer_rgbo_list)
-
-        # Filter out None values
-        valid_indices = [i for i, spec in enumerate(measured_spectra) if spec is not None]
-        if len(valid_indices) == 0:
-            print(f"  Warning: No valid spectra found for observer {genotype}")
-            all_metamers_valid = False
-            continue
-
-        valid_spectra = [measured_spectra[i] for i in valid_indices]
-        valid_rgbo = [observer_rgbo_list[i] for i in valid_indices]
-        valid_expected_rygb = [observer_expected_rygb[i] for i in valid_indices]
-
-        print(f"  Found {len(valid_spectra)}/{len(observer_rgbo_list)} measured spectra")
-
-        # Ensure all spectra have same wavelengths as primaries
-        primaries_wavelengths = primaries[0].wavelengths
-        valid_spectra_interp = []
-        for spectrum in valid_spectra:
-            if not np.array_equal(spectrum.wavelengths, primaries_wavelengths):
-                # Interpolate to match primaries wavelengths
-                spectrum_interp = spectrum.interpolate_values(primaries_wavelengths)
-                valid_spectra_interp.append(spectrum_interp)
+                # For file lookup, convert to 8-bit RGBO
+                rgbo_1 = tuple(np.clip(np.round(rgbo_1_raw * 255), 0, 255).astype(int))
+                rgbo_2 = tuple(np.clip(np.round(rgbo_2_raw * 255), 0, 255).astype(int))
             else:
-                valid_spectra_interp.append(spectrum)
+                # Fallback: Convert from BGYR (for old configs without RGBO values)
+                # --- Convert BGYR -> BGOR display weights using observer-specific ColorSpace ---
+                # ColorSpace.convert() handles BGYR → CONE → DISP (BGOR) transformation
+                bgor_1 = color_space.convert(bgyr_1.reshape(1, -1), ColorSpaceType.BGYR, ColorSpaceType.DISP)[0]
+                bgor_2 = color_space.convert(bgyr_2.reshape(1, -1), ColorSpaceType.BGYR, ColorSpaceType.DISP)[0]
 
-        # Project measured spectra to LMSQ and RYGB
-        measured_lmsq = observer.observe_spectras(valid_spectra_interp)
-        measured_rygb_list = []
+                # Clip to [0, 1] to ensure valid range
+                bgor_1 = np.clip(bgor_1, 0, 1)
+                bgor_2 = np.clip(bgor_2, 0, 1)
 
-        for spectrum in valid_spectra_interp:
-            # Convert spectrum to RYGB by projecting onto basis functions
-            rygb_measured = convert_rgbo_to_rygb_for_spectrum(spectrum.data, primaries)
-            measured_rygb_list.append(rygb_measured)
+                # Convert to 8-bit for file lookup (BGOR -> RGBO for filenames)
+                bgor_1_8bit = np.clip(np.round(bgor_1 * 255), 0, 255).astype(int)
+                bgor_2_8bit = np.clip(np.round(bgor_2 * 255), 0, 255).astype(int)
 
-        measured_rygb = np.array(measured_rygb_list)
+                # BGOR=[B,G,O,R] -> RGBO=[R,G,B,O]
+                rgbo_1 = (int(bgor_1_8bit[3]), int(bgor_1_8bit[1]),
+                          int(bgor_1_8bit[0]), int(bgor_1_8bit[2]))
+                rgbo_2 = (int(bgor_2_8bit[3]), int(bgor_2_8bit[1]),
+                          int(bgor_2_8bit[0]), int(bgor_2_8bit[2]))
 
-        # Validate metamer pairs
-        observer_result = {
-            'observer_index': obs_data['observer_index'],
-            'genotype': list(genotype),
-            'probability': obs_data['probability'],
-            'metamer_pairs': [],
-            'cross_validation': []
-        }
+            print(f"  Pair {pair_idx}: RGBO1={rgbo_1}, RGBO2={rgbo_2}")
+            print(f"    BGOR1 (normalized): {bgor_1}, BGOR2 (normalized): {bgor_2}")
 
-        pair_idx = 0
-        for i in range(0, len(valid_indices), 2):
-            if i + 1 >= len(valid_indices):
-                break
+            # --- Predicted spectra: scale BGOR primaries by BGOR weights ---
+            predicted_1_data = sum(w * p.data for w, p in zip(bgor_1, primaries))
+            predicted_2_data = sum(w * p.data for w, p in zip(bgor_2, primaries))
+            predicted_1 = Spectra(wavelengths=wavelengths, data=predicted_1_data)
+            predicted_2 = Spectra(wavelengths=wavelengths, data=predicted_2_data)
 
-            # Get the pair
-            lmsq_1 = measured_lmsq[i]
-            lmsq_2 = measured_lmsq[i+1]
-            rygb_measured_1 = measured_rygb[i]
-            rygb_measured_2 = measured_rygb[i+1]
-            rygb_expected_1 = valid_expected_rygb[i]
-            rygb_expected_2 = valid_expected_rygb[i+1]
+            # --- Measured (or synthetic) spectra ---
+            if measurements_dir is None:
+                # Synthetic case: perturb BGOR weights by a small epsilon and
+                # reconstruct spectra from primaries.
+                noise_1 = np.random.uniform(-synthetic_epsilon,
+                                            synthetic_epsilon,
+                                            size=4)
+                noise_2 = np.random.uniform(-synthetic_epsilon,
+                                            synthetic_epsilon,
+                                            size=4)
+                bgor_1_noisy = np.clip(bgor_1 + noise_1, 0, None)
+                bgor_2_noisy = np.clip(bgor_2 + noise_2, 0, None)
 
-            # Calculate LMS difference (should be small for metamers)
-            lms_1 = lmsq_1[lms_indices]  # All cones except Q
-            lms_2 = lmsq_2[lms_indices]
-            lms_diff = lms_1 - lms_2
-            lms_rmse = np.sqrt(np.mean(lms_diff ** 2))
+                measured_1_data = sum(w * p.data
+                                      for w, p in zip(bgor_1_noisy, primaries))
+                measured_2_data = sum(w * p.data
+                                      for w, p in zip(bgor_2_noisy, primaries))
+                measured_1 = Spectra(wavelengths=wavelengths,
+                                     data=measured_1_data)
+                measured_2 = Spectra(wavelengths=wavelengths,
+                                     data=measured_2_data)
+            else:
+                measured_list = get_spectras_from_rgbo_list(
+                    measurements_dir, [rgbo_1, rgbo_2])
+                measured_1, measured_2 = measured_list[0], measured_list[1]
 
-            # Calculate Q difference (should be large for metamers)
-            q_diff = abs(lmsq_1[q_index] - lmsq_2[q_index])
-
-            # Calculate Delta-E
-            try:
-                delta_e = Spectra.delta_e(
-                    valid_spectra_interp[i],
-                    valid_spectra_interp[i+1],
-                    white_spectrum
-                )
-            except:
-                delta_e = None
-
-            # Calculate RYGB accuracy
-            rygb_error_1 = rygb_measured_1 - rygb_expected_1
-            rygb_error_2 = rygb_measured_2 - rygb_expected_2
-            rygb_rmse = np.sqrt(np.mean([
-                np.mean(rygb_error_1 ** 2),
-                np.mean(rygb_error_2 ** 2)
-            ]))
-
-            # Check if valid metamer (LMS similar, Q different)
-            is_metamer = (lms_rmse < 0.05 and q_diff > 0.005)
-            if not is_metamer:
-                all_metamers_valid = False
-
-            observer_result['metamer_pairs'].append({
-                'pair_index': pair_idx,
-                'rgbo_1': [int(x) for x in valid_rgbo[i]],
-                'rgbo_2': [int(x) for x in valid_rgbo[i+1]],
-                'lmsq_1': [float(x) for x in lmsq_1],
-                'lmsq_2': [float(x) for x in lmsq_2],
-                'lms_rmse': float(lms_rmse),
-                'q_difference': float(q_diff),
-                'delta_e': float(delta_e) if delta_e is not None else None,
-                'is_metamer': bool(is_metamer),
-                'rygb_measured_1': [float(x) for x in rygb_measured_1],
-                'rygb_measured_2': [float(x) for x in rygb_measured_2],
-                'rygb_expected_1': [float(x) for x in rygb_expected_1],
-                'rygb_expected_2': [float(x) for x in rygb_expected_2],
-                'rygb_rmse': float(rygb_rmse)
-            })
-
-            total_lms_rmse.append(lms_rmse)
-            total_q_diff.append(q_diff)
-            total_rygb_rmse.append(rygb_rmse)
-
-            print(f"  Pair {pair_idx}: LMS_RMSE={lms_rmse:.4f}, Q_diff={q_diff:.4f}, "
-                  f"RYGB_RMSE={rygb_rmse:.4f}, Metamer={is_metamer}")
-
-            pair_idx += 1
-
-        # Cross-validation: check that these spectra look different to other observers
-        for other_obs_data in config['observers']:
-            if other_obs_data['observer_index'] == obs_data['observer_index']:
-                continue
-
-            other_genotype = tuple(other_obs_data['genotype'])
-            other_observer = observer_genotypes.get_observer_for_peaks(other_genotype)
-
-            # Project to other observer's LMSQ
-            other_lmsq = other_observer.observe_spectras(valid_spectra_interp)
-
-            # Calculate differences for metamer pairs
-            other_lms_diffs = []
-            other_q_diffs = []
-            other_delta_es = []
-
-            for i in range(0, len(valid_indices), 2):
-                if i + 1 >= len(valid_indices):
-                    break
-
-                other_lmsq_1 = other_lmsq[i]
-                other_lmsq_2 = other_lmsq[i+1]
-
-                other_lms_1 = other_lmsq_1[[0, 1, 3]]
-                other_lms_2 = other_lmsq_2[[0, 1, 3]]
-                other_lms_diff = np.sqrt(np.mean((other_lms_1 - other_lms_2) ** 2))
-                # For other observers, Q might be at different index - calculate it
-                other_genotype = tuple(sorted(tuple(other_obs_data['genotype'])))
-                other_sorted_with_s = tuple(sorted((420,) + other_genotype))
-                other_q_index = other_sorted_with_s.index(547)
-
-                other_q_diff = abs(other_lmsq_1[other_q_index] - other_lmsq_2[other_q_index])
-
-                other_lms_diffs.append(other_lms_diff)
-                other_q_diffs.append(other_q_diff)
-
-                try:
-                    delta_e = Spectra.delta_e(
-                        valid_spectra_interp[i],
-                        valid_spectra_interp[i+1],
-                        white_spectrum
+                if measured_1 is None or measured_2 is None:
+                    print(
+                        f"    WARNING: Missing measurements for pair {pair_idx}, skipping"
                     )
-                    other_delta_es.append(delta_e)
-                except:
-                    pass
+                    continue
 
-            if len(other_lms_diffs) > 0:
-                observer_result['cross_validation'].append({
-                    'other_observer_genotype': list(other_genotype),
-                    'mean_lms_difference': float(np.mean(other_lms_diffs)),
-                    'mean_q_difference': float(np.mean(other_q_diffs)),
-                    'mean_delta_e': float(np.mean(other_delta_es)) if len(other_delta_es) > 0 else None
-                })
+            # --- Project to BGYR ---
+            pred_bgyr_1 = convert_spectrum_to_bgyr(predicted_1.data, wavelengths)
+            pred_bgyr_2 = convert_spectrum_to_bgyr(predicted_2.data, wavelengths)
+            meas_bgyr_1 = convert_spectrum_to_bgyr(measured_1.data, measured_1.wavelengths)
+            meas_bgyr_2 = convert_spectrum_to_bgyr(measured_2.data, measured_2.wavelengths)
 
-        validation_results['observers'].append(observer_result)
-        print()
+            bgyr_rmse_1 = np.sqrt(np.mean((pred_bgyr_1 - meas_bgyr_1) ** 2))
+            bgyr_rmse_2 = np.sqrt(np.mean((pred_bgyr_2 - meas_bgyr_2) ** 2))
 
-    # Summary statistics
-    validation_results['summary'] = {
-        'all_metamers_valid': all_metamers_valid,
-        'mean_lms_rmse': float(np.mean(total_lms_rmse)) if len(total_lms_rmse) > 0 else None,
-        'mean_q_difference': float(np.mean(total_q_diff)) if len(total_q_diff) > 0 else None,
-        'mean_rygb_rmse': float(np.mean(total_rygb_rmse)) if len(total_rygb_rmse) > 0 else None,
-        'total_pairs_tested': len(total_lms_rmse)
-    }
+            # --- Project to LMSQ ---
+            pred_lmsq_1 = observer.observe_spectras([predicted_1])[0]
+            pred_lmsq_2 = observer.observe_spectras([predicted_2])[0]
+            meas_lmsq_1 = observer.observe_spectras([measured_1])[0]
+            meas_lmsq_2 = observer.observe_spectras([measured_2])[0]
 
-    # Save report
-    if output_report_path:
-        output_path = Path(output_report_path)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
+            # LMS RMSE between the two metamers (should be ~0)
+            pred_lms_diff = pred_lmsq_1[lms_indices] - pred_lmsq_2[lms_indices]
+            meas_lms_diff = meas_lmsq_1[lms_indices] - meas_lmsq_2[lms_indices]
+            pred_lms_rmse = np.sqrt(np.mean(pred_lms_diff ** 2))
+            meas_lms_rmse = np.sqrt(np.mean(meas_lms_diff ** 2))
 
-        with open(output_path, 'w') as f:
-            json.dump(validation_results, f, indent=2)
+            # Q difference between the two metamers (should be large)
+            pred_q_diff = abs(pred_lmsq_1[q_index] - pred_lmsq_2[q_index])
+            meas_q_diff = abs(meas_lmsq_1[q_index] - meas_lmsq_2[q_index])
 
-        print(f"Saved validation report to: {output_path}")
+            # LMSQ RMSE between predicted and measured for each metamer
+            lmsq_rmse_1 = np.sqrt(np.mean((pred_lmsq_1 - meas_lmsq_1) ** 2))
+            lmsq_rmse_2 = np.sqrt(np.mean((pred_lmsq_2 - meas_lmsq_2) ** 2))
 
-    # Generate plots
-    if plots_dir:
-        plots_path = Path(plots_dir)
-        plots_path.mkdir(parents=True, exist_ok=True)
+            print(f"    BGYR RMSE: m1={bgyr_rmse_1:.4f}, m2={bgyr_rmse_2:.4f}")
+            print(f"    LMSQ RMSE: m1={lmsq_rmse_1:.4f}, m2={lmsq_rmse_2:.4f}")
+            print(f"    LMS metamer RMSE: pred={pred_lms_rmse:.6f}, meas={meas_lms_rmse:.6f}")
+            print(f"    Q metamer diff:   pred={pred_q_diff:.6f}, meas={meas_q_diff:.6f}")
 
-        # Plot 1: LMS RMSE vs Q difference for all pairs
-        fig, ax = plt.subplots(figsize=(10, 6))
-        colors = plt.cm.tab10(np.linspace(0, 1, len(validation_results['observers'])))
+            # ===== PLOT: 3-panel figure per metamer pair =====
+            fig, axes = plt.subplots(1, 3, figsize=(18, 5))
 
-        for obs_idx, obs_result in enumerate(validation_results['observers']):
-            lms_rmses = [p['lms_rmse'] for p in obs_result['metamer_pairs']]
-            q_diffs = [p['q_difference'] for p in obs_result['metamer_pairs']]
-            is_metamers = [p['is_metamer'] for p in obs_result['metamer_pairs']]
+            # --- Panel 1: Predicted vs Measured Spectra ---
+            ax = axes[0]
+            ax.plot(wavelengths, predicted_1.data, 'b-', lw=2, label='Predicted M1', alpha=0.8)
+            ax.plot(measured_1.wavelengths, measured_1.data, 'b--', lw=2, label='Measured M1', alpha=0.8)
+            ax.plot(wavelengths, predicted_2.data, 'r-', lw=2, label='Predicted M2', alpha=0.8)
+            ax.plot(measured_2.wavelengths, measured_2.data, 'r--', lw=2, label='Measured M2', alpha=0.8)
+            ax.set_xlabel('Wavelength (nm)')
+            ax.set_ylabel('Power')
+            ax.set_title('Predicted vs Measured Spectra')
+            ax.legend(loc='upper right', fontsize=8)
+            ax.grid(True, alpha=0.3, linestyle=':')
 
-            # Plot valid metamers as circles, invalid as X
-            valid_lms = [lms_rmses[i] for i in range(len(lms_rmses)) if is_metamers[i]]
-            valid_q = [q_diffs[i] for i in range(len(q_diffs)) if is_metamers[i]]
-            invalid_lms = [lms_rmses[i] for i in range(len(lms_rmses)) if not is_metamers[i]]
-            invalid_q = [q_diffs[i] for i in range(len(q_diffs)) if not is_metamers[i]]
+            # --- Panel 2: BGYR comparison ---
+            ax = axes[1]
+            channels = ['B', 'G', 'Y', 'R']
+            x = np.arange(4)
+            w = 0.18
+            ax.bar(x - 1.5*w, pred_bgyr_1, w, label='Pred M1', color='steelblue', alpha=0.8)
+            ax.bar(x - 0.5*w, meas_bgyr_1, w, label='Meas M1', color='steelblue',
+                   alpha=0.4, edgecolor='steelblue', linewidth=1.5)
+            ax.bar(x + 0.5*w, pred_bgyr_2, w, label='Pred M2', color='indianred', alpha=0.8)
+            ax.bar(x + 1.5*w, meas_bgyr_2, w, label='Meas M2', color='indianred',
+                   alpha=0.4, edgecolor='indianred', linewidth=1.5)
+            ax.set_xticks(x)
+            ax.set_xticklabels(channels)
+            ax.set_ylabel('BGYR Value')
+            ax.set_title(f'BGYR Projection\nRMSE: M1={bgyr_rmse_1:.4f}, M2={bgyr_rmse_2:.4f}')
+            ax.legend(fontsize=7)
+            ax.grid(True, alpha=0.3, axis='y', linestyle=':')
 
-            if valid_lms:
-                ax.scatter(valid_lms, valid_q, c=[colors[obs_idx]], marker='o',
-                           label=f"Observer {obs_result['observer_index']} (valid)", s=100, alpha=0.7)
-            if invalid_lms:
-                ax.scatter(invalid_lms, invalid_q, c=[colors[obs_idx]], marker='x',
-                           label=f"Observer {obs_result['observer_index']} (invalid)", s=100)
+            # --- Panel 3: LMSQ comparison ---
+            ax = axes[2]
+            cone_labels = list(sorted_with_s)
+            cone_labels_str = [f'{wl}nm' for wl in cone_labels]
+            # Mark Q cone
+            cone_labels_str[q_index] = f'{cone_labels[q_index]}nm (Q)'
 
-        ax.set_xlabel('LMS RMSE (should be small)')
-        ax.set_ylabel('Q Difference (should be large)')
-        ax.set_title('Metamer Validation: LMS Similarity vs Q Difference')
-        ax.axhline(y=0.005, color='r', linestyle='--', alpha=0.5, label='Q diff threshold')
-        ax.axvline(x=0.05, color='r', linestyle='--', alpha=0.5, label='LMS RMSE threshold')
-        ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
-        ax.grid(True, alpha=0.3)
-        plt.tight_layout()
-        plt.savefig(plots_path / 'metamer_validation.png', dpi=150, bbox_inches='tight')
-        plt.close()
+            x = np.arange(len(sorted_with_s))
+            w = 0.18
+            ax.bar(x - 1.5*w, pred_lmsq_1, w, label='Pred M1', color='steelblue', alpha=0.8)
+            ax.bar(x - 0.5*w, meas_lmsq_1, w, label='Meas M1', color='steelblue',
+                   alpha=0.4, edgecolor='steelblue', linewidth=1.5)
+            ax.bar(x + 0.5*w, pred_lmsq_2, w, label='Pred M2', color='indianred', alpha=0.8)
+            ax.bar(x + 1.5*w, meas_lmsq_2, w, label='Meas M2', color='indianred',
+                   alpha=0.4, edgecolor='indianred', linewidth=1.5)
+            ax.set_xticks(x)
+            ax.set_xticklabels(cone_labels_str, fontsize=8)
+            ax.set_ylabel('Cone Response')
+            ax.set_title(
+                f'LMSQ Projection\n'
+                f'LMS RMSE: pred={pred_lms_rmse:.4f} meas={meas_lms_rmse:.4f}\n'
+                f'Q diff: pred={pred_q_diff:.4f} meas={meas_q_diff:.4f}')
+            ax.legend(fontsize=7)
+            ax.grid(True, alpha=0.3, axis='y', linestyle=':')
 
-        # Plot 2: RYGB accuracy
-        fig, ax = plt.subplots(figsize=(10, 6))
-        for obs_idx, obs_result in enumerate(validation_results['observers']):
-            rygb_rmses = [p['rygb_rmse'] for p in obs_result['metamer_pairs']]
-            pair_indices = [p['pair_index'] for p in obs_result['metamer_pairs']]
-
-            ax.bar(
-                [p + obs_idx * 0.15 for p in pair_indices],
-                rygb_rmses,
-                width=0.15,
-                label=f"Observer {obs_result['observer_index']}",
-                color=colors[obs_idx],
-                alpha=0.7
-            )
-
-        ax.set_xlabel('Metamer Pair Index')
-        ax.set_ylabel('RYGB RMSE')
-        ax.set_title('RYGB Reconstruction Accuracy')
-        ax.legend()
-        ax.grid(True, alpha=0.3, axis='y')
-        plt.tight_layout()
-        plt.savefig(plots_path / 'rygb_accuracy.png', dpi=150, bbox_inches='tight')
-        plt.close()
-
-        print(f"Saved validation plots to: {plots_path}")
-
-    # Print summary
-    print("\n" + "="*80)
-    print("VALIDATION SUMMARY")
-    print("="*80)
-    print(f"All metamers valid: {validation_results['summary']['all_metamers_valid']}")
-    print(f"Total pairs tested: {validation_results['summary']['total_pairs_tested']}")
-    lms_rmse = validation_results['summary']['mean_lms_rmse']
-    q_diff = validation_results['summary']['mean_q_difference']
-    rygb_rmse = validation_results['summary']['mean_rygb_rmse']
-
-    print(f"Mean LMS RMSE: {lms_rmse:.4f}" if lms_rmse is not None else "Mean LMS RMSE: N/A")
-    print(f"Mean Q difference: {q_diff:.4f}" if q_diff is not None else "Mean Q difference: N/A")
-    print(f"Mean RYGB RMSE: {rygb_rmse:.4f}" if rygb_rmse is not None else "Mean RYGB RMSE: N/A")
-    print("="*80)
-
-    return validation_results
+            fig.suptitle(
+                f'Observer {obs_idx} (genotype {genotype}) — Metamer Pair {pair_idx}\n'
+                f'RGBO1={rgbo_1}  RGBO2={rgbo_2}',
+                fontsize=12, fontweight='bold', y=1.02)
+            plt.tight_layout()
+            fname = plots_path / f'obs{obs_idx}_pair{pair_idx}.png'
+            plt.savefig(fname, dpi=150, bbox_inches='tight')
+            plt.close()
+            print(f"    Saved: {fname}")
 
 
 def main():
@@ -475,54 +287,35 @@ def main():
         description='Validate display measurements against expected LMSQ responses',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Example:
+Examples:
   python validate_display_measurements.py \\
     --primaries measurements/2026-02-02/primaries/ \\
     --measurements measurements/2026-02-02/validation/ \\
     --metamers config/display_validation_metamers.json \\
-    --output measurements/2026-02-02/validation_report.json \\
     --plots-dir measurements/2026-02-02/validation_plots/
         """
     )
 
-    parser.add_argument(
-        '--primaries',
-        type=str,
-        required=True,
-        help='Path to directory containing display primary measurements'
-    )
-    parser.add_argument(
-        '--measurements',
-        type=str,
-        required=True,
-        help='Path to directory containing measured spectra'
-    )
-    parser.add_argument(
-        '--metamers',
-        type=str,
-        default='config/display_validation_metamers.json',
-        help='Path to RYGB metamer configuration JSON (default: config/display_validation_metamers.json)'
-    )
-    parser.add_argument(
-        '--output',
-        type=str,
-        help='Output JSON report file path (optional)'
-    )
-    parser.add_argument(
-        '--plots-dir',
-        type=str,
-        help='Directory to save validation plots (optional)'
-    )
+    parser.add_argument('--primaries', type=str, required=True,
+                        help='Path to directory containing display primary measurements (BGOR order)')
+    parser.add_argument('--measurements', type=str, default=None,
+                        help='Path to directory containing measured spectra CSV files (optional)')
+    parser.add_argument('--synthetic-epsilon', type=float, default=0.01,
+                        help='Noise level for synthetic BGOR weights when measurements are not provided')
+    parser.add_argument('--metamers', type=str,
+                        default='config/display_validation_metamers.json',
+                        help='Path to BGYR metamer configuration JSON')
+    parser.add_argument('--plots-dir', type=str, required=True,
+                        help='Directory to save validation plots')
 
     args = parser.parse_args()
 
-    # Validate measurements
     validate_measurements(
         metamers_config_path=args.metamers,
         primaries_path=args.primaries,
         measurements_dir=args.measurements,
-        output_report_path=args.output,
-        plots_dir=args.plots_dir
+        plots_dir=args.plots_dir,
+        synthetic_epsilon=args.synthetic_epsilon,
     )
 
 

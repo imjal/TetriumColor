@@ -47,8 +47,8 @@ class TestGenerator
         float degree = 4.0f
     );
 
-    // RYGB-specific versions (output RYGB textures instead of display space)
-    std::optional<TrialData> NewTrialRYGB(
+    // BGYR-specific versions (output BGYR textures instead of display space)
+    std::optional<TrialData> NewTrialBGYR(
         const std::string& filename,
         const std::string& hidden_symbol = "",
         float lum_noise = 0.0f,
@@ -60,7 +60,7 @@ class TestGenerator
         int metameric_axis = -1
     );
 
-    std::optional<TrialData> GetNextTrialRYGB(
+    std::optional<TrialData> GetNextTrialBGYR(
         ColorTestResult previous_result,
         const std::string& filename,
         const std::string& hidden_symbol,
