@@ -179,7 +179,7 @@ def validate_measurements(
                     )
                     continue
 
-            # --- Project to BGYR ---
+            # --- Project to BGYR (for console output only) ---
             pred_bgyr_1 = convert_spectrum_to_bgyr(predicted_1.data, wavelengths)
             pred_bgyr_2 = convert_spectrum_to_bgyr(predicted_2.data, wavelengths)
             meas_bgyr_1 = convert_spectrum_to_bgyr(measured_1.data, measured_1.wavelengths)
@@ -213,8 +213,8 @@ def validate_measurements(
             print(f"    LMS metamer RMSE: pred={pred_lms_rmse:.6f}, meas={meas_lms_rmse:.6f}")
             print(f"    Q metamer diff:   pred={pred_q_diff:.6f}, meas={meas_q_diff:.6f}")
 
-            # ===== PLOT: 3-panel figure per metamer pair =====
-            fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+            # ===== PLOT: 2-panel figure per metamer pair =====
+            fig, axes = plt.subplots(1, 2, figsize=(12, 5))
 
             # --- Panel 1: Predicted vs Measured Spectra ---
             ax = axes[0]
@@ -228,26 +228,8 @@ def validate_measurements(
             ax.legend(loc='upper right', fontsize=8)
             ax.grid(True, alpha=0.3, linestyle=':')
 
-            # --- Panel 2: BGYR comparison ---
+            # --- Panel 2: LMSQ comparison ---
             ax = axes[1]
-            channels = ['B', 'G', 'Y', 'R']
-            x = np.arange(4)
-            w = 0.18
-            ax.bar(x - 1.5*w, pred_bgyr_1, w, label='Pred M1', color='steelblue', alpha=0.8)
-            ax.bar(x - 0.5*w, meas_bgyr_1, w, label='Meas M1', color='steelblue',
-                   alpha=0.4, edgecolor='steelblue', linewidth=1.5)
-            ax.bar(x + 0.5*w, pred_bgyr_2, w, label='Pred M2', color='indianred', alpha=0.8)
-            ax.bar(x + 1.5*w, meas_bgyr_2, w, label='Meas M2', color='indianred',
-                   alpha=0.4, edgecolor='indianred', linewidth=1.5)
-            ax.set_xticks(x)
-            ax.set_xticklabels(channels)
-            ax.set_ylabel('BGYR Value')
-            ax.set_title(f'BGYR Projection\nRMSE: M1={bgyr_rmse_1:.4f}, M2={bgyr_rmse_2:.4f}')
-            ax.legend(fontsize=7)
-            ax.grid(True, alpha=0.3, axis='y', linestyle=':')
-
-            # --- Panel 3: LMSQ comparison ---
-            ax = axes[2]
             cone_labels = list(sorted_with_s)
             cone_labels_str = [f'{wl}nm' for wl in cone_labels]
             # Mark Q cone
