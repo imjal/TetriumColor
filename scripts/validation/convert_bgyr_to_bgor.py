@@ -153,31 +153,33 @@ def convert_bgyr_to_bgor(
 
         print()
 
+    # Extract unique RGBO values (convert BGOR to RGBO: RGBO = [R, G, B, O])
+    unique_rgbo_set = set()
+    for row in bgor_list:
+        # CSV has BGOR order: B, G, O, R
+        # Convert to RGBO: [R, G, B, O]
+        rgbo = (row['R'], row['G'], row['B'], row['O'])
+        unique_rgbo_set.add(rgbo)
+
     # Write output
     if output_path:
         output_path_obj = Path(output_path)
         output_path_obj.parent.mkdir(parents=True, exist_ok=True)
 
         with open(output_path, 'w', newline='') as f:
-            fieldnames = ['observer_index', 'genotype', 'q_cone_index', 'pair_index', 'metamer_index',
-                          'B', 'G', 'O', 'R', 'bgyr_b', 'bgyr_g', 'bgyr_y', 'bgyr_r']
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            writer.writeheader()
+            # Write header
+            f.write("R,G,B,O\n")
+            
+            # Write unique RGBO values, sorted for consistency
+            for rgbo in sorted(unique_rgbo_set):
+                f.write(f"{rgbo[0]},{rgbo[1]},{rgbo[2]},{rgbo[3]}\n")
 
-            for row in bgor_list:
-                # Convert genotype tuple to string for CSV
-                row_copy = row.copy()
-                row_copy['genotype'] = str(row['genotype'])
-                writer.writerow(row_copy)
-
-        print(f"Saved {len(bgor_list)} BGOR values to: {output_path}")
+        print(f"Saved {len(unique_rgbo_set)} unique RGBO values to: {output_path}")
     else:
         # Print to stdout
-        print("observer_index,genotype,q_cone_index,pair_index,metamer_index,B,G,O,R,bgyr_b,bgyr_g,bgyr_y,bgyr_r")
-        for row in bgor_list:
-            print(f"{row['observer_index']},{row['genotype']},{row['q_cone_index']},{row['pair_index']},"
-                  f"{row['metamer_index']},{row['B']},{row['G']},{row['O']},{row['R']},"
-                  f"{row['bgyr_b']},{row['bgyr_g']},{row['bgyr_y']},{row['bgyr_r']}")
+        print("R,G,B,O")
+        for rgbo in sorted(unique_rgbo_set):
+            print(f"{rgbo[0]},{rgbo[1]},{rgbo[2]},{rgbo[3]}")
 
     return bgor_list
 
