@@ -23,7 +23,8 @@ def save_primaries_into_csv(primaries_dir: str, primaries_filename: str):
 
 def load_primaries_from_csv(primaries_dir: str,
                             extract_zero: bool = False,
-                            smooth_method: Optional[str] = 'gaussian') -> List[Spectra]:
+                            smooth_method: Optional[str] = 'gaussian',
+                            primary_order: str = 'RGBO') -> List[Spectra]:
     """Load primaries from a csv file with optional zero extraction and smoothing.
 
     Args:
@@ -32,9 +33,14 @@ def load_primaries_from_csv(primaries_dir: str,
             subtract the zero/offset that PR650 can't measure directly.
         smooth_method (str, optional): Interpolation method to smooth/upsample to 1nm.
             Options: 'asymmetric_gaussian', 'gaussian', 'cubic', 'linear', etc.
+        primary_order (str): Ordering of returned primaries list. Options:
+            'RGBO' (default) - [Red, Green, Blue, Orange], matches led_mapping=[0,1,3,2,1,3]
+                for correct 6P frame output (RGB frame=RGO, OCV frame=BGO).
+            'BGOR' - [Blue, Green, Orange, Red], used by validation scripts that zip
+                BGOR-ordered weights directly against the primaries list.
 
     Returns:
-        List[Spectra]: list of Spectra objects representing the Primaries measured
+        List[Spectra]: list of Spectra objects in the requested primary_order
     """
     try:
         if extract_zero:
@@ -43,22 +49,27 @@ def load_primaries_from_csv(primaries_dir: str,
                 primaries_dir,
                 smooth_method=smooth_method
             )
-            return primaries
+        else:
+            # Standard loading: average last 4 measurements in RGBO order
+            primaries = get_spectras_from_rgbo_list(
+                primaries_dir,
+                [(255, 0, 0, 0), (0, 255, 0, 0), (0, 0, 255, 0), (0, 0, 0, 255)]
+            )
 
-        # Standard loading: average last 4 measurements
-        # Order is BGOR (Blue, Green, Orange, Red) for ColorSpace
-        primaries = get_spectras_from_rgbo_list(
-            primaries_dir,
-            [(0, 0, 255, 0), (0, 255, 0, 0), (0, 0, 0, 255), (255, 0, 0, 0)]
-        )
+            # Apply smoothing/interpolation to 1nm resolution
+            if smooth_method is not None:
+                output_wavelengths = np.arange(380, 781, 1)
+                primaries = [
+                    p.interpolate(output_wavelengths, method=smooth_method) if p is not None else None
+                    for p in primaries
+                ]
 
-        # Apply smoothing/interpolation to 1nm resolution
-        if smooth_method is not None:
-            output_wavelengths = np.arange(380, 781, 1)
-            primaries = [
-                p.interpolate(output_wavelengths, method=smooth_method) if p is not None else None
-                for p in primaries
-            ]
+        # primaries is now in RGBO order: [R=0, G=1, B=2, O=3]
+        if primary_order == 'BGOR':
+            # Reorder RGBO=[R,G,B,O] → BGOR=[B,G,O,R]
+            primaries = [primaries[2], primaries[1], primaries[3], primaries[0]]
+        elif primary_order != 'RGBO':
+            raise ValueError(f"Unknown primary_order '{primary_order}'. Use 'RGBO' or 'BGOR'.")
 
         return primaries
     except Exception as e:

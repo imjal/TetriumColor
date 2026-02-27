@@ -56,7 +56,8 @@ def convert_bgyr_to_bgor(
 
     if primaries_path_obj.is_dir():
         # Directory containing primary measurements
-        primaries = load_primaries_from_csv(str(primaries_path), extract_zero=False)
+        # BGOR order: needed for fallback BGYR→DISP conversion and for zip(bgor_weights, primaries)
+        primaries = load_primaries_from_csv(str(primaries_path), extract_zero=False, primary_order='BGOR')
 
     elif primaries_path_obj.is_file() and primaries_path_obj.suffix == '.csv':
         raise NotImplementedError("Single CSV file loading not yet implemented. Please provide a directory.")
@@ -64,7 +65,7 @@ def convert_bgyr_to_bgor(
         raise ValueError(f"Invalid primaries path: {primaries_path}")
 
     if len(primaries) < 4:
-        raise ValueError(f"Expected 4 primaries (RGBO), but got {len(primaries)}")
+        raise ValueError(f"Expected 4 primaries (BGOR), but got {len(primaries)}")
 
     print(f"  Loaded {len(primaries)} primaries")
     print(f"  Wavelength range: {primaries[0].wavelengths[0]}-{primaries[0].wavelengths[-1]} nm")

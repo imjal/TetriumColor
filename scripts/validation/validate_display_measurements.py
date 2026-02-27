@@ -59,7 +59,7 @@ def validate_measurements(
     print(f"  Total metamer pairs: {config['metadata']['total_metamer_pairs']}")
 
     print(f"Loading display primaries from: {primaries_path}")
-    primaries = load_primaries_from_csv(primaries_path, extract_zero=False)
+    primaries = load_primaries_from_csv(primaries_path, extract_zero=False, primary_order='BGOR')
     assert len(primaries) >= 4, f"Expected 4 primaries (BGOR), got {len(primaries)}"
     print(f"  Loaded {len(primaries)} primaries (BGOR order)")
 
@@ -79,6 +79,9 @@ def validate_measurements(
         print(f"Using SYNTHETIC spectra (epsilon={synthetic_epsilon} BGOR units)")
     else:
         print(f"Loading measured spectra from: {measurements_dir}")
+
+    # Storage for end-of-validation summary plots
+    all_pair_data = []  # list of dicts: obs_idx, pair_idx, genotype, predicted_1, predicted_2
 
     # --- Process each observer ---
     for obs_data in config['observers']:
@@ -213,6 +216,15 @@ def validate_measurements(
             print(f"    LMS metamer RMSE: pred={pred_lms_rmse:.6f}, meas={meas_lms_rmse:.6f}")
             print(f"    Q metamer diff:   pred={pred_q_diff:.6f}, meas={meas_q_diff:.6f}")
 
+            # Store for end-of-validation summary plots
+            all_pair_data.append({
+                'obs_idx': obs_idx,
+                'pair_idx': pair_idx,
+                'genotype': genotype,
+                'predicted_1': predicted_1,
+                'predicted_2': predicted_2,
+            })
+
             # ===== PLOT: 2-panel figure per metamer pair =====
             fig, axes = plt.subplots(1, 2, figsize=(12, 5))
 
@@ -262,6 +274,148 @@ def validate_measurements(
             plt.savefig(fname, dpi=150, bbox_inches='tight')
             plt.close()
             print(f"    Saved: {fname}")
+
+    # ===== END-OF-VALIDATION: multi-observer and hyperobserver summary plots =====
+    if not all_pair_data:
+        return
+
+    print("\nGenerating end-of-validation summary plots...")
+
+    # Build one Observer per config observer (reuse across all pairs)
+    config_observer_list = []  # list of (obs_idx, peaks_tuple, Observer)
+    for obs_data in config['observers']:
+        g = tuple(sorted(obs_data['genotype']))
+        obs = observer_genotypes.get_observer_for_peaks(g)
+        config_observer_list.append((obs_data['observer_index'], g, obs))
+
+    # Build the 12D hyperobserver once
+    print("  Building hyperobserver (12D)...")
+    hyperobs = Observer.hyperobserver(wavelengths=wavelengths)
+
+    for pair_data in all_pair_data:
+        fname_a = _plot_all_observers_bars(pair_data, config_observer_list, plots_path)
+        fname_b = _plot_hyperobserver_bars(pair_data, hyperobs, plots_path)
+        print(f"  Saved: {fname_a.name}  |  {fname_b.name}")
+
+    print(f"Summary plots saved to {plots_path}")
+
+
+def _plot_all_observers_bars(
+    pair_data: dict,
+    config_observers: list,
+    plots_path,
+):
+    """One figure per metamer pair: a column per config observer showing cone-response bars.
+
+    Args:
+        pair_data: dict with keys obs_idx, pair_idx, genotype, predicted_1, predicted_2
+        config_observers: list of (obs_idx, peaks_tuple, Observer) for every config observer
+        plots_path: pathlib.Path to save directory
+    """
+    obs_idx = pair_data['obs_idx']
+    pair_idx = pair_data['pair_idx']
+    designed_genotype = pair_data['genotype']
+    pred_1 = pair_data['predicted_1']
+    pred_2 = pair_data['predicted_2']
+
+    n_obs = len(config_observers)
+    fig, axes = plt.subplots(1, n_obs, figsize=(4 * n_obs, 5))
+    if n_obs == 1:
+        axes = [axes]
+
+    for ax, (c_obs_idx, c_peaks, c_observer) in zip(axes, config_observers):
+        # Sorted peaks including S cone
+        sorted_peaks = sorted(c_peaks) if 420 in c_peaks else sorted((420,) + c_peaks)
+        cone_labels = [f'{p}nm' for p in sorted_peaks]
+
+        # Mark Q cone (first peak in the L-opsin range that isn't 559 standard)
+        if c_observer.dimension == 4 and 547 in sorted_peaks:
+            q_idx = sorted_peaks.index(547)
+            cone_labels[q_idx] += '\n(Q)'
+
+        lmsq_1 = c_observer.observe_spectras([pred_1])[0]
+        lmsq_2 = c_observer.observe_spectras([pred_2])[0]
+
+        x = np.arange(len(sorted_peaks))
+        w = 0.3
+        ax.bar(x - w / 2, lmsq_1, w, color='steelblue', alpha=0.85, label='M1')
+        ax.bar(x + w / 2, lmsq_2, w, color='indianred', alpha=0.85, label='M2')
+        ax.set_xticks(x)
+        ax.set_xticklabels(cone_labels, fontsize=7)
+        ax.set_ylabel('Cone Response')
+        ax.grid(True, alpha=0.3, axis='y', linestyle=':')
+
+        title = f'Obs {c_obs_idx}\n{c_peaks}'
+        if c_peaks == designed_genotype:
+            title += '\n★ designed for'
+        ax.set_title(title, fontsize=8)
+
+        if ax is axes[0]:
+            ax.legend(fontsize=7)
+
+    fig.suptitle(
+        f'Observer {obs_idx} · Pair {pair_idx}: Cone Responses Across All Observers',
+        fontsize=11, fontweight='bold')
+    plt.tight_layout()
+    fname = plots_path / f'obs{obs_idx}_pair{pair_idx}_all_observers.png'
+    plt.savefig(fname, dpi=150, bbox_inches='tight')
+    plt.close()
+    return fname
+
+
+def _plot_hyperobserver_bars(
+    pair_data: dict,
+    hyperobserver,
+    plots_path,
+):
+    """One figure per metamer pair showing cone responses in the 12D hyperobserver.
+
+    Args:
+        pair_data: dict with keys obs_idx, pair_idx, genotype, predicted_1, predicted_2
+        hyperobserver: 12D Observer covering all human opsin variants
+        plots_path: pathlib.Path to save directory
+    """
+    obs_idx = pair_data['obs_idx']
+    pair_idx = pair_data['pair_idx']
+    designed_genotype = pair_data['genotype']
+    pred_1 = pair_data['predicted_1']
+    pred_2 = pair_data['predicted_2']
+
+    hyper_1 = hyperobserver.observe_spectras([pred_1])[0]
+    hyper_2 = hyperobserver.observe_spectras([pred_2])[0]
+
+    # Labels match hyperobserver peak order: S, M×3, L×8
+    cone_labels = [
+        'S\n420', 'M\n530', 'M\n533', 'M\n536',
+        'L\n547', 'L\n551', 'L\n552', 'L\n553',
+        'L\n555', 'L\n556', 'L\n556.5', 'L\n559',
+    ]
+    x = np.arange(len(cone_labels))
+    w = 0.3
+
+    fig, ax = plt.subplots(figsize=(16, 5))
+    ax.bar(x - w / 2, hyper_1, w, color='steelblue', alpha=0.85, label='Metamer 1')
+    ax.bar(x + w / 2, hyper_2, w, color='indianred', alpha=0.85, label='Metamer 2')
+
+    # Shade S / M / L regions
+    ax.axvspan(-0.5, 0.5, alpha=0.06, color='blue', label='S region')
+    ax.axvspan(0.5, 3.5, alpha=0.06, color='green', label='M region')
+    ax.axvspan(3.5, 11.5, alpha=0.06, color='red', label='L region')
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(cone_labels, fontsize=8)
+    ax.set_ylabel('Cone Response')
+    ax.set_title(
+        f'Hyperobserver (12D) — Observer {obs_idx} · Pair {pair_idx}\n'
+        f'Designed for genotype {designed_genotype}',
+        fontsize=11)
+    ax.legend(fontsize=8, ncol=5)
+    ax.grid(True, alpha=0.3, axis='y', linestyle=':')
+    plt.tight_layout()
+    fname = plots_path / f'obs{obs_idx}_pair{pair_idx}_hyperobserver.png'
+    plt.savefig(fname, dpi=150, bbox_inches='tight')
+    plt.close()
+    return fname
 
 
 def main():
