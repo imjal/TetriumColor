@@ -654,7 +654,7 @@ if __name__ == "__main__":
 
         lum_noise = 0.0
         s_cone_noise = 0.1
-        output_space = ColorSpaceType.DISP_6P
+        output_space = ColorSpaceType.SRGB
         output_filename = "genetic_color_picker_scone_noise"
 
         dirname = f"./measurements/2025-11-10/noise_{lum_noise}_scone_{s_cone_noise}_dimension_{testing_dim}"
@@ -710,8 +710,10 @@ if __name__ == "__main__":
                     f.write(f"{letter}\t{genotype_str}\t{axis_str}\n")
             print(f"Saved genotype/axis mapping to {genotype_axis_txt_path}")
         else:
-            images = [image[0] for image in images]
+            from PIL import Image
+            images = [Image.open(image['rgb_path']) for image in images]
             grid = CreatePaddedGrid(images, padding=0, channels=3, square_grid=False)
             grid.save(os.path.join(dirname, f"{output_filename}_sRGB.png"))
+            print(f"Saved grid to {os.path.join(dirname, output_filename + '_sRGB.png')}")
 
     genetic_color_picker_test()

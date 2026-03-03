@@ -459,6 +459,47 @@ class Observer:
         return MultiSpectralDistributions(d)
 
     @staticmethod
+    def hyperobserver(wavelengths=None, template='neitz', od=0.5, illuminant=None, degree=4.0):
+        """Create a 12-dimensional observer spanning all known human L/M/S opsin variants.
+
+        Covers every unique peak wavelength arising from L and M opsin SNP combinations
+        documented in Davidoff 2015 and Stockman 1998, plus the standard S cone:
+
+            S :  420 nm
+            M :  530, 533, 536 nm
+            L :  547, 551, 552, 553, 555, 556, 556.5, 559 nm
+
+        Cones are ordered ascending by peak wavelength (S, M variants, L variants).
+
+        Args:
+            wavelengths: Wavelength array (default 400–700 nm, 1 nm steps)
+            template: Cone template to use (default 'neitz')
+            od: Optical density for M/L cones (default 0.5); S cone uses od*0.8
+            illuminant: Illuminant (default None → D65)
+            degree: Visual angle in degrees (default 4.0)
+
+        Returns:
+            12-dimensional Observer
+        """
+        if wavelengths is None:
+            wavelengths = np.arange(400, 701, 1)
+
+        # All unique peaks from human L/M opsin variation (ascending order)
+        s_peak = 420
+        m_peaks = [530, 533, 536]
+        l_peaks = [547, 551, 552, 553, 555, 556, 556.5, 559]
+        all_peaks = [s_peak] + m_peaks + l_peaks  # 12 total
+
+        cones = []
+        for peak in all_peaks:
+            cone_od = od * 0.8 if peak == s_peak else od
+            cone = Cone.cone(peak, wavelengths=wavelengths, template=template,
+                             od=cone_od, degree=degree)
+            cones.append(cone)
+
+        return Observer(cones, illuminant=illuminant)
+
+    @staticmethod
     def dichromat(wavelengths=None, illuminant=None):
         s_cone = Cone.s_cone(wavelengths)
         m_cone = Cone.m_cone(wavelengths)
