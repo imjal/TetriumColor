@@ -127,7 +127,6 @@ def validate_measurements(
                 bgor_1 = color_space.convert(bgyr_1.reshape(1, -1), ColorSpaceType.BGYR, ColorSpaceType.DISP)[0]
                 bgor_2 = color_space.convert(bgyr_2.reshape(1, -1), ColorSpaceType.BGYR, ColorSpaceType.DISP)[0]
 
-                # Clip to [0, 1] to ensure valid range
                 bgor_1 = np.clip(bgor_1, 0, 1)
                 bgor_2 = np.clip(bgor_2, 0, 1)
 
@@ -182,15 +181,6 @@ def validate_measurements(
                     )
                     continue
 
-            # --- Project to BGYR (for console output only) ---
-            pred_bgyr_1 = convert_spectrum_to_bgyr(predicted_1.data, wavelengths)
-            pred_bgyr_2 = convert_spectrum_to_bgyr(predicted_2.data, wavelengths)
-            meas_bgyr_1 = convert_spectrum_to_bgyr(measured_1.data, measured_1.wavelengths)
-            meas_bgyr_2 = convert_spectrum_to_bgyr(measured_2.data, measured_2.wavelengths)
-
-            bgyr_rmse_1 = np.sqrt(np.mean((pred_bgyr_1 - meas_bgyr_1) ** 2))
-            bgyr_rmse_2 = np.sqrt(np.mean((pred_bgyr_2 - meas_bgyr_2) ** 2))
-
             # --- Project to LMSQ ---
             pred_lmsq_1 = observer.observe_spectras([predicted_1])[0]
             pred_lmsq_2 = observer.observe_spectras([predicted_2])[0]
@@ -211,7 +201,6 @@ def validate_measurements(
             lmsq_rmse_1 = np.sqrt(np.mean((pred_lmsq_1 - meas_lmsq_1) ** 2))
             lmsq_rmse_2 = np.sqrt(np.mean((pred_lmsq_2 - meas_lmsq_2) ** 2))
 
-            print(f"    BGYR RMSE: m1={bgyr_rmse_1:.4f}, m2={bgyr_rmse_2:.4f}")
             print(f"    LMSQ RMSE: m1={lmsq_rmse_1:.4f}, m2={lmsq_rmse_2:.4f}")
             print(f"    LMS metamer RMSE: pred={pred_lms_rmse:.6f}, meas={meas_lms_rmse:.6f}")
             print(f"    Q metamer diff:   pred={pred_q_diff:.6f}, meas={meas_q_diff:.6f}")
@@ -223,6 +212,8 @@ def validate_measurements(
                 'genotype': genotype,
                 'predicted_1': predicted_1,
                 'predicted_2': predicted_2,
+                'measured_1': measured_1,
+                'measured_2': measured_2,
             })
 
             # ===== PLOT: 2-panel figure per metamer pair =====
@@ -250,9 +241,9 @@ def validate_measurements(
             x = np.arange(len(sorted_with_s))
             w = 0.18
             ax.bar(x - 1.5*w, pred_lmsq_1, w, label='Pred M1', color='steelblue', alpha=0.8)
-            ax.bar(x - 0.5*w, meas_lmsq_1, w, label='Meas M1', color='steelblue',
+            ax.bar(x - 0.5*w, pred_lmsq_2, w, label='Pred M2', color='indianred', alpha=0.8)
+            ax.bar(x + 0.5*w, meas_lmsq_1, w, label='Meas M1', color='steelblue',
                    alpha=0.4, edgecolor='steelblue', linewidth=1.5)
-            ax.bar(x + 0.5*w, pred_lmsq_2, w, label='Pred M2', color='indianred', alpha=0.8)
             ax.bar(x + 1.5*w, meas_lmsq_2, w, label='Meas M2', color='indianred',
                    alpha=0.4, edgecolor='indianred', linewidth=1.5)
             ax.set_xticks(x)
@@ -295,7 +286,8 @@ def validate_measurements(
     for pair_data in all_pair_data:
         fname_a = _plot_all_observers_bars(pair_data, config_observer_list, plots_path)
         fname_b = _plot_hyperobserver_bars(pair_data, hyperobs, plots_path)
-        print(f"  Saved: {fname_a.name}  |  {fname_b.name}")
+        fname_c = _plot_hyperobserver_diff(pair_data, hyperobs, plots_path)
+        print(f"  Saved: {fname_a.name}  |  {fname_b.name}  |  {fname_c.name}")
 
     print(f"Summary plots saved to {plots_path}")
 
@@ -380,11 +372,113 @@ def _plot_hyperobserver_bars(
     designed_genotype = pair_data['genotype']
     pred_1 = pair_data['predicted_1']
     pred_2 = pair_data['predicted_2']
+    meas_1 = pair_data['measured_1']
+    meas_2 = pair_data['measured_2']
 
-    hyper_1 = hyperobserver.observe_spectras([pred_1])[0]
-    hyper_2 = hyperobserver.observe_spectras([pred_2])[0]
+    hyper_pred_1 = hyperobserver.observe_spectras([pred_1])[0]
+    hyper_pred_2 = hyperobserver.observe_spectras([pred_2])[0]
+    hyper_meas_1 = hyperobserver.observe_spectras([meas_1])[0]
+    hyper_meas_2 = hyperobserver.observe_spectras([meas_2])[0]
+
+    # Hyperobserver peaks in ascending order
+    hyper_peaks = [420, 530, 533, 536, 547, 551, 552, 553, 555, 556, 556.5, 559]
+    designed_set = set(designed_genotype) | {420}
+    designed_mask = [p in designed_set for p in hyper_peaks]
 
     # Labels match hyperobserver peak order: S, M×3, L×8
+    cone_labels = [
+        'S\n420', 'M\n530', 'M\n533', 'M\n536',
+        'L\n547', 'L\n551', 'L\n552', 'L\n553',
+        'L\n555', 'L\n556', 'L\n556.5', 'L\n559',
+    ]
+    x = np.arange(len(cone_labels))
+    w = 0.18
+
+    fig, (ax_spec, ax) = plt.subplots(1, 2, figsize=(22, 5),
+                                      gridspec_kw={'width_ratios': [1, 2.5]})
+
+    # --- Left panel: spectra ---
+    ax_spec.plot(pred_1.wavelengths, pred_1.data, color='steelblue', lw=2, label='Pred M1')
+    ax_spec.plot(pred_2.wavelengths, pred_2.data, color='indianred', lw=2, label='Pred M2')
+    ax_spec.plot(meas_1.wavelengths, meas_1.data, color='steelblue', lw=2,
+                 alpha=0.4, linestyle='--', label='Meas M1')
+    ax_spec.plot(meas_2.wavelengths, meas_2.data, color='indianred', lw=2,
+                 alpha=0.4, linestyle='--', label='Meas M2')
+    ax_spec.set_xlabel('Wavelength (nm)')
+    ax_spec.set_ylabel('Power')
+    ax_spec.set_title('Spectra')
+    ax_spec.legend(fontsize=8)
+    ax_spec.grid(True, alpha=0.3, linestyle=':')
+
+    # --- Right panel: hyperobserver bars ---
+    ax.bar(x - 1.5*w, hyper_pred_1, w, color='steelblue', alpha=0.85, label='Pred M1')
+    ax.bar(x - 0.5*w, hyper_pred_2, w, color='indianred', alpha=0.85, label='Pred M2')
+    ax.bar(x + 0.5*w, hyper_meas_1, w, color='steelblue', alpha=0.4,
+           edgecolor='steelblue', linewidth=1.5, label='Meas M1')
+    ax.bar(x + 1.5*w, hyper_meas_2, w, color='indianred', alpha=0.4,
+           edgecolor='indianred', linewidth=1.5, label='Meas M2')
+
+    # Shade S / M / L regions
+    ax.axvspan(-0.5, 0.5, alpha=0.06, color='blue')
+    ax.axvspan(0.5, 3.5, alpha=0.06, color='green')
+    ax.axvspan(3.5, 11.5, alpha=0.06, color='red')
+
+    ax.set_xticks(x)
+    # Bold tick labels for designed cones
+    ax.set_xticklabels(cone_labels, fontsize=8)
+    for tick, is_designed in zip(ax.get_xticklabels(), designed_mask):
+        if is_designed:
+            tick.set_fontweight('bold')
+            tick.set_fontsize(9)
+
+    ax.set_ylabel('Cone Response')
+    ax.set_title(
+        f'Hyperobserver (12D) — Observer {obs_idx} · Pair {pair_idx}\n'
+        f'Designed for genotype {designed_genotype}',
+        fontsize=11)
+    ax.legend(fontsize=8, ncol=2, loc='lower right')
+    ax.grid(True, alpha=0.3, axis='y', linestyle=':')
+
+    fig.suptitle(
+        f'Observer {obs_idx} · Pair {pair_idx} — Designed for genotype {designed_genotype}',
+        fontsize=11, fontweight='bold')
+    plt.tight_layout()
+    fname = plots_path / f'obs{obs_idx}_pair{pair_idx}_hyperobserver.png'
+    plt.savefig(fname, dpi=150, bbox_inches='tight')
+    plt.close()
+    return fname
+
+
+def _plot_hyperobserver_diff(
+    pair_data: dict,
+    hyperobserver,
+    plots_path,
+):
+    """Difference plot (M1 - M2) in the 12D hyperobserver for predicted and measured.
+
+    Two bars per cone: predicted difference and measured difference.
+    LMS cones should be ~0; the targeted Q cone should be large.
+    """
+    obs_idx = pair_data['obs_idx']
+    pair_idx = pair_data['pair_idx']
+    designed_genotype = pair_data['genotype']
+    pred_1 = pair_data['predicted_1']
+    pred_2 = pair_data['predicted_2']
+    meas_1 = pair_data['measured_1']
+    meas_2 = pair_data['measured_2']
+
+    hyper_pred_1 = hyperobserver.observe_spectras([pred_1])[0]
+    hyper_pred_2 = hyperobserver.observe_spectras([pred_2])[0]
+    hyper_meas_1 = hyperobserver.observe_spectras([meas_1])[0]
+    hyper_meas_2 = hyperobserver.observe_spectras([meas_2])[0]
+
+    pred_diff = hyper_pred_1 - hyper_pred_2
+    meas_diff = hyper_meas_1 - hyper_meas_2
+
+    hyper_peaks = [420, 530, 533, 536, 547, 551, 552, 553, 555, 556, 556.5, 559]
+    designed_set = set(designed_genotype) | {420}
+    designed_mask = [p in designed_set for p in hyper_peaks]
+
     cone_labels = [
         'S\n420', 'M\n530', 'M\n533', 'M\n536',
         'L\n547', 'L\n551', 'L\n552', 'L\n553',
@@ -394,25 +488,34 @@ def _plot_hyperobserver_bars(
     w = 0.3
 
     fig, ax = plt.subplots(figsize=(16, 5))
-    ax.bar(x - w / 2, hyper_1, w, color='steelblue', alpha=0.85, label='Metamer 1')
-    ax.bar(x + w / 2, hyper_2, w, color='indianred', alpha=0.85, label='Metamer 2')
+
+    ax.bar(x - 0.5*w, pred_diff, w, color='steelblue', alpha=0.85, label='Pred M1−M2')
+    ax.bar(x + 0.5*w, meas_diff, w, color='steelblue', alpha=0.4,
+           edgecolor='steelblue', linewidth=1.5, label='Meas M1−M2')
+
+    ax.axhline(0, color='black', linewidth=0.8)
 
     # Shade S / M / L regions
-    ax.axvspan(-0.5, 0.5, alpha=0.06, color='blue', label='S region')
-    ax.axvspan(0.5, 3.5, alpha=0.06, color='green', label='M region')
-    ax.axvspan(3.5, 11.5, alpha=0.06, color='red', label='L region')
+    ax.axvspan(-0.5, 0.5, alpha=0.06, color='blue')
+    ax.axvspan(0.5, 3.5, alpha=0.06, color='green')
+    ax.axvspan(3.5, 11.5, alpha=0.06, color='red')
 
     ax.set_xticks(x)
     ax.set_xticklabels(cone_labels, fontsize=8)
-    ax.set_ylabel('Cone Response')
+    for tick, is_designed in zip(ax.get_xticklabels(), designed_mask):
+        if is_designed:
+            tick.set_fontweight('bold')
+            tick.set_fontsize(9)
+
+    ax.set_ylabel('Cone Response Difference (M1 − M2)')
     ax.set_title(
-        f'Hyperobserver (12D) — Observer {obs_idx} · Pair {pair_idx}\n'
+        f'Hyperobserver Difference (M1−M2) — Observer {obs_idx} · Pair {pair_idx}\n'
         f'Designed for genotype {designed_genotype}',
         fontsize=11)
-    ax.legend(fontsize=8, ncol=5)
+    ax.legend(fontsize=8, loc='lower right')
     ax.grid(True, alpha=0.3, axis='y', linestyle=':')
     plt.tight_layout()
-    fname = plots_path / f'obs{obs_idx}_pair{pair_idx}_hyperobserver.png'
+    fname = plots_path / f'obs{obs_idx}_pair{pair_idx}_hyperobserver_diff.png'
     plt.savefig(fname, dpi=150, bbox_inches='tight')
     plt.close()
     return fname

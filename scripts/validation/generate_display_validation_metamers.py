@@ -26,9 +26,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 
 def generate_metamers(
-    num_observers: int = 5,
+    num_observers: int = 8,
     sex: str = 'both',
-    grid_size: int = 5,
+    grid_size: int = 3,
     luminance: float = 1.0,
     saturation: float = 0.5,
     cube_face: int = 4,
@@ -90,7 +90,7 @@ def generate_metamers(
 
     from TetriumColor.Measurement.TetriumMeasurementRoutines import load_primaries_from_csv
     print(f"Loading display primaries from: {primaries_path}")
-    display_primaries = load_primaries_from_csv(primaries_path, extract_zero=False)
+    display_primaries = load_primaries_from_csv(primaries_path, extract_zero=False, primary_order='BGOR')
     print(f"Loaded {len(display_primaries)} primaries (BGOR order)")
     print(f"Generating metamer grid in DISPLAY PRIMARY space (RGBO)")
 
@@ -100,8 +100,11 @@ def generate_metamers(
     print(f"Metameric axis={metameric_axis}")
     print()
 
+    # Use the primaries' wavelength grid so generate and validate use identical observers
+    wavelengths = display_primaries[0].wavelengths
+
     # Initialize ObserverGenotypes for tetrachromats
-    observer_genotypes = ObserverGenotypes(dimensions=[3], seed=seed)
+    observer_genotypes = ObserverGenotypes(wavelengths=wavelengths, dimensions=[3], seed=seed)
 
     # Get top N observers
     genotypes = list[Any](observer_genotypes.get_pdf(sex).keys())[:num_observers]
@@ -112,9 +115,6 @@ def generate_metamers(
     for i, (genotype, prob) in enumerate(zip(genotypes, probabilities)):
         print(f"  {i+1}. {genotype} (probability: {prob:.4f})")
     print()
-
-    # Generate wavelengths for observers
-    wavelengths = np.arange(360, 831, 1)
 
     # Total number of metamer pairs per observer
     num_pairs_per_observer = grid_size * grid_size

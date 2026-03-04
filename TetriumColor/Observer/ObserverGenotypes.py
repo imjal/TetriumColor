@@ -95,14 +95,14 @@ class ObserverGenotypes:
         Initialize ObserverGenotypes with a list of peak wavelengths.
 
         Args:
-            wavelengths: Optional wavelength array, defaults to 360-830nm in 1nm steps
+            wavelengths: Optional wavelength array, defaults to 380-780nm in 4nm steps (matching PR650 measurement range)
             dimensions: Optional list of dimensions to filter (e.g., [3] for trichromats only).
                        If None, includes all dimensions.
         """
         self.seed = seed
         random.seed(self.seed)
         if wavelengths is None:
-            self.wavelengths = np.arange(360, 831, 1)
+            self.wavelengths = np.arange(380, 781, 4)
         else:
             self.wavelengths = wavelengths
 
