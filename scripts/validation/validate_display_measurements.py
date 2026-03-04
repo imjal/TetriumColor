@@ -105,40 +105,20 @@ def validate_measurements(
             bgyr_1 = np.array(metamer['bgyr_1'])
             bgyr_2 = np.array(metamer['bgyr_2'])
 
-            # Check if RGBO values are stored (from generation in DISP space)
-            # If available, use them directly since they're already in the correct normalized [0, 1] range
-            # This avoids conversion errors from BGYR → DISP
-            if 'rgbo_1' in metamer and 'rgbo_2' in metamer:
-                # Use stored RGBO values (already normalized [0, 1] from ColorSampler)
-                rgbo_1_raw = np.array(metamer['rgbo_1'])  # RGBO order
-                rgbo_2_raw = np.array(metamer['rgbo_2'])  # RGBO order
+            # Always recompute BGOR from BGYR using today's primaries.
+            # Stored rgbo_1/rgbo_2 are ignored for prediction — they were generated
+            # with different primaries and must not be used here.
+            bgor_1 = color_space.convert(bgyr_1.reshape(1, -1), ColorSpaceType.BGYR, ColorSpaceType.DISP)[0]
+            bgor_2 = color_space.convert(bgyr_2.reshape(1, -1), ColorSpaceType.BGYR, ColorSpaceType.DISP)[0]
 
-                # Convert RGBO to BGOR: RGBO=[R,G,B,O] -> BGOR=[B,G,O,R]
-                bgor_1 = np.array([rgbo_1_raw[2], rgbo_1_raw[1], rgbo_1_raw[3], rgbo_1_raw[0]])  # B, G, O, R
-                bgor_2 = np.array([rgbo_2_raw[2], rgbo_2_raw[1], rgbo_2_raw[3], rgbo_2_raw[0]])  # B, G, O, R
-
-                # For file lookup, convert to 8-bit RGBO
-                rgbo_1 = tuple(np.clip(np.round(rgbo_1_raw * 255), 0, 255).astype(int))
-                rgbo_2 = tuple(np.clip(np.round(rgbo_2_raw * 255), 0, 255).astype(int))
-            else:
-                # Fallback: Convert from BGYR (for old configs without RGBO values)
-                # --- Convert BGYR -> BGOR display weights using observer-specific ColorSpace ---
-                # ColorSpace.convert() handles BGYR → CONE → DISP (BGOR) transformation
-                bgor_1 = color_space.convert(bgyr_1.reshape(1, -1), ColorSpaceType.BGYR, ColorSpaceType.DISP)[0]
-                bgor_2 = color_space.convert(bgyr_2.reshape(1, -1), ColorSpaceType.BGYR, ColorSpaceType.DISP)[0]
-
-                bgor_1 = np.clip(bgor_1, 0, 1)
-                bgor_2 = np.clip(bgor_2, 0, 1)
-
-                # Convert to 8-bit for file lookup (BGOR -> RGBO for filenames)
-                bgor_1_8bit = np.clip(np.round(bgor_1 * 255), 0, 255).astype(int)
-                bgor_2_8bit = np.clip(np.round(bgor_2 * 255), 0, 255).astype(int)
-
-                # BGOR=[B,G,O,R] -> RGBO=[R,G,B,O]
-                rgbo_1 = (int(bgor_1_8bit[3]), int(bgor_1_8bit[1]),
-                          int(bgor_1_8bit[0]), int(bgor_1_8bit[2]))
-                rgbo_2 = (int(bgor_2_8bit[3]), int(bgor_2_8bit[1]),
-                          int(bgor_2_8bit[0]), int(bgor_2_8bit[2]))
+            # Clip only for 8-bit file lookup — do NOT clip bgor_1/bgor_2 used
+            # for predicted spectra, so the metameric property is preserved exactly.
+            bgor_1_8bit = np.clip(np.round(bgor_1 * 255), 0, 255).astype(int)
+            bgor_2_8bit = np.clip(np.round(bgor_2 * 255), 0, 255).astype(int)
+            rgbo_1 = (int(bgor_1_8bit[3]), int(bgor_1_8bit[1]),
+                      int(bgor_1_8bit[0]), int(bgor_1_8bit[2]))
+            rgbo_2 = (int(bgor_2_8bit[3]), int(bgor_2_8bit[1]),
+                      int(bgor_2_8bit[0]), int(bgor_2_8bit[2]))
 
             print(f"  Pair {pair_idx}: RGBO1={rgbo_1}, RGBO2={rgbo_2}")
             print(f"    BGOR1 (normalized): {bgor_1}, BGOR2 (normalized): {bgor_2}")
@@ -472,12 +452,12 @@ def _plot_hyperobserver_diff(
     hyper_meas_1 = hyperobserver.observe_spectras([meas_1])[0]
     hyper_meas_2 = hyperobserver.observe_spectras([meas_2])[0]
 
-    pred_diff = hyper_pred_1 - hyper_pred_2
-    meas_diff = hyper_meas_1 - hyper_meas_2
+    pred_diff = np.abs(hyper_pred_1 - hyper_pred_2)
+    meas_diff = np.abs(hyper_meas_1 - hyper_meas_2)
 
     hyper_peaks = [420, 530, 533, 536, 547, 551, 552, 553, 555, 556, 556.5, 559]
     designed_set = set(designed_genotype) | {420}
-    designed_mask = [p in designed_set for p in hyper_peaks]
+    designed_mask = np.array([p in designed_set for p in hyper_peaks])
 
     cone_labels = [
         'S\n420', 'M\n530', 'M\n533', 'M\n536',
@@ -487,13 +467,32 @@ def _plot_hyperobserver_diff(
     x = np.arange(len(cone_labels))
     w = 0.3
 
-    fig, ax = plt.subplots(figsize=(16, 5))
+    fig, (ax_spec, ax) = plt.subplots(1, 2, figsize=(22, 5),
+                                      gridspec_kw={'width_ratios': [1, 2.5]})
 
-    ax.bar(x - 0.5*w, pred_diff, w, color='steelblue', alpha=0.85, label='Pred M1−M2')
+    # --- Left panel: spectra ---
+    ax_spec.plot(pred_1.wavelengths, pred_1.data, color='steelblue', lw=2, label='Pred M1')
+    ax_spec.plot(pred_2.wavelengths, pred_2.data, color='indianred', lw=2, label='Pred M2')
+    ax_spec.plot(meas_1.wavelengths, meas_1.data, color='steelblue', lw=2,
+                 alpha=0.4, linestyle='--', label='Meas M1')
+    ax_spec.plot(meas_2.wavelengths, meas_2.data, color='indianred', lw=2,
+                 alpha=0.4, linestyle='--', label='Meas M2')
+    ax_spec.set_xlabel('Wavelength (nm)')
+    ax_spec.set_ylabel('Power')
+    ax_spec.set_title('Spectra')
+    ax_spec.legend(fontsize=8)
+    ax_spec.grid(True, alpha=0.3, linestyle=':')
+
+    # --- Right panel: absolute difference bars ---
+    ax.bar(x - 0.5*w, pred_diff, w, color='steelblue', alpha=0.85, label='Pred |M1−M2|')
     ax.bar(x + 0.5*w, meas_diff, w, color='steelblue', alpha=0.4,
-           edgecolor='steelblue', linewidth=1.5, label='Meas M1−M2')
+           edgecolor='steelblue', linewidth=1.5, label='Meas |M1−M2|')
 
-    ax.axhline(0, color='black', linewidth=0.8)
+    # Dashed horizontal line at the max non-Q designed cone difference (measured)
+    non_q_mask = designed_mask & np.array([p != 547 for p in hyper_peaks])
+    non_q_max = meas_diff[non_q_mask].max()
+    ax.axhline(non_q_max, color='black', linewidth=1.2, linestyle='--',
+               label=f'Non-Q target max (meas) ({non_q_max:.4f})')
 
     # Shade S / M / L regions
     ax.axvspan(-0.5, 0.5, alpha=0.06, color='blue')
@@ -507,12 +506,12 @@ def _plot_hyperobserver_diff(
             tick.set_fontweight('bold')
             tick.set_fontsize(9)
 
-    ax.set_ylabel('Cone Response Difference (M1 − M2)')
+    ax.set_ylabel('Absolute Cone Response Difference |M1 − M2|')
     ax.set_title(
-        f'Hyperobserver Difference (M1−M2) — Observer {obs_idx} · Pair {pair_idx}\n'
+        f'Hyperobserver |Difference| (M1−M2) — Observer {obs_idx} · Pair {pair_idx}\n'
         f'Designed for genotype {designed_genotype}',
         fontsize=11)
-    ax.legend(fontsize=8, loc='lower right')
+    ax.legend(fontsize=8, loc='upper right')
     ax.grid(True, alpha=0.3, axis='y', linestyle=':')
     plt.tight_layout()
     fname = plots_path / f'obs{obs_idx}_pair{pair_idx}_hyperobserver_diff.png'
