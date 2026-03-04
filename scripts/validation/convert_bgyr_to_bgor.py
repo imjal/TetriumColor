@@ -104,30 +104,17 @@ def convert_bgyr_to_bgor(
             bgyr_1 = np.array(metamer['bgyr_1'])
             bgyr_2 = np.array(metamer['bgyr_2'])
             
-            # Check if RGBO values are stored (from generation in DISP space)
-            # If available, use them directly since they're already in the correct normalized [0, 1] range
-            # This avoids conversion errors from BGYR → DISP
-            if 'rgbo_1' in metamer and 'rgbo_2' in metamer:
-                # Use stored RGBO values (already normalized [0, 1] from ColorSampler)
-                rgbo_1 = np.array(metamer['rgbo_1'])  # RGBO order
-                rgbo_2 = np.array(metamer['rgbo_2'])  # RGBO order
-                
-                # Convert RGBO to BGOR: RGBO=[R,G,B,O] -> BGOR=[B,G,O,R]
-                bgor_1 = np.array([rgbo_1[2], rgbo_1[1], rgbo_1[3], rgbo_1[0]])  # B, G, O, R
-                bgor_2 = np.array([rgbo_2[2], rgbo_2[1], rgbo_2[3], rgbo_2[0]])  # B, G, O, R
-            else:
-                # Fallback: Convert from BGYR (for old configs without RGBO values)
-                # Convert BGYR → CONE → DISP (BGOR) using observer-specific ColorSpace
-                # ColorSpace.convert() handles the BGYR → CONE → DISP transformation
-                bgor_1 = color_space.convert(bgyr_1.reshape(1, -1), ColorSpaceType.BGYR, ColorSpaceType.DISP)[0]
-                bgor_2 = color_space.convert(bgyr_2.reshape(1, -1), ColorSpaceType.BGYR, ColorSpaceType.DISP)[0]
+            # Use stored cone excitations directly — CONE → DISP is one stable matrix
+            # multiply. CONE → BGYR → CONE loses precision because inv(L) is
+            # ill-conditioned when M/Q cones are closely spaced (e.g. 530/547nm).
+            cone_1 = np.array(metamer['cone_1'])
+            cone_2 = np.array(metamer['cone_2'])
+            bgor_1 = color_space.convert(cone_1.reshape(1, -1), ColorSpaceType.CONE, ColorSpaceType.DISP)[0]
+            bgor_2 = color_space.convert(cone_2.reshape(1, -1), ColorSpaceType.CONE, ColorSpaceType.DISP)[0]
 
-            # DISP values should be normalized [0, 1] for display primaries
-            # Clip to [0, 1] to ensure valid range, then convert to 8-bit
-            bgor_1_clipped = np.clip(bgor_1, 0, 1)
-            bgor_2_clipped = np.clip(bgor_2, 0, 1)
-            bgor_1_8bit = np.clip(np.round(bgor_1_clipped * 255), 0, 255).astype(int)
-            bgor_2_8bit = np.clip(np.round(bgor_2_clipped * 255), 0, 255).astype(int)
+            # Clip to [0, 1] for display, then convert to 8-bit
+            bgor_1_8bit = np.clip(np.round(bgor_1 * 255), 0, 255).astype(int)
+            bgor_2_8bit = np.clip(np.round(bgor_2 * 255), 0, 255).astype(int)
 
             # Store both metamers in BGOR order
             for metamer_idx, (bgor_8bit, bgyr) in enumerate([(bgor_1_8bit, bgyr_1), (bgor_2_8bit, bgyr_2)]):

@@ -102,17 +102,16 @@ def validate_measurements(
 
         for metamer in obs_data['metamers']:
             pair_idx = metamer['pair_index']
-            bgyr_1 = np.array(metamer['bgyr_1'])
-            bgyr_2 = np.array(metamer['bgyr_2'])
 
-            # Always recompute BGOR from BGYR using today's primaries.
-            # Stored rgbo_1/rgbo_2 are ignored for prediction — they were generated
-            # with different primaries and must not be used here.
-            bgor_1 = color_space.convert(bgyr_1.reshape(1, -1), ColorSpaceType.BGYR, ColorSpaceType.DISP)[0]
-            bgor_2 = color_space.convert(bgyr_2.reshape(1, -1), ColorSpaceType.BGYR, ColorSpaceType.DISP)[0]
-
-            # Clip only for 8-bit file lookup — do NOT clip bgor_1/bgor_2 used
-            # for predicted spectra, so the metameric property is preserved exactly.
+            # Use stored cone excitations directly — CONE → DISP is one stable matrix
+            # multiply. CONE → BGYR → CONE loses precision because inv(L) is
+            # ill-conditioned when M/Q cones are closely spaced (e.g. 530/547nm),
+            # corrupting the stored BGYR values at generation time.
+            cone_1 = np.array(metamer['cone_1'])
+            cone_2 = np.array(metamer['cone_2'])
+            bgor_1 = color_space.convert(cone_1.reshape(1, -1), ColorSpaceType.CONE, ColorSpaceType.DISP)[0]
+            bgor_2 = color_space.convert(cone_2.reshape(1, -1), ColorSpaceType.CONE, ColorSpaceType.DISP)[0]
+            # Clip only for 8-bit file lookup: BGOR=[B,G,O,R] -> RGBO=[R,G,B,O]
             bgor_1_8bit = np.clip(np.round(bgor_1 * 255), 0, 255).astype(int)
             bgor_2_8bit = np.clip(np.round(bgor_2 * 255), 0, 255).astype(int)
             rgbo_1 = (int(bgor_1_8bit[3]), int(bgor_1_8bit[1]),
