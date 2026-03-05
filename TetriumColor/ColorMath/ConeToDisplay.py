@@ -66,6 +66,7 @@ def compute_cone_to_display_direct(
     metadata = {
         'method': 'direct',
         'white_weights': rescaled_white_weights,
+        'scaling_factor': np.max(white_weights) * scaling_factor,
         'n_primaries': n_primaries,
         'primary_indices': list(range(n_primaries))
     }

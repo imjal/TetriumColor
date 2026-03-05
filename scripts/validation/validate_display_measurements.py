@@ -166,6 +166,12 @@ def validate_measurements(
             meas_lmsq_1 = observer.observe_spectras([measured_1])[0]
             meas_lmsq_2 = observer.observe_spectras([measured_2])[0]
 
+            scaling_factor = color_space._disp_metadata['scaling_factor']
+            pred_lmsq_1 *= scaling_factor
+            pred_lmsq_2 *= scaling_factor
+            meas_lmsq_1 *= scaling_factor
+            meas_lmsq_2 *= scaling_factor
+
             # LMS RMSE between the two metamers (should be ~0)
             pred_lms_diff = pred_lmsq_1[lms_indices] - pred_lmsq_2[lms_indices]
             meas_lms_diff = meas_lmsq_1[lms_indices] - meas_lmsq_2[lms_indices]
@@ -189,6 +195,8 @@ def validate_measurements(
                 'obs_idx': obs_idx,
                 'pair_idx': pair_idx,
                 'genotype': genotype,
+                'gt_cone_1': cone_1,
+                'gt_cone_2': cone_2,
                 'predicted_1': predicted_1,
                 'predicted_2': predicted_2,
                 'measured_1': measured_1,
@@ -218,12 +226,14 @@ def validate_measurements(
             cone_labels_str[q_index] = f'{cone_labels[q_index]}nm (Q)'
 
             x = np.arange(len(sorted_with_s))
-            w = 0.18
-            ax.bar(x - 1.5*w, pred_lmsq_1, w, label='Pred M1', color='steelblue', alpha=0.8)
-            ax.bar(x - 0.5*w, pred_lmsq_2, w, label='Pred M2', color='indianred', alpha=0.8)
-            ax.bar(x + 0.5*w, meas_lmsq_1, w, label='Meas M1', color='steelblue',
+            w = 0.15
+            ax.bar(x - 2.5*w, cone_1, w, label='GT M1', color='forestgreen', alpha=0.9)
+            ax.bar(x - 1.5*w, cone_2, w, label='GT M2', color='darkorange', alpha=0.9)
+            ax.bar(x - 0.5*w, pred_lmsq_1, w, label='Pred M1', color='steelblue', alpha=0.8)
+            ax.bar(x + 0.5*w, pred_lmsq_2, w, label='Pred M2', color='indianred', alpha=0.8)
+            ax.bar(x + 1.5*w, meas_lmsq_1, w, label='Meas M1', color='steelblue',
                    alpha=0.4, edgecolor='steelblue', linewidth=1.5)
-            ax.bar(x + 1.5*w, meas_lmsq_2, w, label='Meas M2', color='indianred',
+            ax.bar(x + 2.5*w, meas_lmsq_2, w, label='Meas M2', color='indianred',
                    alpha=0.4, edgecolor='indianred', linewidth=1.5)
             ax.set_xticks(x)
             ax.set_xticklabels(cone_labels_str, fontsize=8)
@@ -286,6 +296,8 @@ def _plot_all_observers_bars(
     obs_idx = pair_data['obs_idx']
     pair_idx = pair_data['pair_idx']
     designed_genotype = pair_data['genotype']
+    gt_cone_1 = pair_data['gt_cone_1']
+    gt_cone_2 = pair_data['gt_cone_2']
     pred_1 = pair_data['predicted_1']
     pred_2 = pair_data['predicted_2']
 
@@ -307,10 +319,20 @@ def _plot_all_observers_bars(
         lmsq_1 = c_observer.observe_spectras([pred_1])[0]
         lmsq_2 = c_observer.observe_spectras([pred_2])[0]
 
+        is_designed = (c_peaks == designed_genotype)
         x = np.arange(len(sorted_peaks))
-        w = 0.3
-        ax.bar(x - w / 2, lmsq_1, w, color='steelblue', alpha=0.85, label='M1')
-        ax.bar(x + w / 2, lmsq_2, w, color='indianred', alpha=0.85, label='M2')
+
+        if is_designed:
+            # Show GT (from JSON) as far-left bars only for the designed observer
+            w = 0.22
+            ax.bar(x - w,     gt_cone_1, w, color='forestgreen', alpha=0.9, label='GT M1')
+            ax.bar(x,         gt_cone_2, w, color='darkorange',  alpha=0.9, label='GT M2')
+            ax.bar(x + w,     lmsq_1,    w, color='steelblue',   alpha=0.85, label='Pred M1')
+            ax.bar(x + 2 * w, lmsq_2,    w, color='indianred',   alpha=0.85, label='Pred M2')
+        else:
+            w = 0.3
+            ax.bar(x - w / 2, lmsq_1, w, color='steelblue', alpha=0.85, label='Pred M1')
+            ax.bar(x + w / 2, lmsq_2, w, color='indianred', alpha=0.85, label='Pred M2')
         ax.set_xticks(x)
         ax.set_xticklabels(cone_labels, fontsize=7)
         ax.set_ylabel('Cone Response')

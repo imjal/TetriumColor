@@ -226,6 +226,15 @@ def generate_metamers(
             traceback.print_exc()
             continue
 
+    # Serialize display primaries (BGOR order)
+    primaries_serialized = [
+        {
+            'wavelengths': p.wavelengths.tolist(),
+            'data': p.data.tolist(),
+        }
+        for p in display_primaries
+    ]
+
     # Create output structure
     output = {
         'metadata': {
@@ -241,11 +250,14 @@ def generate_metamers(
             'sampling_space': 'RGBO',
             'storage_space': 'BGYR',
             'used_display_primaries': True,
+            'primaries_path': str(primaries_path),
+            'primaries_order': 'BGOR',
             'wavelength_range': [int(wavelengths[0]), int(wavelengths[-1])],
             'total_metamer_pairs': sum(len(obs['metamers']) for obs in observers_data),
             'description': f'Grid of {grid_size}×{grid_size} metamer pairs per observer. Generated in DISP space (RGBO) using observer-specific ColorSpace, then converted to BGYR for storage. Sampled using ColorSampler on cube face {cube_face} at luminance={luminance}, saturation={saturation}',
             'method': 'ColorSampler.get_metameric_pairs() in DISP space, converted to BGYR via ColorSpace.convert()'
         },
+        'display_primaries': primaries_serialized,
         'observers': observers_data
     }
 
