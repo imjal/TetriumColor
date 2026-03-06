@@ -102,6 +102,7 @@ def validate_measurements(
 
         for metamer in obs_data['metamers']:
             pair_idx = metamer['pair_index']
+            scaling_factor = color_space._disp_metadata['scaling_factor']
 
             # Use stored cone excitations directly — CONE → DISP is one stable matrix
             # multiply. CONE → BGYR → CONE loses precision because inv(L) is
@@ -125,8 +126,18 @@ def validate_measurements(
             # --- Predicted spectra: scale BGOR primaries by BGOR weights ---
             predicted_1_data = sum(w * p.data for w, p in zip(bgor_1, primaries))
             predicted_2_data = sum(w * p.data for w, p in zip(bgor_2, primaries))
-            predicted_1 = Spectra(wavelengths=wavelengths, data=predicted_1_data)
-            predicted_2 = Spectra(wavelengths=wavelengths, data=predicted_2_data)
+            predicted_1 = Spectra(wavelengths=wavelengths, data=predicted_1_data * scaling_factor, normalized=False)
+            predicted_2 = Spectra(wavelengths=wavelengths, data=predicted_2_data * scaling_factor, normalized=False)
+
+            # --- Predicted spectra after 8-bit rounding ---
+            bgor_1_rounded = bgor_1_8bit / 255.0
+            bgor_2_rounded = bgor_2_8bit / 255.0
+            predicted_1_rounded = Spectra(
+                wavelengths=wavelengths,
+                data=scaling_factor * sum(w * p.data for w, p in zip(bgor_1_rounded, primaries)), normalized=False)
+            predicted_2_rounded = Spectra(
+                wavelengths=wavelengths,
+                data=scaling_factor * sum(w * p.data for w, p in zip(bgor_2_rounded, primaries)), normalized=False)
 
             # --- Measured (or synthetic) spectra ---
             if measurements_dir is None:
@@ -146,13 +157,18 @@ def validate_measurements(
                 measured_2_data = sum(w * p.data
                                       for w, p in zip(bgor_2_noisy, primaries))
                 measured_1 = Spectra(wavelengths=wavelengths,
-                                     data=measured_1_data)
+                                     data=scaling_factor * measured_1_data, normalized=False)
                 measured_2 = Spectra(wavelengths=wavelengths,
-                                     data=measured_2_data)
+                                     data=scaling_factor * measured_2_data, normalized=False)
             else:
                 measured_list = get_spectras_from_rgbo_list(
                     measurements_dir, [rgbo_1, rgbo_2])
-                measured_1, measured_2 = measured_list[0], measured_list[1]
+                measured_1, measured_2 = measured_list[0].interpolate_values(
+                    wavelengths), measured_list[1].interpolate_values(wavelengths)
+                measured_1 = Spectra(wavelengths=measured_1.wavelengths,
+                                     data=scaling_factor * measured_1.data, normalized=False)
+                measured_2 = Spectra(wavelengths=measured_2.wavelengths,
+                                     data=scaling_factor * measured_2.data, normalized=False)
 
                 if measured_1 is None or measured_2 is None:
                     print(
@@ -165,12 +181,6 @@ def validate_measurements(
             pred_lmsq_2 = observer.observe_spectras([predicted_2])[0]
             meas_lmsq_1 = observer.observe_spectras([measured_1])[0]
             meas_lmsq_2 = observer.observe_spectras([measured_2])[0]
-
-            scaling_factor = color_space._disp_metadata['scaling_factor']
-            pred_lmsq_1 *= scaling_factor
-            pred_lmsq_2 *= scaling_factor
-            meas_lmsq_1 *= scaling_factor
-            meas_lmsq_2 *= scaling_factor
 
             # LMS RMSE between the two metamers (should be ~0)
             pred_lms_diff = pred_lmsq_1[lms_indices] - pred_lmsq_2[lms_indices]
@@ -195,10 +205,13 @@ def validate_measurements(
                 'obs_idx': obs_idx,
                 'pair_idx': pair_idx,
                 'genotype': genotype,
+                'scaling_factor': scaling_factor,
                 'gt_cone_1': cone_1,
                 'gt_cone_2': cone_2,
                 'predicted_1': predicted_1,
                 'predicted_2': predicted_2,
+                'predicted_1_rounded': predicted_1_rounded,
+                'predicted_2_rounded': predicted_2_rounded,
                 'measured_1': measured_1,
                 'measured_2': measured_2,
             })
@@ -251,7 +264,7 @@ def validate_measurements(
                 fontsize=12, fontweight='bold', y=1.02)
             plt.tight_layout()
             fname = plots_path / f'obs{obs_idx}_pair{pair_idx}.png'
-            plt.savefig(fname, dpi=150, bbox_inches='tight')
+            # plt.savefig(fname, dpi=150, bbox_inches='tight')
             plt.close()
             print(f"    Saved: {fname}")
 
@@ -276,8 +289,11 @@ def validate_measurements(
         fname_a = _plot_all_observers_bars(pair_data, config_observer_list, plots_path)
         fname_b = _plot_hyperobserver_bars(pair_data, hyperobs, plots_path)
         fname_c = _plot_hyperobserver_diff(pair_data, hyperobs, plots_path)
-        print(f"  Saved: {fname_a.name}  |  {fname_b.name}  |  {fname_c.name}")
+        fname_d = _plot_cone_distance_bars(pair_data, config_observer_list, plots_path)
+        fname_e = _plot_hyperobserver_cone_distance(pair_data, hyperobs, plots_path)
+        print(f"  Saved: {fname_a.name}  |  {fname_b.name}  |  {fname_c.name}  |  {fname_d.name}  |  {fname_e.name}")
 
+    _generate_rmse_summary(all_pair_data, hyperobs, config_observer_list, plots_path)
     print(f"Summary plots saved to {plots_path}")
 
 
@@ -300,6 +316,10 @@ def _plot_all_observers_bars(
     gt_cone_2 = pair_data['gt_cone_2']
     pred_1 = pair_data['predicted_1']
     pred_2 = pair_data['predicted_2']
+    pred_1_rounded = pair_data['predicted_1_rounded']
+    pred_2_rounded = pair_data['predicted_2_rounded']
+    meas_1 = pair_data['measured_1']
+    meas_2 = pair_data['measured_2']
 
     n_obs = len(config_observers)
     fig, axes = plt.subplots(1, n_obs, figsize=(4 * n_obs, 5))
@@ -318,21 +338,42 @@ def _plot_all_observers_bars(
 
         lmsq_1 = c_observer.observe_spectras([pred_1])[0]
         lmsq_2 = c_observer.observe_spectras([pred_2])[0]
+        lmsq_1_rounded = c_observer.observe_spectras([pred_1_rounded])[0]
+        lmsq_2_rounded = c_observer.observe_spectras([pred_2_rounded])[0]
+        lmsq_meas_1 = c_observer.observe_spectras([meas_1])[0]
+        lmsq_meas_2 = c_observer.observe_spectras([meas_2])[0]
 
         is_designed = (c_peaks == designed_genotype)
         x = np.arange(len(sorted_peaks))
 
         if is_designed:
-            # Show GT (from JSON) as far-left bars only for the designed observer
-            w = 0.22
-            ax.bar(x - w,     gt_cone_1, w, color='forestgreen', alpha=0.9, label='GT M1')
-            ax.bar(x,         gt_cone_2, w, color='darkorange',  alpha=0.9, label='GT M2')
-            ax.bar(x + w,     lmsq_1,    w, color='steelblue',   alpha=0.85, label='Pred M1')
-            ax.bar(x + 2 * w, lmsq_2,    w, color='indianred',   alpha=0.85, label='Pred M2')
+            # GT | Pred | Pred 8-bit | Meas — 8 bars for the designed observer
+            w = 0.11
+            ax.bar(x - 3.5*w, gt_cone_1,      w, color='forestgreen', alpha=0.9,  label='GT M1')
+            ax.bar(x - 2.5*w, gt_cone_2,      w, color='darkorange',  alpha=0.9,  label='GT M2')
+            ax.bar(x - 1.5*w, lmsq_1,         w, color='steelblue',   alpha=0.85, label='Pred M1')
+            ax.bar(x - 0.5*w, lmsq_2,         w, color='indianred',   alpha=0.85, label='Pred M2')
+            ax.bar(x + 0.5*w, lmsq_1_rounded, w, color='steelblue',   alpha=0.45,
+                   edgecolor='steelblue', linewidth=1.2, linestyle=':', label='Pred M1 (8-bit)')
+            ax.bar(x + 1.5*w, lmsq_2_rounded, w, color='indianred',   alpha=0.45,
+                   edgecolor='indianred', linewidth=1.2, linestyle=':', label='Pred M2 (8-bit)')
+            ax.bar(x + 2.5*w, lmsq_meas_1,   w, color='steelblue',   alpha=0.25,
+                   edgecolor='steelblue', linewidth=1.5, label='Meas M1')
+            ax.bar(x + 3.5*w, lmsq_meas_2,   w, color='indianred',   alpha=0.25,
+                   edgecolor='indianred', linewidth=1.5, label='Meas M2')
         else:
-            w = 0.3
-            ax.bar(x - w / 2, lmsq_1, w, color='steelblue', alpha=0.85, label='Pred M1')
-            ax.bar(x + w / 2, lmsq_2, w, color='indianred', alpha=0.85, label='Pred M2')
+            # Pred | Pred 8-bit | Meas — 6 bars for other observers
+            w = 0.14
+            ax.bar(x - 2.5*w, lmsq_1,         w, color='steelblue', alpha=0.85, label='Pred M1')
+            ax.bar(x - 1.5*w, lmsq_2,         w, color='indianred', alpha=0.85, label='Pred M2')
+            ax.bar(x - 0.5*w, lmsq_1_rounded, w, color='steelblue', alpha=0.45,
+                   edgecolor='steelblue', linewidth=1.2, linestyle=':', label='Pred M1 (8-bit)')
+            ax.bar(x + 0.5*w, lmsq_2_rounded, w, color='indianred', alpha=0.45,
+                   edgecolor='indianred', linewidth=1.2, linestyle=':', label='Pred M2 (8-bit)')
+            ax.bar(x + 1.5*w, lmsq_meas_1,   w, color='steelblue', alpha=0.25,
+                   edgecolor='steelblue', linewidth=1.5, label='Meas M1')
+            ax.bar(x + 2.5*w, lmsq_meas_2,   w, color='indianred', alpha=0.25,
+                   edgecolor='indianred', linewidth=1.5, label='Meas M2')
         ax.set_xticks(x)
         ax.set_xticklabels(cone_labels, fontsize=7)
         ax.set_ylabel('Cone Response')
@@ -356,6 +397,36 @@ def _plot_all_observers_bars(
     return fname
 
 
+def _draw_rmse_panel(ax, pred_1, pred_2, pred_1r, pred_2r, meas_1, meas_2, ref_ax=None):
+    """Draw pairwise RMSE bars (hyperobserver space) into an existing Axes.
+
+    Three groups on the x-axis: Pred vs 8-bit, Pred vs Meas, 8-bit vs Meas.
+    Each group has two bars: M1 (steelblue) and M2 (indianred).
+    If ref_ax is provided, the y-axis is locked to the same scale.
+    """
+    def rmse(a, b):
+        return float(np.sqrt(np.mean((a - b) ** 2)))
+
+    groups = [
+        ('Pred\nvs 8-bit', rmse(pred_1, pred_1r),  rmse(pred_2, pred_2r)),
+        ('Pred\nvs Meas',  rmse(pred_1, meas_1),   rmse(pred_2, meas_2)),
+        ('8-bit\nvs Meas', rmse(pred_1r, meas_1),  rmse(pred_2r, meas_2)),
+    ]
+    labels, m1_vals, m2_vals = zip(*groups)
+    xg = np.arange(len(groups))
+    w = 0.3
+    ax.bar(xg - w/2, m1_vals, w, color='steelblue', alpha=0.8, label='M1')
+    ax.bar(xg + w/2, m2_vals, w, color='indianred', alpha=0.8, label='M2')
+    ax.set_xticks(xg)
+    ax.set_xticklabels(labels, fontsize=8)
+    ax.set_ylabel('RMSE (hyperobserver)')
+    ax.set_title('Pairwise\nRMSE', fontsize=9)
+    ax.legend(fontsize=7)
+    ax.grid(True, alpha=0.3, axis='y', linestyle=':')
+    if ref_ax is not None:
+        ax.set_ylim(ref_ax.get_ylim())
+
+
 def _plot_hyperobserver_bars(
     pair_data: dict,
     hyperobserver,
@@ -373,11 +444,15 @@ def _plot_hyperobserver_bars(
     designed_genotype = pair_data['genotype']
     pred_1 = pair_data['predicted_1']
     pred_2 = pair_data['predicted_2']
+    pred_1_rounded = pair_data['predicted_1_rounded']
+    pred_2_rounded = pair_data['predicted_2_rounded']
     meas_1 = pair_data['measured_1']
     meas_2 = pair_data['measured_2']
 
     hyper_pred_1 = hyperobserver.observe_spectras([pred_1])[0]
     hyper_pred_2 = hyperobserver.observe_spectras([pred_2])[0]
+    hyper_pred_1_rounded = hyperobserver.observe_spectras([pred_1_rounded])[0]
+    hyper_pred_2_rounded = hyperobserver.observe_spectras([pred_2_rounded])[0]
     hyper_meas_1 = hyperobserver.observe_spectras([meas_1])[0]
     hyper_meas_2 = hyperobserver.observe_spectras([meas_2])[0]
 
@@ -393,14 +468,18 @@ def _plot_hyperobserver_bars(
         'L\n555', 'L\n556', 'L\n556.5', 'L\n559',
     ]
     x = np.arange(len(cone_labels))
-    w = 0.18
+    w = 0.13
 
-    fig, (ax_spec, ax) = plt.subplots(1, 2, figsize=(22, 5),
-                                      gridspec_kw={'width_ratios': [1, 2.5]})
+    fig, (ax_spec, ax, ax_rmse) = plt.subplots(1, 3, figsize=(28, 5),
+                                               gridspec_kw={'width_ratios': [1, 2.5, 0.7]})
 
     # --- Left panel: spectra ---
     ax_spec.plot(pred_1.wavelengths, pred_1.data, color='steelblue', lw=2, label='Pred M1')
     ax_spec.plot(pred_2.wavelengths, pred_2.data, color='indianred', lw=2, label='Pred M2')
+    ax_spec.plot(pred_1_rounded.wavelengths, pred_1_rounded.data, color='steelblue', lw=1.5,
+                 alpha=0.6, linestyle=':', label='Pred M1 (8-bit)')
+    ax_spec.plot(pred_2_rounded.wavelengths, pred_2_rounded.data, color='indianred', lw=1.5,
+                 alpha=0.6, linestyle=':', label='Pred M2 (8-bit)')
     ax_spec.plot(meas_1.wavelengths, meas_1.data, color='steelblue', lw=2,
                  alpha=0.4, linestyle='--', label='Meas M1')
     ax_spec.plot(meas_2.wavelengths, meas_2.data, color='indianred', lw=2,
@@ -411,12 +490,16 @@ def _plot_hyperobserver_bars(
     ax_spec.legend(fontsize=8)
     ax_spec.grid(True, alpha=0.3, linestyle=':')
 
-    # --- Right panel: hyperobserver bars ---
-    ax.bar(x - 1.5*w, hyper_pred_1, w, color='steelblue', alpha=0.85, label='Pred M1')
-    ax.bar(x - 0.5*w, hyper_pred_2, w, color='indianred', alpha=0.85, label='Pred M2')
-    ax.bar(x + 0.5*w, hyper_meas_1, w, color='steelblue', alpha=0.4,
+    # --- Middle panel: hyperobserver bars (6 bars: Pred, Pred 8-bit, Meas per metamer) ---
+    ax.bar(x - 2.5*w, hyper_pred_1,         w, color='steelblue', alpha=0.85, label='Pred M1')
+    ax.bar(x - 1.5*w, hyper_pred_2,         w, color='indianred', alpha=0.85, label='Pred M2')
+    ax.bar(x - 0.5*w, hyper_pred_1_rounded, w, color='steelblue', alpha=0.55,
+           edgecolor='steelblue', linewidth=1.2, linestyle=':', label='Pred M1 (8-bit)')
+    ax.bar(x + 0.5*w, hyper_pred_2_rounded, w, color='indianred', alpha=0.55,
+           edgecolor='indianred', linewidth=1.2, linestyle=':', label='Pred M2 (8-bit)')
+    ax.bar(x + 1.5*w, hyper_meas_1,         w, color='steelblue', alpha=0.3,
            edgecolor='steelblue', linewidth=1.5, label='Meas M1')
-    ax.bar(x + 1.5*w, hyper_meas_2, w, color='indianred', alpha=0.4,
+    ax.bar(x + 2.5*w, hyper_meas_2,         w, color='indianred', alpha=0.3,
            edgecolor='indianred', linewidth=1.5, label='Meas M2')
 
     # Shade S / M / L regions
@@ -439,6 +522,11 @@ def _plot_hyperobserver_bars(
         fontsize=11)
     ax.legend(fontsize=8, ncol=2, loc='lower right')
     ax.grid(True, alpha=0.3, axis='y', linestyle=':')
+
+    # --- Right panel: pairwise RMSE in hyperobserver space ---
+    _draw_rmse_panel(ax_rmse, hyper_pred_1, hyper_pred_2,
+                     hyper_pred_1_rounded, hyper_pred_2_rounded,
+                     hyper_meas_1, hyper_meas_2, ref_ax=ax)
 
     fig.suptitle(
         f'Observer {obs_idx} · Pair {pair_idx} — Designed for genotype {designed_genotype}',
@@ -465,15 +553,20 @@ def _plot_hyperobserver_diff(
     designed_genotype = pair_data['genotype']
     pred_1 = pair_data['predicted_1']
     pred_2 = pair_data['predicted_2']
+    pred_1_rounded = pair_data['predicted_1_rounded']
+    pred_2_rounded = pair_data['predicted_2_rounded']
     meas_1 = pair_data['measured_1']
     meas_2 = pair_data['measured_2']
 
     hyper_pred_1 = hyperobserver.observe_spectras([pred_1])[0]
     hyper_pred_2 = hyperobserver.observe_spectras([pred_2])[0]
+    hyper_pred_1_rounded = hyperobserver.observe_spectras([pred_1_rounded])[0]
+    hyper_pred_2_rounded = hyperobserver.observe_spectras([pred_2_rounded])[0]
     hyper_meas_1 = hyperobserver.observe_spectras([meas_1])[0]
     hyper_meas_2 = hyperobserver.observe_spectras([meas_2])[0]
 
     pred_diff = np.abs(hyper_pred_1 - hyper_pred_2)
+    pred_rounded_diff = np.abs(hyper_pred_1_rounded - hyper_pred_2_rounded)
     meas_diff = np.abs(hyper_meas_1 - hyper_meas_2)
 
     hyper_peaks = [420, 530, 533, 536, 547, 551, 552, 553, 555, 556, 556.5, 559]
@@ -486,14 +579,18 @@ def _plot_hyperobserver_diff(
         'L\n555', 'L\n556', 'L\n556.5', 'L\n559',
     ]
     x = np.arange(len(cone_labels))
-    w = 0.3
+    w = 0.22
 
-    fig, (ax_spec, ax) = plt.subplots(1, 2, figsize=(22, 5),
-                                      gridspec_kw={'width_ratios': [1, 2.5]})
+    fig, (ax_spec, ax, ax_rmse) = plt.subplots(1, 3, figsize=(28, 5),
+                                               gridspec_kw={'width_ratios': [1, 2.5, 0.7]})
 
     # --- Left panel: spectra ---
     ax_spec.plot(pred_1.wavelengths, pred_1.data, color='steelblue', lw=2, label='Pred M1')
     ax_spec.plot(pred_2.wavelengths, pred_2.data, color='indianred', lw=2, label='Pred M2')
+    ax_spec.plot(pred_1_rounded.wavelengths, pred_1_rounded.data, color='steelblue', lw=1.5,
+                 alpha=0.6, linestyle=':', label='Pred M1 (8-bit)')
+    ax_spec.plot(pred_2_rounded.wavelengths, pred_2_rounded.data, color='indianred', lw=1.5,
+                 alpha=0.6, linestyle=':', label='Pred M2 (8-bit)')
     ax_spec.plot(meas_1.wavelengths, meas_1.data, color='steelblue', lw=2,
                  alpha=0.4, linestyle='--', label='Meas M1')
     ax_spec.plot(meas_2.wavelengths, meas_2.data, color='indianred', lw=2,
@@ -504,13 +601,15 @@ def _plot_hyperobserver_diff(
     ax_spec.legend(fontsize=8)
     ax_spec.grid(True, alpha=0.3, linestyle=':')
 
-    # --- Right panel: absolute difference bars ---
-    ax.bar(x - 0.5*w, pred_diff, w, color='steelblue', alpha=0.85, label='Pred |M1−M2|')
-    ax.bar(x + 0.5*w, meas_diff, w, color='steelblue', alpha=0.4,
+    # --- Right panel: absolute difference bars (Pred, Pred 8-bit, Meas) ---
+    ax.bar(x - w,     pred_diff,         w, color='steelblue', alpha=0.85, label='Pred |M1−M2|')
+    ax.bar(x,         pred_rounded_diff, w, color='steelblue', alpha=0.55,
+           edgecolor='steelblue', linewidth=1.2, linestyle=':', label='Pred 8-bit |M1−M2|')
+    ax.bar(x + w,     meas_diff,         w, color='steelblue', alpha=0.3,
            edgecolor='steelblue', linewidth=1.5, label='Meas |M1−M2|')
 
     # Dashed horizontal line at the max non-Q designed cone difference (measured)
-    non_q_mask = designed_mask & np.array([p != 547 for p in hyper_peaks])
+    non_q_mask = designed_mask & np.array([p != 547 and p != 420 for p in hyper_peaks])
     non_q_max = meas_diff[non_q_mask].max()
     ax.axhline(non_q_max, color='black', linewidth=1.2, linestyle='--',
                label=f'Non-Q target max (meas) ({non_q_max:.4f})')
@@ -534,11 +633,289 @@ def _plot_hyperobserver_diff(
         fontsize=11)
     ax.legend(fontsize=8, loc='upper right')
     ax.grid(True, alpha=0.3, axis='y', linestyle=':')
+
+    # --- Right panel: pairwise RMSE ---
+    _draw_rmse_panel(ax_rmse, hyper_pred_1, hyper_pred_2,
+                     hyper_pred_1_rounded, hyper_pred_2_rounded,
+                     hyper_meas_1, hyper_meas_2, ref_ax=ax)
+
     plt.tight_layout()
     fname = plots_path / f'obs{obs_idx}_pair{pair_idx}_hyperobserver_diff.png'
     plt.savefig(fname, dpi=150, bbox_inches='tight')
     plt.close()
     return fname
+
+
+def _cone_distance(observer, s1, s2, metameric_axis=2):
+    """Thin wrapper around Observer.cone_distance for use in plotting helpers."""
+    return observer.cone_distance(s1, s2, metameric_axis=metameric_axis)
+
+
+def _plot_cone_distance_bars(
+    pair_data: dict,
+    config_observers: list,
+    plots_path,
+):
+    """Per-observer noise-weighted cone distance plot.
+
+    Each column corresponds to one observer and shows the Mahalanobis distance
+    in normalized cone space between M1 and M2 for pred, 8-bit, and measured.
+    d ≈ 1 JND; d > 3 is clearly distinguishable.
+    """
+    obs_idx = pair_data['obs_idx']
+    pair_idx = pair_data['pair_idx']
+    designed_genotype = pair_data['genotype']
+    pred_1 = pair_data['predicted_1']
+    pred_2 = pair_data['predicted_2']
+    pred_1_rounded = pair_data['predicted_1_rounded']
+    pred_2_rounded = pair_data['predicted_2_rounded']
+    meas_1 = pair_data['measured_1']
+    meas_2 = pair_data['measured_2']
+
+    n_obs = len(config_observers)
+    fig, axes = plt.subplots(1, n_obs, figsize=(4 * n_obs, 5), sharey=True)
+    if n_obs == 1:
+        axes = [axes]
+
+    series = [
+        # (label,  spectra pair,              lms_alpha, q_alpha, edge)
+        ('Pred',   pred_1,        pred_2,        0.85,      0.85,   None),
+        ('8-bit',  pred_1_rounded, pred_2_rounded, 0.45,    0.45,  'steelblue'),
+        ('Meas',   meas_1,        meas_2,         0.25,     0.25,  'steelblue'),
+    ]
+
+    for ax, (c_obs_idx, c_peaks, c_observer) in zip(axes, config_observers):
+        has_q = (c_observer.dimension == 4)
+        lms_vals, q_vals = [], []
+        for _, s1, s2, _, _, _ in series:
+            d_lms, d_q = _cone_distance(c_observer, s1, s2)
+            lms_vals.append(d_lms)
+            q_vals.append(d_q)
+
+        n = len(series)
+        x = np.arange(n)
+        w = 0.35
+
+        for i, (lbl, _, _, alms, aq, ec) in enumerate(series):
+            kw_lms = dict(color='steelblue', alpha=alms)
+            kw_q = dict(color='indianred',  alpha=aq)
+            if ec:
+                kw_lms['edgecolor'] = kw_q['edgecolor'] = ec
+                kw_lms['linewidth'] = kw_q['linewidth'] = 1.5
+
+            b1 = ax.bar(i - w/2, lms_vals[i], w, label='LMS dist' if i == 0 else '', **kw_lms)
+            if has_q:
+                ax.bar(i + w/2, q_vals[i], w, label='Q dist' if i == 0 else '', **kw_q)
+
+            for j, (val, offset) in enumerate([(lms_vals[i], -w/2),
+                                               (q_vals[i] if has_q else None, w/2)]):
+                if val is None:
+                    continue
+                ax.text(i + offset, val + 0.01, f'{val:.2f}',
+                        ha='center', va='bottom', fontsize=6)
+
+        ax.set_xticks(x)
+        ax.set_xticklabels([s[0] for s in series], fontsize=8)
+        ax.axhline(1.0, color='gray', linewidth=0.8, linestyle='--', alpha=0.5)
+        ax.axhline(3.0, color='gray', linewidth=0.8, linestyle=':',  alpha=0.5)
+        ax.grid(True, alpha=0.3, axis='y', linestyle=':')
+
+        title = f'Obs {c_obs_idx}\n{c_peaks}'
+        if c_peaks == designed_genotype:
+            title += '\n★ designed for'
+        ax.set_title(title, fontsize=8)
+        if ax is axes[0]:
+            ax.legend(fontsize=7)
+
+    axes[0].set_ylabel('Noise-weighted cone distance d (JND units)\nBlue=LMS  Red=Q')
+    fig.suptitle(
+        f'Observer {obs_idx} · Pair {pair_idx}: Cone Distance M1 vs M2\n'
+        f'(LMS should be ~0; Q should be large for designed observer)\n'
+        f'Designed for genotype {designed_genotype}',
+        fontsize=11, fontweight='bold')
+    plt.tight_layout()
+    fname = plots_path / f'obs{obs_idx}_pair{pair_idx}_cone_dist.png'
+    plt.savefig(fname, dpi=150, bbox_inches='tight')
+    plt.close()
+    return fname
+
+
+def _plot_hyperobserver_cone_distance(
+    pair_data: dict,
+    hyperobserver,
+    plots_path,
+):
+    """Cone distance plot using the 12D hyperobserver.
+
+    Mirrors _plot_cone_distance_bars but projects through all 12 human opsin
+    variants.  The metameric axis is fixed at index 4 (547 nm, the Q cone in
+    the hyperobserver peak list [420, 530, 533, 536, 547, 551, …, 559]).
+
+    Blue bars = LMS distance (S + M variants + non-547 L variants) → ~0 for good metamers.
+    Red bars  = Q distance (547 nm cone only) → large for good metamers.
+    """
+    # 547 nm is at index 4 in [420, 530, 533, 536, 547, 551, 552, 553, 555, 556, 556.5, 559]
+    HYPER_Q_AXIS = 4
+
+    obs_idx = pair_data['obs_idx']
+    pair_idx = pair_data['pair_idx']
+    designed_genotype = pair_data['genotype']
+
+    series = [
+        ('Pred',  pair_data['predicted_1'],        pair_data['predicted_2'],        0.85, None),
+        ('8-bit', pair_data['predicted_1_rounded'], pair_data['predicted_2_rounded'], 0.45, 'steelblue'),
+        ('Meas',  pair_data['measured_1'],          pair_data['measured_2'],          0.25, 'steelblue'),
+    ]
+
+    lms_vals, q_vals = [], []
+    for _, s1, s2, _, _ in series:
+        d_lms, d_q = hyperobserver.cone_distance(s1, s2, metameric_axis=HYPER_Q_AXIS)
+        lms_vals.append(d_lms)
+        q_vals.append(d_q)
+
+    x = np.arange(len(series))
+    w = 0.35
+    fig, ax = plt.subplots(figsize=(6, 5))
+
+    for i, (lbl, _, _, alp, ec) in enumerate(series):
+        kw = dict(alpha=alp)
+        if ec:
+            kw['edgecolor'] = ec
+            kw['linewidth'] = 1.5
+        ax.bar(i - w/2, lms_vals[i], w, color='steelblue',
+               label='LMS dist' if i == 0 else '', **kw)
+        ax.bar(i + w/2, q_vals[i],   w, color='indianred',
+               label='Q dist (547nm)' if i == 0 else '', **kw)
+        for val, offset in [(lms_vals[i], -w/2), (q_vals[i], w/2)]:
+            ax.text(i + offset, val + 0.01, f'{val:.2f}',
+                    ha='center', va='bottom', fontsize=7)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels([s[0] for s in series], fontsize=9)
+    ax.axhline(1.0, color='gray', linewidth=0.8, linestyle='--', alpha=0.5, label='1 JND')
+    ax.axhline(3.0, color='gray', linewidth=0.8, linestyle=':',  alpha=0.5, label='3 JND')
+    ax.set_ylabel('Noise-weighted cone distance (JND units)\nBlue=LMS  Red=Q(547nm)')
+    ax.set_title(
+        f'Hyperobserver (12D) Cone Distance M1 vs M2\n'
+        f'Observer {obs_idx} · Pair {pair_idx} · Genotype {designed_genotype}',
+        fontsize=10)
+    ax.legend(fontsize=8)
+    ax.grid(True, alpha=0.3, axis='y', linestyle=':')
+    plt.tight_layout()
+    fname = plots_path / f'obs{obs_idx}_pair{pair_idx}_hyperobserver_cone_dist.png'
+    plt.savefig(fname, dpi=150, bbox_inches='tight')
+    plt.close()
+    return fname
+
+
+def _generate_rmse_summary(
+    all_pair_data: list,
+    hyperobserver,
+    config_observers: list,
+    plots_path,
+):
+    """Aggregate hyperobserver RMSE across all pairs and generate summary plot + CSV.
+
+    For each pair computes RMSE(pred, 8-bit), RMSE(pred, meas), RMSE(8-bit, meas)
+    averaged over M1 and M2.  Results are grouped by observer and overall.
+
+    Saves:
+        rmse_summary.png  — grouped bar chart
+        rmse_summary.csv  — tabular data
+    """
+    import csv
+
+    def rmse(a, b):
+        return float(np.sqrt(np.mean((a - b) ** 2)))
+
+    comparisons = ['Pred vs 8-bit', 'Pred vs Meas', '8-bit vs Meas']
+
+    # Collect per-pair RMSE values keyed by obs_idx
+    # Structure: {obs_idx: {comparison: [values]}}
+    obs_records = {}  # obs_idx -> list of (comparison, value) for averaging
+
+    rows = []  # for CSV: one row per pair × comparison
+
+    for pair_data in all_pair_data:
+        obs_idx = pair_data['obs_idx']
+        pair_idx = pair_data['pair_idx']
+        genotype = pair_data['genotype']
+
+        hp1 = hyperobserver.observe_spectras([pair_data['predicted_1']])[0]
+        hp2 = hyperobserver.observe_spectras([pair_data['predicted_2']])[0]
+        hp1r = hyperobserver.observe_spectras([pair_data['predicted_1_rounded']])[0]
+        hp2r = hyperobserver.observe_spectras([pair_data['predicted_2_rounded']])[0]
+        hm1 = hyperobserver.observe_spectras([pair_data['measured_1']])[0]
+        hm2 = hyperobserver.observe_spectras([pair_data['measured_2']])[0]
+
+        vals = {
+            'Pred vs 8-bit': (rmse(hp1, hp1r) + rmse(hp2, hp2r)) / 2,
+            'Pred vs Meas':  (rmse(hp1, hm1) + rmse(hp2, hm2)) / 2,
+            '8-bit vs Meas': (rmse(hp1r, hm1) + rmse(hp2r, hm2)) / 2,
+        }
+
+        if obs_idx not in obs_records:
+            obs_records[obs_idx] = {c: [] for c in comparisons}
+        for c, v in vals.items():
+            obs_records[obs_idx][c].append(v)
+
+        for c, v in vals.items():
+            rows.append({
+                'obs_idx': obs_idx,
+                'genotype': str(genotype),
+                'pair_idx': pair_idx,
+                'comparison': c,
+                'rmse': v,
+            })
+
+    # --- Compute means per observer and overall ---
+    obs_order = sorted(obs_records.keys())
+    # Find genotype label for each observer
+    genotype_label = {}
+    for obs_idx, _, _ in config_observers:
+        for pd in all_pair_data:
+            if pd['obs_idx'] == obs_idx:
+                genotype_label[obs_idx] = str(pd['genotype'])
+                break
+
+    summary_rows = []  # for CSV summary
+    means = {}  # obs_idx -> {comparison: mean}
+    for obs_idx in obs_order:
+        means[obs_idx] = {}
+        for c in comparisons:
+            m = float(np.mean(obs_records[obs_idx][c]))
+            means[obs_idx][c] = m
+            summary_rows.append({
+                'obs_idx': obs_idx,
+                'genotype': genotype_label.get(obs_idx, ''),
+                'comparison': c,
+                'mean_rmse': m,
+                'n_pairs': len(obs_records[obs_idx][c]),
+            })
+
+    # Overall mean across all observers
+    all_vals = {c: [] for c in comparisons}
+    for obs_idx in obs_order:
+        for c in comparisons:
+            all_vals[c].extend(obs_records[obs_idx][c])
+    overall_means = {c: float(np.mean(all_vals[c])) for c in comparisons}
+    for c in comparisons:
+        summary_rows.append({
+            'obs_idx': 'all',
+            'genotype': 'all',
+            'comparison': c,
+            'mean_rmse': overall_means[c],
+            'n_pairs': sum(len(obs_records[o][c]) for o in obs_order),
+        })
+
+    # --- Write CSV ---
+    csv_path = plots_path / 'rmse_summary.csv'
+    with open(csv_path, 'w', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=['obs_idx', 'genotype', 'comparison',
+                                               'mean_rmse', 'n_pairs'])
+        writer.writeheader()
+        writer.writerows(summary_rows)
+    print(f"  Saved CSV: {csv_path.name}")
 
 
 def main():

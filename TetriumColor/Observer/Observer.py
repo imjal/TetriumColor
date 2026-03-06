@@ -740,10 +740,10 @@ class Observer:
         else:
             assert data.size == self.wavelengths.size, f"Data shape {data.shape} must match wavelengths shape {self.wavelengths.shape}"
 
-        observed_color = np.matmul(
-            self.sensor_matrix, data * self.illuminant.data)
-        whitepoint = np.matmul(self.sensor_matrix, self.illuminant.data)
+        self.illuminant_data = self.illuminant.interpolate_values(self.wavelengths).data
 
+        observed_color = np.matmul(self.sensor_matrix, data * self.illuminant_data)
+        whitepoint = np.matmul(self.sensor_matrix, self.illuminant_data)
         return np.divide(observed_color, whitepoint)
 
     def observe_normalized(self, data: Union[npt.NDArray, Spectra]) -> npt.NDArray:
@@ -790,65 +790,41 @@ class Observer:
     def dist(self, color1: Union[npt.NDArray, Spectra], color2: Union[npt.NDArray, Spectra]):
         return np.linalg.norm(self.observe(color1) - self.observe(color2))
 
-    def get_lms_to_xyz_matrix(self) -> npt.NDArray:
+    def get_lms_to_xyz_matrix(self, metameric_axis: int = 2) -> npt.NDArray:
         """Get the cached LMS to XYZ transformation matrix.
 
-        For tetrachromats (dimension=4), this creates a 3x4 matrix where the Q cone 
-        column (index 2) is all zeros, effectively ignoring that channel.
+        Uses the same calibrated transform as GetConeToXYZPrimaries:
+        normalized_sensor_matrix (illuminant-weighted, white-point-scaled) is used
+        so the result is consistent with observe() / observe_normalized() inputs.
 
-        The matrix is computed as: M = T_1931 · (T_lms^T · T_lms)^-1 · T_lms^T
-        where T_1931 is the CIE 1931 XYZ color matching functions and 
-        T_lms is the observer's LMS sensor matrix.
+        For tetrachromats (dimension=4), returns a 3×4 matrix with the Q cone column
+        (at metameric_axis) zeroed out.
 
         Returns:
-            npt.NDArray: 3 x dimension transformation matrix from LMS to XYZ
+            npt.NDArray: 3 x dimension transformation matrix from normalized LMS to XYZ
         """
-        if hasattr(self, '_lms_to_xyz_matrix'):
-            return self._lms_to_xyz_matrix
+        cache_key = f'_lms_to_xyz_matrix_{metameric_axis}'
+        if hasattr(self, cache_key):
+            return getattr(self, cache_key)
 
-        # Get CIE 1931 XYZ standard observer
-        cmfs = MSDS_CMFS["CIE 1931 2 Degree Standard Observer"]
-        xyz_wavelengths = cmfs.wavelengths
-        xyz_values = cmfs.values  # (N, 3) array: [X, Y, Z] for each wavelength
+        from TetriumColor.Observer.ColorSpaceTransform import GetConeToXYZPrimaries
 
-        # Interpolate XYZ functions to match observer's wavelengths
-        # Create 3 x N matrix where each row is X, Y, or Z as a function of wavelength
-        xyz_matrix = np.zeros((3, len(self.wavelengths)))
-        for i in range(3):
-            xyz_matrix[i, :] = np.interp(self.wavelengths, xyz_wavelengths, xyz_values[:, i])
+        # GetConeToXYZPrimaries returns a 3 × n_subset matrix (n_subset = dim-1 for
+        # tetrachromats after dropping the Q cone at metameric_axis).
+        M_reduced = GetConeToXYZPrimaries(self, metameric_axis=metameric_axis)
 
-        # Get LMS sensor matrix (dimension x N matrix)
-        T_lms = self.sensor_matrix  # dimension x N
-
-        # For tetrachromats, we'll compute the matrix but zero out the Q cone column
-        # First, get the indices to use (drop Q cone at index 2)
         if self.dimension == 4:
-            # Keep indices [0, 1, 3] (S, M, L), drop index 2 (Q)
-            cone_indices = [0, 1, 3]
-            T_lms_reduced = T_lms[cone_indices, :]  # 3 x N
+            # Expand 3×3 → 3×4, inserting a zero column at metameric_axis for Q
+            cone_indices = [i for i in range(self.dimension) if i != metameric_axis]
+            M_full = np.zeros((3, self.dimension))
+            for col_out, col_in in enumerate(cone_indices):
+                M_full[:, col_in] = M_reduced[:, col_out]
+            result = M_full
         else:
-            T_lms_reduced = T_lms
-            cone_indices = list(range(self.dimension))
+            result = M_reduced
 
-        # Compute M = T_1931 · T_lms^T · (T_lms · T_lms^T)^-1
-        # This is a least-squares solution
-        T_lms_T = T_lms_reduced.T  # N x 3 (or dimension)
-        gram_matrix = T_lms_reduced @ T_lms_T  # 3 x 3 (or dimension x dimension)
-        gram_inv = np.linalg.inv(gram_matrix)
-
-        # M_reduced = (3 x N) @ (N x 3) @ (3 x 3) = 3 x 3
-        M_reduced = xyz_matrix @ T_lms_T @ gram_inv
-
-        # For tetrachromats, expand to 3 x 4 with column 2 (Q cone) as zeros
-        if self.dimension == 4:
-            M_full = np.zeros((3, 4))
-            for i, cone_idx in enumerate(cone_indices):
-                M_full[:, cone_idx] = M_reduced[:, i]
-            self._lms_to_xyz_matrix = M_full  # 3 x 4 with column 2 as zeros
-        else:
-            self._lms_to_xyz_matrix = M_reduced
-
-        return self._lms_to_xyz_matrix
+        setattr(self, cache_key, result)
+        return result
 
     def to_lab(self, spectra: Spectra) -> npt.NDArray:
         """Convert a spectrum to CIE Lab color space.
@@ -867,11 +843,11 @@ class Observer:
         Returns:
             npt.NDArray: 3-element array [L*, a*, b*] in CIE Lab color space
         """
-        # Observe spectrum in LMS space
+        # Observe spectrum in LMS space (normalized, illuminant-weighted)
         lms = self.observe(spectra)  # dimension-vector
 
-        # Transform to XYZ using cached matrix
-        # For tetrachromats, M is 3 x 4 with column 2 (Q cone) as zeros
+        # Transform to XYZ using calibrated matrix (normalized_sensor_matrix basis,
+        # D65 white-point scaled; Q column zeroed for tetrachromats).
         M = self.get_lms_to_xyz_matrix()  # 3 x dimension
         xyz = M @ lms  # 3-vector
 
@@ -907,6 +883,48 @@ class Observer:
         delta_e = delta_E_CIE2000(lab_a, lab_b)
 
         return float(delta_e)
+
+    def cone_distance(self, s1: Spectra, s2: Spectra, metameric_axis: int = 2):
+        """Noise-weighted Mahalanobis distance in cone contrast space.
+
+        observe_spectras() returns responses normalized by the adapting white, so
+        the difference Δr = r1 - r2 is already in cone contrast units (white = 1).
+
+        Distance is split into two components:
+            d_lms  — over non-metameric cones (should be ~0 for good metamers)
+            d_q    — over the metameric cone only (should be large for good metamers)
+
+        Detection thresholds (sensor order, index 0 assumed S-cone):
+            σ_S = 0.04  (S cones have a higher contrast threshold)
+            σ_i = 0.01  (all other cones)
+
+        d ≈ 1 → ~1 JND,  d > 3 → clearly distinguishable.
+
+        Args:
+            s1, s2: Spectra to compare.
+            metameric_axis: Index of the metameric (Q) cone. Default 2 for tetrachromats.
+
+        Returns:
+            (d_lms, d_q): distances over LMS and Q components respectively.
+                          d_q = 0 for trichromat observers.
+        """
+        r1 = self.observe_spectras([s1])[0]
+        r2 = self.observe_spectras([s2])[0]
+        avg = (r1 + r2) / 2.0
+
+        delta = (r1 - r2) / avg
+        sigma = np.full(self.dimension, 0.01)
+        sigma[0] = 0.04  # S cone has higher threshold
+
+        lms_idx = [i for i in range(self.dimension) if i != metameric_axis]
+        d_lms = float(np.sqrt(np.sum((delta[lms_idx] / sigma[lms_idx]) ** 2)))
+
+        if self.dimension > 3:
+            d_q = float(abs(delta[metameric_axis]) / sigma[metameric_axis])
+        else:
+            d_q = 0.0
+
+        return d_lms, d_q
 
     def rnl_distance(self,
                      a: Union[npt.NDArray, Spectra],

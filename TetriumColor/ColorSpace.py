@@ -138,6 +138,15 @@ class ColorSpace:
             led_mapping = [0, 1, 2, 0, 1, 2]  # RGB / RGB
         self.led_mapping = led_mapping
 
+        # Lazy-computed transforms (cached after first computation)
+        self._cone_to_maxbasis = None
+        self._cone_to_hering = None
+        self._cone_to_xyz = None
+        self._cone_to_disp = None
+        self._cone_to_bgyr = None
+        self._disp_metadata = None
+
+        self.disp_method = disp_method
         # Interpolate display primaries to observer wavelengths
         if display_primaries is not None:
             wv = display_primaries[0].wavelengths
@@ -148,22 +157,15 @@ class ColorSpace:
                 ]
             else:
                 self.display_primaries = display_primaries
+
+            self._cone_to_disp = self._get_cone_to_disp()
         else:
             self.display_primaries = None
 
         self.print_gamut = print_gamut
-        self.disp_method = disp_method
 
         # Store the dimensionality of the color space
         self.dim = self.observer.dimension
-
-        # Lazy-computed transforms (cached after first computation)
-        self._cone_to_maxbasis = None
-        self._cone_to_hering = None
-        self._cone_to_disp = None
-        self._cone_to_xyz = None
-        self._cone_to_bgyr = None
-        self._disp_metadata = None
 
         # Lazy-computed gamut properties
         self._max_L = None
