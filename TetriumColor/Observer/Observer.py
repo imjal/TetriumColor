@@ -884,8 +884,9 @@ class Observer:
 
         return float(delta_e)
 
-    def cone_distance(self, s1: Spectra, s2: Spectra, metameric_axis: int = 2):
-        """Noise-weighted Mahalanobis distance in cone contrast space.
+    def cone_distance(self, s1: Spectra, s2: Spectra, metameric_axis: int = 2,
+                      sigma: Optional[npt.NDArray] = None):
+        """Euclidean distance in cone contrast space, optionally noise-weighted.
 
         observe_spectras() returns responses normalized by the adapting white, so
         the difference Δr = r1 - r2 is already in cone contrast units (white = 1).
@@ -894,15 +895,13 @@ class Observer:
             d_lms  — over non-metameric cones (should be ~0 for good metamers)
             d_q    — over the metameric cone only (should be large for good metamers)
 
-        Detection thresholds (sensor order, index 0 assumed S-cone):
-            σ_S = 0.04  (S cones have a higher contrast threshold)
-            σ_i = 0.01  (all other cones)
-
-        d ≈ 1 → ~1 JND,  d > 3 → clearly distinguishable.
-
         Args:
             s1, s2: Spectra to compare.
             metameric_axis: Index of the metameric (Q) cone. Default 2 for tetrachromats.
+            sigma: Per-cone noise standard deviations (d' denominators).  Shape
+                (n_cones,).  When provided, the distance becomes a Mahalanobis
+                distance and d ≈ 1 corresponds to ~1 JND.  Default is None
+                (equivalent to all-ones), giving an unweighted cone contrast distance.
 
         Returns:
             (d_lms, d_q): distances over LMS and Q components respectively.
@@ -913,8 +912,8 @@ class Observer:
         avg = (r1 + r2) / 2.0
 
         delta = (r1 - r2) / avg
-        sigma = np.full(self.dimension, 0.01)
-        sigma[0] = 0.04  # S cone has higher threshold
+        if sigma is None:
+            sigma = np.ones(self.dimension)
 
         lms_idx = [i for i in range(self.dimension) if i != metameric_axis]
         d_lms = float(np.sqrt(np.sum((delta[lms_idx] / sigma[lms_idx]) ** 2)))

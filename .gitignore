@@ -1,4 +1,5 @@
 scripts/paper-viz/*
+output/*
 # agents
 .agent
 

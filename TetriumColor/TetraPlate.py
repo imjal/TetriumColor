@@ -279,7 +279,7 @@ class BipartiteFieldGenerator(TestGenerator):
 
     def NewTest(self, filename: str, hidden_symbol: Union[int, str] = None,
                 output_space: ColorSpaceType = ColorSpaceType.DISP_6P,
-                lum_noise: float = 0, s_cone_noise: float = 0):
+                lum_noise: float = 0, s_cone_noise: float = 0, **kwargs):
         """
         Generates a new bipartite field test and returns trial data as dict.
 
@@ -428,6 +428,202 @@ class BipartiteFieldGenerator(TestGenerator):
                 'inside_cone': inside_cone.tolist(),
                 'outside_cone': outside_cone.tolist(),
                 'size': self.size
+            }
+        }
+
+
+class GaussianBlobGenerator(TestGenerator):
+    """
+    4AFC gaussian blob detection stimulus, matching the anomaloscope blob mode.
+
+    A uniform circle of the background (outside/metamer) color fills the stimulus area.
+    A small Gaussian blob of the foreground (inside) color is placed at one of 4 cardinal
+    positions (up/down/left/right) within the circle at half-radius offset.
+    The blob diameter matches the Landolt-C gap (1/5 of circle diameter).
+
+    The hidden_symbol (e.g. "landolt_up") determines which position the blob appears at.
+
+    All compositing and noise are applied in cone space before conversion to display
+    space, so RGB and OCV images share a single consistent noise realisation.
+    """
+
+    _DIRECTION_MAP = {
+        'landolt_up': 'up', 'landolt_down': 'down',
+        'landolt_left': 'left', 'landolt_right': 'right',
+        'up': 'up', 'down': 'down', 'left': 'left', 'right': 'right',
+    }
+
+    BASE_DEGREE = 4.0
+
+    def __init__(self, color_generator: ColorGenerator, seed: int = 42, size: int = 1024):
+        np.random.seed(seed)
+        super().__init__(color_generator)
+        self.size = size
+
+    def _build_cone_image(self, fg_cone, bg_cone, direction: str, degree: float,
+                          lum_noise: float, s_cone_noise: float):
+        """Build the stimulus circle in cone space (H, W, n_cones).
+
+        Pixels outside the circle are left as NaN so the caller can fill them
+        with the correct display-space background colour.
+
+        Returns:
+            (cone_image, circle_mask)
+        """
+        size = self.size
+        n_cones = len(bg_cone)
+        center = size / 2.0
+        radius = size * 0.475 * (degree / self.BASE_DEGREE)
+
+        Y, X = np.ogrid[:size, :size]
+        dist_sq = (X - center) ** 2 + (Y - center) ** 2
+        circle_mask = dist_sq <= radius ** 2
+
+        cone_img = np.full((size, size, n_cones), np.nan, dtype=np.float64)
+
+        for c in range(n_cones):
+            cone_img[:, :, c] = np.where(circle_mask, bg_cone[c], np.nan)
+
+        # Per-pixel luminance noise (applied equally to all cone channels)
+        if lum_noise > 0:
+            lum_noise_map = np.random.normal(0.0, lum_noise, (size, size))
+            for c in range(n_cones):
+                cone_img[:, :, c] += np.where(circle_mask, lum_noise_map, 0.0)
+
+        # Per-pixel S-cone noise (channel 0 only, matching IshiharaPlateGenerator)
+        if s_cone_noise > 0:
+            s_noise_map = np.random.normal(0.0, s_cone_noise, (size, size))
+            cone_img[:, :, 0] += np.where(circle_mask, s_noise_map, 0.0)
+
+        # Gaussian blob at one of 4 cardinal positions
+        gap_px = radius * 2.0 * 0.2
+        blob_sigma = max(gap_px / 4.0, 1.0)
+
+        offset = radius * 0.5
+        positions = {
+            'up':    (center, center - offset),
+            'down':  (center, center + offset),
+            'left':  (center - offset, center),
+            'right': (center + offset, center),
+        }
+        bx, by = positions[direction]
+
+        hw = int(np.ceil(4 * blob_sigma))
+        x0, x1 = max(int(bx) - hw, 0), min(int(bx) + hw + 1, size)
+        y0, y1 = max(int(by) - hw, 0), min(int(by) + hw + 1, size)
+
+        xs = np.arange(x0, x1, dtype=np.float64) - bx
+        ys = np.arange(y0, y1, dtype=np.float64) - by
+        alpha = np.exp(-ys[:, None] ** 2 / (2 * blob_sigma ** 2)) \
+              * np.exp(-xs[None, :] ** 2 / (2 * blob_sigma ** 2))
+        alpha *= circle_mask[y0:y1, x0:x1]
+
+        for c in range(n_cones):
+            patch = cone_img[y0:y1, x0:x1, c]
+            cone_img[y0:y1, x0:x1, c] = patch * (1.0 - alpha) + fg_cone[c] * alpha
+
+        np.clip(cone_img, 0, None, out=cone_img)
+        return cone_img, circle_mask
+
+    @staticmethod
+    def _cone_to_images(cone_img, circle_mask, color_space, output_space,
+                        background_luminance: float):
+        """Convert a (H, W, n_cones) cone image to PIL images.
+
+        Pixels outside *circle_mask* are filled with a neutral gray matching the
+        app background (background_luminance / max_L), identical to how the
+        IshiharaPlateGenerator computes its background colour.
+
+        Returns (img_a, img_b): two PIL images (RGB+OCV for DISP_6P, or same for SRGB).
+        """
+        h, w, _ = cone_img.shape
+
+        # Only convert circle pixels through the colour-space pipeline
+        flat = cone_img.reshape(-1, cone_img.shape[2])
+        mask_flat = circle_mask.ravel()
+        circle_flat = flat[mask_flat]
+        disp_circle = color_space.convert(circle_flat, ColorSpaceType.CONE, output_space)
+
+        n_disp = disp_circle.shape[1]
+        disp_flat = np.zeros((h * w, n_disp), dtype=np.float64)
+        disp_flat[mask_flat] = disp_circle
+        disp_img = disp_flat.reshape(h, w, n_disp)
+
+        if output_space == ColorSpaceType.DISP_6P:
+            rgb = np.clip(disp_img[:, :, :3] * 255.0, 0, 255).astype(np.uint8)
+            ocv = np.clip(disp_img[:, :, 3:] * 255.0, 0, 255).astype(np.uint8)
+            return Image.fromarray(rgb, 'RGB'), Image.fromarray(ocv, 'RGB')
+        else:
+            srgb = np.clip(disp_img[:, :, :3] * 255.0, 0, 255).astype(np.uint8)
+            img = Image.fromarray(srgb, 'RGB')
+            return img, img
+
+    def _parse_direction(self, hidden_symbol) -> str:
+        if hidden_symbol is None:
+            return np.random.choice(['up', 'down', 'left', 'right'])
+        s = str(hidden_symbol)
+        return self._DIRECTION_MAP.get(s, 'right')
+
+    def NewTest(self, filename: str, hidden_symbol: Union[int, str] = None,
+                output_space: ColorSpaceType = ColorSpaceType.DISP_6P,
+                lum_noise: float = 0, s_cone_noise: float = 0,
+                background_luminance: float = 0.5, degree: float = 4.0, **kwargs):
+        inside_cone, outside_cone, color_space, intensity = self.color_generator.NewColor()
+        return self._generate(inside_cone, outside_cone, color_space, intensity,
+                              filename, hidden_symbol, output_space,
+                              lum_noise, s_cone_noise, background_luminance, degree)
+
+    def GetTest(self, previous_result, filename: str, hidden_symbol: Union[int, str] = None,
+                output_space: ColorSpaceType = ColorSpaceType.DISP_6P,
+                lum_noise: float = 0, s_cone_noise: float = 0,
+                background_luminance: float = 0.5, degree: float = 4.0, **kwargs):
+        result = self.color_generator.GetColor(previous_result)
+        if result is None:
+            return None
+        inside_cone, outside_cone, color_space, intensity = result
+        return self._generate(inside_cone, outside_cone, color_space, intensity,
+                              filename, hidden_symbol, output_space,
+                              lum_noise, s_cone_noise, background_luminance, degree)
+
+    def _generate(self, inside_cone, outside_cone, color_space, intensity,
+                  filename, hidden_symbol, output_space,
+                  lum_noise, s_cone_noise, background_luminance, degree):
+        direction = self._parse_direction(hidden_symbol)
+
+        cone_img, circle_mask = self._build_cone_image(
+            inside_cone, outside_cone, direction, degree, lum_noise, s_cone_noise)
+
+        img_a, img_b = self._cone_to_images(
+            cone_img, circle_mask, color_space, output_space, background_luminance)
+
+        if output_space == ColorSpaceType.DISP_6P:
+            rgb_path = f"{filename}_RGB.png"
+            ocv_path = f"{filename}_OCV.png"
+            img_a.save(rgb_path)
+            img_b.save(ocv_path)
+        else:
+            rgb_path = f"{filename}_SRGB.png"
+            ocv_path = rgb_path
+            img_a.save(rgb_path)
+
+        genotype, metameric_axis = self.color_generator.GetCurrentTestInfo()
+
+        return {
+            'trial_type': 'gaussian_blob',
+            'genotype': str(genotype),
+            'metameric_axis': metameric_axis,
+            'rgb_path': rgb_path,
+            'ocv_path': ocv_path,
+            'hidden_symbol': str(hidden_symbol) if hidden_symbol else f'landolt_{direction}',
+            'intensity': intensity,
+            'metadata': {
+                'inside_cone': inside_cone.tolist(),
+                'outside_cone': outside_cone.tolist(),
+                'size': self.size,
+                'direction': direction,
+                'degree': degree,
+                'lum_noise': lum_noise,
+                's_cone_noise': s_cone_noise,
             }
         }
 

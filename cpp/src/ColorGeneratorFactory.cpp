@@ -15,7 +15,8 @@ PyObject* ColorGeneratorFactory::CreateGeneticColorGenerator(
     int trials_per_direction,
     const std::vector<int>& metameric_axes,
     const std::string& display_primaries_path,
-    float degree
+    float degree,
+    int mcs_k
 )
 {
     // Load primaries from CSV first
@@ -87,6 +88,7 @@ PyObject* ColorGeneratorFactory::CreateGeneticColorGenerator(
     PyDict_SetItemString(pKwargs, "display_primaries", pPrimaries); // Steals reference
     PyDict_SetItemString(pKwargs, "trials_per_direction", PyLong_FromLong(trials_per_direction));
     PyDict_SetItemString(pKwargs, "degree", PyFloat_FromDouble(degree));
+    PyDict_SetItemString(pKwargs, "mcs_k", PyLong_FromLong(mcs_k));
     if (pMetamericAxes) {
         PyDict_SetItemString(pKwargs, "metameric_axes", pMetamericAxes); // Steals reference
     }
@@ -309,6 +311,96 @@ PyObject* ColorGeneratorFactory::CreateCircleGridGenerator(
     if (!pTestGenerator) {
         PyErr_Print();
         throw std::runtime_error("Failed to create CircleGridGenerator instance");
+    }
+
+    return pTestGenerator;
+}
+
+PyObject* ColorGeneratorFactory::CreateBipartiteFieldGenerator(
+    PyObject* color_generator,
+    int seed,
+    int size
+)
+{
+    if (!color_generator) {
+        throw std::runtime_error("ColorGenerator is null");
+    }
+
+    PyObject* pModule = PyImport_ImportModule("TetriumColor.TetraPlate");
+    if (!pModule) {
+        PyErr_Print();
+        throw std::runtime_error("Failed to import TetraPlate module");
+    }
+
+    PyObject* pClass = PyObject_GetAttrString(pModule, "BipartiteFieldGenerator");
+    Py_DECREF(pModule);
+
+    if (!pClass) {
+        PyErr_Print();
+        throw std::runtime_error("Failed to get BipartiteFieldGenerator class");
+    }
+
+    PyObject* pKwargs = PyDict_New();
+    PyDict_SetItemString(pKwargs, "seed", PyLong_FromLong(seed));
+    PyDict_SetItemString(pKwargs, "size", PyLong_FromLong(size));
+
+    PyObject* pArgs = PyTuple_New(1);
+    Py_INCREF(color_generator);
+    PyTuple_SetItem(pArgs, 0, color_generator);
+
+    PyObject* pTestGenerator = PyObject_Call(pClass, pArgs, pKwargs);
+    Py_DECREF(pArgs);
+    Py_DECREF(pKwargs);
+    Py_DECREF(pClass);
+
+    if (!pTestGenerator) {
+        PyErr_Print();
+        throw std::runtime_error("Failed to create BipartiteFieldGenerator instance");
+    }
+
+    return pTestGenerator;
+}
+
+PyObject* ColorGeneratorFactory::CreateGaussianBlobGenerator(
+    PyObject* color_generator,
+    int seed,
+    int size
+)
+{
+    if (!color_generator) {
+        throw std::runtime_error("ColorGenerator is null");
+    }
+
+    PyObject* pModule = PyImport_ImportModule("TetriumColor.TetraPlate");
+    if (!pModule) {
+        PyErr_Print();
+        throw std::runtime_error("Failed to import TetraPlate module");
+    }
+
+    PyObject* pClass = PyObject_GetAttrString(pModule, "GaussianBlobGenerator");
+    Py_DECREF(pModule);
+
+    if (!pClass) {
+        PyErr_Print();
+        throw std::runtime_error("Failed to get GaussianBlobGenerator class");
+    }
+
+    PyObject* pKwargs = PyDict_New();
+    PyDict_SetItemString(pKwargs, "seed", PyLong_FromLong(seed));
+    PyDict_SetItemString(pKwargs, "size", PyLong_FromLong(size));
+
+    PyObject* pArgs = PyTuple_New(1);
+    Py_INCREF(color_generator);
+    PyTuple_SetItem(pArgs, 0, color_generator);
+
+    PyObject* pTestGenerator = PyObject_Call(pClass, pArgs, pKwargs);
+    Py_DECREF(pArgs);
+    Py_DECREF(pKwargs);
+    Py_DECREF(pClass);
+
+    if (!pTestGenerator) {
+        PyErr_Print();
+        throw std::runtime_error("Failed to create GaussianBlobGenerator instance");
     }
 
     return pTestGenerator;

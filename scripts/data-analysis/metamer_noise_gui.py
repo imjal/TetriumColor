@@ -1083,7 +1083,7 @@ def main():
     parser.add_argument(
         "--primaries_dir",
         type=str,
-        default="../../measurements/2025-12-02/primaries_old_method/",
+        default="../../measurements/2026-03-03/primaries/",
         help="Directory containing display primary CSV files",
     )
     parser.add_argument(

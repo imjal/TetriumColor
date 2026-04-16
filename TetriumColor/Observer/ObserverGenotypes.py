@@ -387,6 +387,91 @@ class ObserverGenotypes:
 
         return color_spaces
 
+    def get_greedy_cone_ordering(self, sex: str = 'both') -> List[Dict]:
+        """
+        Greedily build a hyperobserver by adding one cone at a time to maximize
+        cumulative population probability coverage.
+
+        Starting from the most likely K-cone observer, at each step we find the
+        single cone peak that, when added to the current set, maximizes the total
+        probability mass of genotypes whose peaks are a subset of the current set.
+
+        Args:
+            sex: 'male', 'female', or 'both'
+
+        Returns:
+            List of dicts, one per step, each containing:
+                'step': int (0-indexed)
+                'cone_added': float or None (peak added at this step)
+                'cone_set': tuple of floats (current cone set, sorted)
+                'coverage': float (cumulative probability mass covered)
+                'n_genotypes_covered': int (number of genotypes fully covered)
+        """
+        pdf = self.get_pdf(sex)
+        genotypes = list(pdf.keys())
+        probabilities = list(pdf.values())
+
+        # All unique cone peaks across all genotypes
+        all_peaks = sorted(set(peak for g in genotypes for peak in g))
+
+        # Start with the most likely genotype's cone set
+        best_genotype = genotypes[0]
+        current_cones = set(best_genotype)
+
+        def compute_coverage(cone_set: set) -> Tuple[float, int]:
+            """Sum probability of genotypes whose peaks ⊆ cone_set."""
+            total = 0.0
+            count = 0
+            for g, p in zip(genotypes, probabilities):
+                if set(g).issubset(cone_set):
+                    total += p
+                    count += 1
+            return total, count
+
+        coverage, n_covered = compute_coverage(current_cones)
+        steps = [{
+            'step': 0,
+            'cone_added': None,
+            'cone_set': tuple(sorted(current_cones)),
+            'coverage': coverage,
+            'n_genotypes_covered': n_covered,
+        }]
+
+        # Greedily add cones until we have all peaks
+        remaining = set(all_peaks) - current_cones
+        while remaining:
+            best_peak = None
+            best_coverage = coverage
+            best_count = n_covered
+
+            for candidate in sorted(remaining):
+                trial_set = current_cones | {candidate}
+                c, n = compute_coverage(trial_set)
+                if c > best_coverage or (c == best_coverage and n > best_count):
+                    best_coverage = c
+                    best_count = n
+                    best_peak = candidate
+
+            if best_peak is None:
+                # All remaining peaks add nothing; just add them in order
+                best_peak = min(remaining)
+                best_coverage, best_count = compute_coverage(current_cones | {best_peak})
+
+            current_cones.add(best_peak)
+            remaining.discard(best_peak)
+            coverage = best_coverage
+            n_covered = best_count
+
+            steps.append({
+                'step': len(steps),
+                'cone_added': best_peak,
+                'cone_set': tuple(sorted(current_cones)),
+                'coverage': coverage,
+                'n_genotypes_covered': n_covered,
+            })
+
+        return steps
+
     def get_genotypes_by_probability(self, sex: str = 'male') -> List[Tuple[float, ...]]:
         """
         Get the list of genotypes ordered by probability (highest first).

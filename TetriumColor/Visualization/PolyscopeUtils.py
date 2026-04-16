@@ -571,9 +571,15 @@ def RenderBGYRGamut(name: str, cst: ColorSpace, display_basis: PolyscopeDisplayT
     # Apply scaling
     vertices_display = vertices_display * scale
 
-    # Compute colors for vertices (convert to linear sRGB)
+    # Compute colors for vertices: convert to linear sRGB, white-balanced to
+    # the BGYR all-ones white (so the gamut shows meaningful hues rather than
+    # near-black absolute radiometric values).
     vertices_cone = cst.convert(vertices_bgyr, ColorSpaceType.BGYR, ColorSpaceType.CONE)
-    vertex_colors = np.clip(cst.convert(vertices_cone, ColorSpaceType.CONE, ColorSpaceType.LINEAR_SRGB), 0, 1)
+    vertex_colors_raw = cst.convert(vertices_cone, ColorSpaceType.CONE, ColorSpaceType.LINEAR_SRGB)
+    white_cone = cst.convert(np.ones((1, 4)), ColorSpaceType.BGYR, ColorSpaceType.CONE)
+    white_srgb = cst.convert(white_cone, ColorSpaceType.CONE, ColorSpaceType.LINEAR_SRGB)
+    white_srgb = np.maximum(white_srgb, 1e-8)  # guard against zero channels
+    vertex_colors = np.clip(vertex_colors_raw / white_srgb, 0, 1)
 
     # Create mesh objects list
     mesh_objects = []
@@ -622,6 +628,26 @@ def RenderBGYRGamut(name: str, cst: ColorSpace, display_basis: PolyscopeDisplayT
             ps.get_surface_mesh(name + "_hull").set_transparency(alpha)
         except Exception as e:
             print(f"Warning: Could not create hull mesh for {name}: {e}")
+
+
+def RenderDisplayGamutFromColorSpace(name: str, cst: ColorSpace, display_basis: PolyscopeDisplayType,
+                                     alpha: float = 0.15) -> None:
+    """Render the display primaries parallelotope (achievable display colors) for an observer.
+
+    Args:
+        name (str): Name to register with polyscope
+        cst (ColorSpace): ColorSpace with display primaries already set
+        display_basis (PolyscopeDisplayType): Display basis to render in
+        alpha (float): Mesh transparency. Defaults to 0.15.
+    """
+    import itertools
+    n_primaries = len(cst.display_primaries)
+    corners_disp = np.array(list(itertools.product([0, 1], repeat=n_primaries)), dtype=float)
+    corners_cone = cst.convert(corners_disp, ColorSpaceType.DISP, ColorSpaceType.CONE)
+    corners_viz = cst.convert_to_polyscope(corners_cone, ColorSpaceType.CONE, display_basis)
+    corners_srgb = np.clip(cst.convert(corners_cone, ColorSpaceType.CONE, ColorSpaceType.LINEAR_SRGB), 0, 1)
+    Render3DMesh(name, corners_viz, corners_srgb)
+    ps.get_surface_mesh(name).set_transparency(alpha)
 
 
 def RenderGamutSlices(name: str, cst: ColorSpace, display_space: ColorSpaceType, display_basis: PolyscopeDisplayType,

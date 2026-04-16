@@ -469,7 +469,8 @@ TrialData TestGenerator::ParseDictToTrialData(PyObject* dict)
     // Get trial_type to determine which variant to create
     std::string trial_type = GetStringFromDict(dict, "trial_type", "pseudo_isochromatic");
 
-    if (trial_type == "pseudo_isochromatic") {
+    if (trial_type == "pseudo_isochromatic" || trial_type == "bipartite_field"
+        || trial_type == "gaussian_blob") {
         PseudoIsochromaticTrial trial;
         trial.genotype = GetStringFromDict(dict, "genotype", "");
         trial.metameric_axis = GetIntFromDict(dict, "metameric_axis", -1);

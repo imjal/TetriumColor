@@ -279,17 +279,27 @@ def load_primaries_with_zero_extraction(
 
 
 def get_spectras_from_rgbo_list(
-    directory: str, rgbo_list: List[Tuple[int, int, int, int]]
+    directory: str,
+    rgbo_list: List[Tuple[int, int, int, int]],
+    smooth_method: Optional[str] = 'gaussian',
 ) -> List[Spectra]:
     """Given a list of (r, g, b, o) tuples, read the corresponding power data if available.
 
-    Returns a list of power value lists in the same order as the input RGBO list.
+    Returns a list of Spectra in the same order as the input RGBO list.
     If a file is missing, the corresponding entry is None and a warning is printed.
 
     For each RGBO, finds all timestamped files (e.g., r255g0b0o0_20251202_165603_050.csv),
-    sorts them by timestamp, and averages the last 4 measurements.
+    sorts them by timestamp, and uses the most recent measurement.
+
+    Args:
+        directory: Directory containing measurement CSVs.
+        rgbo_list: List of (R, G, B, O) tuples to load.
+        smooth_method: Interpolation method to smooth/upsample to 1nm resolution,
+            matching the treatment applied to primaries in load_primaries_from_csv.
+            Options: 'gaussian', 'asymmetric_gaussian', 'cubic', 'linear', None.
+            Defaults to 'gaussian'.
     """
-    wavelengths = np.arange(380, 781, 4)  # Assuming a fixed wavelength range
+    raw_wavelengths = np.arange(380, 781, 4)  # PR-650 native resolution
     results = []
 
     for rgbo in rgbo_list:
@@ -310,9 +320,8 @@ def get_spectras_from_rgbo_list(
         # Sort by timestamp (embedded in filename)
         matching_files.sort()
 
-        # Instead of averaging, just use the most recent (last) matching file
-        filename = matching_files[-1]  # most recent file after sorting
-        filepath = os.path.join(directory, filename)
+        # Use the most recent file
+        filepath = os.path.join(directory, matching_files[-1])
         power_values = []
         with open(filepath, newline='') as csvfile:
             reader = csv.reader(csvfile)
@@ -321,14 +330,18 @@ def get_spectras_from_rgbo_list(
                 if len(row) < 2:
                     continue
                 try:
-                    power = float(row[1])
-                    power_values.append(power)
+                    power_values.append(float(row[1]))
                 except ValueError:
                     continue  # Skip malformed rows
 
-        if len(power_values) > len(wavelengths):
-            power_values = power_values[-len(wavelengths):]
-        results.append(Spectra(wavelengths=wavelengths, data=np.array(power_values)))
+        if len(power_values) > len(raw_wavelengths):
+            power_values = power_values[-len(raw_wavelengths):]
+        spectra = Spectra(wavelengths=raw_wavelengths, data=np.array(power_values))
+
+        if smooth_method is not None:
+            spectra = spectra.interpolate(np.arange(380, 781, 1), method=smooth_method)
+
+        results.append(spectra)
 
     return results
 

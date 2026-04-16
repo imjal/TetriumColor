@@ -405,6 +405,7 @@ class GeometryPrimitives:
         pcl = o3d.geometry.PointCloud()
         pcl.points = o3d.utility.Vector3dVector(points)
         mesh, point_indices = pcl.compute_convex_hull()
+        mesh.orient_triangles()  # ensure consistent outward-facing winding
         mesh.compute_vertex_normals()
 
         mesh.vertex_colors = o3d.utility.Vector3dVector(rgbs[point_indices])
@@ -419,6 +420,6 @@ class GeometryPrimitives:
             mesh (o3d.geometry.TriangleMesh): open3d geometry triangle mesh to be converted
         """
         ps_mesh = ps.register_surface_mesh(f"{name}", np.asarray(mesh.vertices), np.asarray(
-            mesh.triangles), material='wax', smooth_shade=True)
+            mesh.triangles), material='wax', smooth_shade=True, back_face_policy='identical')
         ps_mesh.add_color_quantity(f"{name}_colors", np.asarray(
             mesh.vertex_colors), defined_on='vertices', enabled=True)
