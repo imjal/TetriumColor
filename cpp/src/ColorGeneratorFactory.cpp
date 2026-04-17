@@ -16,7 +16,8 @@ PyObject* ColorGeneratorFactory::CreateGeneticColorGenerator(
     const std::vector<int>& metameric_axes,
     const std::string& display_primaries_path,
     float degree,
-    int mcs_k
+    int mcs_k,
+    bool debug_middle
 )
 {
     // Load primaries from CSV first
@@ -89,6 +90,7 @@ PyObject* ColorGeneratorFactory::CreateGeneticColorGenerator(
     PyDict_SetItemString(pKwargs, "trials_per_direction", PyLong_FromLong(trials_per_direction));
     PyDict_SetItemString(pKwargs, "degree", PyFloat_FromDouble(degree));
     PyDict_SetItemString(pKwargs, "mcs_k", PyLong_FromLong(mcs_k));
+    PyDict_SetItemString(pKwargs, "debug_middle", debug_middle ? Py_True : Py_False);
     if (pMetamericAxes) {
         PyDict_SetItemString(pKwargs, "metameric_axes", pMetamericAxes); // Steals reference
     }

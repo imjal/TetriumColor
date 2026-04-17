@@ -24,7 +24,8 @@ class ColorGeneratorFactory
         const std::vector<int>& metameric_axes = {}, // Empty = default [1, 2, 3]
         const std::string& display_primaries_path = "",
         float degree = 4.0f,
-        int mcs_k = 1 // number of MCS intensity levels (1 = max metamer only)
+        int mcs_k = 1,      // number of MCS intensity levels (1 = max metamer only)
+        bool debug_middle = false // always pick the center cubemap point (2,2) instead of random
     );
 
     // Create a QuestColorGenerator instance
