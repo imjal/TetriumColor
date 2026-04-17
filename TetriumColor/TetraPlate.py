@@ -473,7 +473,7 @@ class GaussianBlobGenerator(TestGenerator):
         size = self.size
         n_cones = len(bg_cone)
         center = size / 2.0
-        radius = size * 0.475 * (degree / self.BASE_DEGREE)
+        radius = size * 0.475
 
         Y, X = np.ogrid[:size, :size]
         dist_sq = (X - center) ** 2 + (Y - center) ** 2
