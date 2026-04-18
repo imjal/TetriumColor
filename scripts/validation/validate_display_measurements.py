@@ -10,6 +10,9 @@ For each metamer pair (BGYR), this script:
    (LMS difference should be ~0, Q difference should be large for valid metamers.)
 
 All three panels are output as a single figure per metamer pair.
+
+Summary plots additionally include per-wavelength spectral residual / RMSE figures
+(`*_spectral_rmse.png`) comparing measured SPD to the linear primary-mix prediction.
 """
 
 from TetriumColor.Measurement import load_primaries_from_csv, get_spectras_from_rgbo_list
@@ -205,6 +208,9 @@ def validate_measurements(
             print(f"    LMSQ RMSE: m1={lmsq_rmse_1:.4f}, m2={lmsq_rmse_2:.4f}")
             print(f"    LMS metamer RMSE: pred={pred_lms_rmse:.6f}, meas={meas_lms_rmse:.6f}")
             print(f"    Q metamer diff:   pred={pred_q_diff:.6f}, meas={meas_q_diff:.6f}")
+            spec_rmse_1 = float(np.sqrt(np.mean((predicted_1.data - measured_1.data) ** 2)))
+            spec_rmse_2 = float(np.sqrt(np.mean((predicted_2.data - measured_2.data) ** 2)))
+            print(f"    Spectral RMSE (pred vs meas SPD): m1={spec_rmse_1:.4g}, m2={spec_rmse_2:.4g}")
 
             # Store for end-of-validation summary plots
             all_pair_data.append({
@@ -305,7 +311,11 @@ def validate_measurements(
         fname_b = _plot_hyperobserver_bars(pair_data, hyperobs, plots_path)
         fname_c = _plot_hyperobserver_diff(pair_data, hyperobs, plots_path)
         fname_d = _plot_cone_distance_bars(pair_data, config_observer_list, plots_path)
-        print(f"  Saved: {fname_a.name}  |  {fname_b.name}  |  {fname_c.name}  |  {fname_d.name}")
+        fname_e = _plot_spectral_additive_residual(pair_data, plots_path)
+        print(
+            f"  Saved: {fname_a.name}  |  {fname_b.name}  |  {fname_c.name}  |  "
+            f"{fname_d.name}  |  {fname_e.name}"
+        )
 
     _generate_rmse_summary(all_pair_data, hyperobs, config_observer_list, plots_path)
     print(f"Summary plots saved to {plots_path}")
@@ -317,6 +327,75 @@ def _write_csv(path, fieldnames, rows):
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
+
+
+def _plot_spectral_additive_residual(pair_data: dict, plots_path: Path) -> Path:
+    """Per-wavelength deviation from linear additive primary model.
+
+    Scalar spectral RMSE per metamer:
+        RMSE = sqrt(mean_λ (pred(λ) − meas(λ))²)
+    in the same power units as the predicted/measured SPD curves.
+    """
+    obs_idx = pair_data['obs_idx']
+    pair_idx = pair_data['pair_idx']
+    genotype = pair_data['genotype']
+    pred_1 = pair_data['predicted_1']
+    pred_2 = pair_data['predicted_2']
+    meas_1 = pair_data['measured_1']
+    meas_2 = pair_data['measured_2']
+
+    wl = np.asarray(pred_1.wavelengths, dtype=float)
+    d1 = np.asarray(pred_1.data, dtype=float) - np.asarray(meas_1.data, dtype=float)
+    d2 = np.asarray(pred_2.data, dtype=float) - np.asarray(meas_2.data, dtype=float)
+    rmse1 = float(np.sqrt(np.mean(d1 ** 2)))
+    rmse2 = float(np.sqrt(np.mean(d2 ** 2)))
+
+    fig, axes = plt.subplots(3, 1, figsize=(11, 9.0), sharex=True)
+    ax0, ax1, ax2 = axes
+
+    ax0.plot(wl, d1, color='steelblue', lw=1.6, alpha=0.9, label='M1 pred − meas')
+    ax0.plot(wl, d2, color='indianred', lw=1.6, alpha=0.9, label='M2 pred − meas')
+    ax0.axhline(0.0, color='black', lw=0.7, alpha=0.45)
+    ax0.set_ylabel('Δ power', fontsize=12, fontweight='bold')
+    ax0.set_title('Signed residual (pred − meas)', fontsize=11, fontweight='bold')
+    ax0.legend(loc='best', fontsize=9)
+    ax0.grid(True, alpha=0.3, linestyle='--')
+    ax0.spines['top'].set_visible(False)
+
+    ax1.plot(wl, np.abs(d1), color='steelblue', lw=1.6, alpha=0.9, label='|M1|')
+    ax1.plot(wl, np.abs(d2), color='indianred', lw=1.6, alpha=0.9, label='|M2|')
+    ax1.fill_between(wl, 0.0, np.abs(d1), color='steelblue', alpha=0.12)
+    ax1.fill_between(wl, 0.0, np.abs(d2), color='indianred', alpha=0.12)
+    ax1.set_ylabel('|pred − meas|', fontsize=12, fontweight='bold')
+    ax1.set_title('Absolute residual vs wavelength', fontsize=11, fontweight='bold')
+    ax1.legend(loc='upper right', fontsize=9)
+    ax1.grid(True, alpha=0.3, linestyle='--')
+    ax1.spines['top'].set_visible(False)
+
+    ax2.plot(wl, d1 ** 2, color='steelblue', lw=1.4, alpha=0.85,
+             label=f'M1 (mean = MSE = {float(np.mean(d1**2)):.4g})')
+    ax2.plot(wl, d2 ** 2, color='indianred', lw=1.4, alpha=0.85,
+             label=f'M2 (mean = MSE = {float(np.mean(d2**2)):.4g})')
+    ax2.set_ylabel('(pred − meas)²', fontsize=12, fontweight='bold')
+    ax2.set_xlabel('Wavelength (nm)', fontsize=12, fontweight='bold')
+    ax2.set_title(
+        'Squared residual (integrand of spectral MSE; RMSE = √mean)',
+        fontsize=11, fontweight='bold')
+    ax2.legend(loc='upper right', fontsize=9)
+    ax2.grid(True, alpha=0.3, linestyle='--')
+    ax2.spines['top'].set_visible(False)
+
+    fig.suptitle(
+        f'Observer {obs_idx} · Pair {pair_idx} — Spectral deviation from additive primaries\n'
+        f'Genotype {genotype}  |  RMSE(M1)={rmse1:.4g}  RMSE(M2)={rmse2:.4g}\n'
+        'Predicted SPD = Σ BGOR float weights × measured primaries (validation scaling).',
+        fontsize=9, fontweight='bold', y=0.995,
+    )
+    plt.tight_layout(rect=(0, 0.02, 1, 0.93))
+    fname = plots_path / f'obs{obs_idx}_pair{pair_idx}_spectral_rmse.png'
+    plt.savefig(fname, dpi=150, bbox_inches='tight')
+    plt.close()
+    return fname
 
 
 def _plot_all_observers_bars(
