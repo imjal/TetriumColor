@@ -4,7 +4,7 @@ from .ColorSampler import ColorSampler
 from .Utils.CustomTypes import *
 from .Observer import Observer, MaxBasis
 from .TetraPlate import PseudoIsochromaticPlateGenerator, GaussianBlobGenerator
-from .TetraColorPicker import QuestColorGenerator, GeneticColorGenerator, CircleGridGenerator
+from .TetraColorPicker import QuestColorGenerator, CircleGridGenerator
 from .ChromaticityAnalysis import (
     EllipsoidFitter, ChromaticityVisualizer, GenotypeClassifier,
     create_full_analysis_report
