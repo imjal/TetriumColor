@@ -320,7 +320,7 @@ class Cone(Spectra):
         return (~(C_r / denom)).as_energy()
 
     @staticmethod
-    def cone(peak, template="govardovskii", od: float = 0.35, lens: float = 1.0, macular: float = 1.0, degree: Optional[float] = 4, wavelengths=None):
+    def cone(peak, template="govardovskii", od: float = 0.35, lens: float = 1.0, macular: float = 1.0, degree: Optional[float] = 2.0, wavelengths=None):
         # TODO: want to add eccentricity and/or macular, lens control
 
         if not isinstance(peak, (int, float)):
@@ -355,42 +355,40 @@ class Cone(Spectra):
             return 0.40 + (0.30 - 0.40) * (degree**2 - 4) / 96
 
         macular = macular * macular_pigment_factor(degree)
-        if od == 0.4:
+        if peak <= 450:
             od = s_photopigment_od(degree)
-        elif od == 0.5:
-            od = lm_photopigment_od(degree)
         else:
-            raise ValueError(f"OD {od} not supported")
+            od = lm_photopigment_od(degree)
         print(f"Degree: {degree}, Macular: {macular}, OD: {od}")
         return Cone.templates[template](wavelengths, peak).with_preceptoral(od=od, macular=macular, lens=lens)
 
     @staticmethod
-    def l_cone(wavelengths=None, template=None, degree: Optional[float] = 4):
+    def l_cone(wavelengths=None, template=None, degree: Optional[float] = 2.0):
         if template is None:
             reflectances = Cone.ss_data.iloc[:, [0, 1]].to_numpy()
             return Cone(reflectances).interpolate_values(wavelengths)
-        return Cone.cone(559, template=template, od=0.50, wavelengths=wavelengths, degree=degree)
+        return Cone.cone(559, template=template, wavelengths=wavelengths, degree=degree)
 
     @staticmethod
-    def m_cone(wavelengths=None, template=None, degree: Optional[float] = 4):
+    def m_cone(wavelengths=None, template=None, degree: Optional[float] = 2.0):
         if template is None:
             reflectances = Cone.ss_data.iloc[:, [0, 2]].to_numpy()
             return Cone(reflectances).interpolate_values(wavelengths)
-        return Cone.cone(530, template=template, od=0.5, wavelengths=wavelengths)
+        return Cone.cone(530, template=template, wavelengths=wavelengths, degree=degree)
 
     @staticmethod
-    def s_cone(wavelengths=None, template=None, degree: Optional[float] = 4):
+    def s_cone(wavelengths=None, template=None, degree: Optional[float] = 2.0):
         if template is None:
             reflectances = Cone.ss_data.iloc[:, [0, 3]].dropna().to_numpy()
             return Cone(reflectances).interpolate_values(wavelengths)
         # http://www.cvrl.org/database/text/intros/introod.htm
         # "There are no good estimates of pigment optical densities for the S-cones."
-        return Cone.cone(420, template=template, od=0.4, wavelengths=wavelengths, degree=degree)
+        return Cone.cone(420, template=template, wavelengths=wavelengths, degree=degree)
 
     @staticmethod
-    def q_cone(wavelengths=None, template="neitz", degree: Optional[float] = 4):
+    def q_cone(wavelengths=None, template="neitz", degree: Optional[float] = 2.0):
         # 545 per nathan & merbs 92
-        return Cone.cone(545, template=template, od=0.5, wavelengths=wavelengths, degree=degree)
+        return Cone.cone(545, template=template, wavelengths=wavelengths, degree=degree)
 
     @staticmethod
     def old_q_cone(wavelengths=None):
@@ -437,9 +435,13 @@ class Observer:
     def __eq__(self, other):
         if not isinstance(other, Observer):
             return False
+        if self.dimension != other.dimension:
+            return False
+        if len(self.wavelengths) != len(other.wavelengths):
+            return False
         return (tuple([[s.peak, s.od, s.lens, s.macular] for s in self.sensors]) ==
                 tuple([[s.peak, s.od, s.lens, s.macular] for s in other.sensors])) and \
-            (self.wavelengths == other.wavelengths).all() and self.dimension == other.dimension
+            (self.wavelengths == other.wavelengths).all()
 
     def __hash__(self):
         return stable_hash((tuple(tuple([s.peak, s.od, s.lens, s.macular]) for s in self.sensors), tuple(self.wavelengths), self.dimension))
@@ -459,7 +461,7 @@ class Observer:
         return MultiSpectralDistributions(d)
 
     @staticmethod
-    def hyperobserver(wavelengths=None, template='neitz', od=0.5, illuminant=None, degree=4.0):
+    def hyperobserver(wavelengths=None, template='neitz', od=0.5, illuminant=None, degree=2.0):
         """Create a 12-dimensional observer spanning all known human L/M/S opsin variants.
 
         Covers every unique peak wavelength arising from L and M opsin SNP combinations
@@ -506,24 +508,20 @@ class Observer:
         return Observer([s_cone, m_cone], illuminant=illuminant)
 
     @staticmethod
-    def trichromat(wavelengths=None, illuminant=None, template='neitz'):
-        l_cone = Cone.l_cone(wavelengths, template=template)
-        m_cone = Cone.m_cone(wavelengths, template=template)
-        s_cone = Cone.s_cone(wavelengths, template=template)
+    def trichromat(wavelengths=None, illuminant=None, template='neitz', degree: Optional[float] = 2.0):
+        l_cone = Cone.l_cone(wavelengths, template=template, degree=degree)
+        m_cone = Cone.m_cone(wavelengths, template=template, degree=degree)
+        s_cone = Cone.s_cone(wavelengths, template=template, degree=degree)
         return Observer([s_cone, m_cone, l_cone], illuminant=illuminant)
 
     @staticmethod
-    def tetrachromat(wavelengths=None, degree: Optional[float] = 4, illuminant=None, verbose=False):
+    def tetrachromat(wavelengths=None, degree: Optional[float] = 2.0, illuminant=None, verbose=False, template='neitz'):
         # This is a "maximally well spaced" tetrachromat
-        # Cone.cone(555, wavelengths=wavelengths, template="neitz", od=0.35)
-        l_cone = Cone.l_cone(wavelengths, )
-        q_cone = Cone.cone(545, wavelengths=wavelengths,
-                           template="neitz", od=0.5)
-        # Cone.cone(530, wavelengths=wavelengths, template="neitz", od=0.35)
-        m_cone = Cone.m_cone(wavelengths)
-        # Cone.s_cone(wavelengths=wavelengths)
-        s_cone = Cone.s_cone(wavelengths)
-        return Observer([s_cone, m_cone, q_cone, l_cone], degree=degree, illuminant=illuminant, verbose=verbose)
+        l_cone = Cone.l_cone(wavelengths, template=template, degree=degree)
+        q_cone = Cone.cone(545, wavelengths=wavelengths, template=template, degree=degree)
+        m_cone = Cone.m_cone(wavelengths, template=template, degree=degree)
+        s_cone = Cone.s_cone(wavelengths, template=template, degree=degree)
+        return Observer([s_cone, m_cone, q_cone, l_cone], illuminant=illuminant, verbose=verbose)
 
     @staticmethod
     def old_tetrachromat(wavelengths=None, illuminant=None, verbose=False):
@@ -538,27 +536,21 @@ class Observer:
         return Observer([s_cone, m_cone, q_cone, l_cone], illuminant=illuminant, verbose=verbose)
 
     @staticmethod
-    def neitz_tetrachromat(wavelengths=None, illuminant=None, verbose=False):
+    def neitz_tetrachromat(wavelengths=None, illuminant=None, verbose=False, degree: Optional[float] = 2.0):
         # This is a "maximally well spaced" tetrachromat
-        l_cone = Cone.cone(559, wavelengths=wavelengths,
-                           template="neitz", od=0.35)
-        q_cone = Cone.cone(545, wavelengths=wavelengths,
-                           template="neitz", od=0.35)
-        m_cone = Cone.cone(530, wavelengths=wavelengths,
-                           template="neitz", od=0.35)
-        s_cone = Cone.s_cone(wavelengths=wavelengths)
+        l_cone = Cone.cone(559, wavelengths=wavelengths, template="neitz", degree=degree)
+        q_cone = Cone.cone(545, wavelengths=wavelengths, template="neitz", degree=degree)
+        m_cone = Cone.cone(530, wavelengths=wavelengths, template="neitz", degree=degree)
+        s_cone = Cone.s_cone(wavelengths=wavelengths, template="neitz", degree=degree)
         return Observer([s_cone, m_cone, q_cone, l_cone], illuminant=illuminant, verbose=verbose)
 
     @staticmethod
-    def govardovskii_tetrachromat(wavelengths=None, illuminant=None, verbose=False):
+    def govardovskii_tetrachromat(wavelengths=None, illuminant=None, verbose=False, degree: Optional[float] = 2.0):
         # This is a "maximally well spaced" tetrachromat
-        l_cone = Cone.cone(559, wavelengths=wavelengths,
-                           template="govardovskii", od=0.35)
-        q_cone = Cone.cone(545, wavelengths=wavelengths,
-                           template="govardovskii", od=0.35)
-        m_cone = Cone.cone(530, wavelengths=wavelengths,
-                           template="govardovskii", od=0.35)
-        s_cone = Cone.s_cone(wavelengths=wavelengths)
+        l_cone = Cone.cone(559, wavelengths=wavelengths, template="govardovskii", degree=degree)
+        q_cone = Cone.cone(545, wavelengths=wavelengths, template="govardovskii", degree=degree)
+        m_cone = Cone.cone(530, wavelengths=wavelengths, template="govardovskii", degree=degree)
+        s_cone = Cone.s_cone(wavelengths=wavelengths, template="govardovskii", degree=degree)
         return Observer([s_cone, m_cone, q_cone, l_cone], illuminant=illuminant, verbose=verbose)
 
     @staticmethod
@@ -618,6 +610,7 @@ class Observer:
                    od: float = 0.5,
                    macular: float = 1,
                    lens: float = 1,
+                   degree: Optional[float] = 2.0,
                    verbose: bool = False):
         """Create an observer from a list of peaks
 
@@ -634,7 +627,7 @@ class Observer:
         cones = []
         for peak in sorted(peaks):
             cone = Cone.cone(peak, wavelengths=wavelengths, template=template,
-                             od=od if peak > 450 else od * 0.8, macular=macular, lens=lens)
+                             macular=macular, lens=lens, degree=degree)
             cones.append(cone)
         return Observer(cones, illuminant=illuminant, verbose=verbose)
 
@@ -649,6 +642,7 @@ class Observer:
                         macular: float = 1,
                         lens: float = 1,
                         template: str = "neitz",
+                        degree: Optional[float] = 2.0,
                         illuminant: Spectra | None = None,
                         verbose: bool = False, subset: List[int] = [0, 1, 3]):
         """Given specific parameters, return an observer model with Q cone peaked at 547
@@ -664,14 +658,14 @@ class Observer:
             _type_: Observer of specified paramters and 4 cone types
         """
 
-        l_cone = Cone.cone(l_cone_peak, wavelengths=wavelengths, template=template, od=od, macular=macular, lens=lens)
-        l_cone_555 = Cone.cone(555, wavelengths=wavelengths, template=template, od=od, macular=macular, lens=lens)
-        l_cone_551 = Cone.cone(551, wavelengths=wavelengths, template=template, od=od, macular=macular, lens=lens)
-        l_cone_547 = Cone.cone(547, wavelengths=wavelengths, template=template, od=od, macular=macular, lens=lens)
-        q_cone = Cone.cone(q_cone_peak, wavelengths=wavelengths, template=template, od=od, macular=macular, lens=lens)
-        m_cone = Cone.cone(m_cone_peak, wavelengths=wavelengths, template=template, od=od, macular=macular, lens=lens)
+        l_cone = Cone.cone(l_cone_peak, wavelengths=wavelengths, template=template, macular=macular, lens=lens, degree=degree)
+        l_cone_555 = Cone.cone(555, wavelengths=wavelengths, template=template, macular=macular, lens=lens, degree=degree)
+        l_cone_551 = Cone.cone(551, wavelengths=wavelengths, template=template, macular=macular, lens=lens, degree=degree)
+        l_cone_547 = Cone.cone(547, wavelengths=wavelengths, template=template, macular=macular, lens=lens, degree=degree)
+        q_cone = Cone.cone(q_cone_peak, wavelengths=wavelengths, template=template, macular=macular, lens=lens, degree=degree)
+        m_cone = Cone.cone(m_cone_peak, wavelengths=wavelengths, template=template, macular=macular, lens=lens, degree=degree)
         s_cone = Cone.cone(s_cone_peak, wavelengths=wavelengths, template=template,
-                           od=0.8 * od, macular=macular, lens=lens)
+                           macular=macular, lens=lens, degree=degree)
         # s_cone = Cone.s_cone(wavelengths=wavelengths)
         if dimension == 3:
             set_cones = [s_cone, m_cone, q_cone, l_cone]
