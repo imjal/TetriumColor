@@ -2,10 +2,46 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
 from pathlib import Path
+from typing import Any, Dict, Optional
+
 import argparse
 from collections import defaultdict
 import re
 from datetime import datetime
+
+
+def _coerce_correct_column(df: pd.DataFrame):
+    """Return a binary 0/1 Series aligned with df, or None if no usable outcome column."""
+    if 'correct' in df.columns:
+        s = df['correct']
+    else:
+        aliases = (
+            'is_correct', 'IsCorrect', 'response_correct', 'trial_correct',
+            'was_correct', 'Correct', 'success', 'Success',
+        )
+        found = None
+        for name in aliases:
+            if name in df.columns:
+                found = name
+                break
+        if found is None:
+            return None
+        s = df[found]
+
+    if s.dtype == bool or str(s.dtype) == 'boolean':
+        return s.astype(np.int32)
+
+    num = pd.to_numeric(s, errors='coerce')
+    if num.notna().mean() > 0.95:
+        uvals = pd.unique(num.dropna())
+        if len(uvals) and all(float(v) in (0.0, 1.0) for v in uvals):
+            return num.fillna(0).astype(np.int32).clip(0, 1)
+
+    low = s.astype(str).str.strip().str.lower()
+    if low.isin(('1', 'true', 't', 'yes', 'y', 'correct')).any():
+        return low.isin(('1', 'true', 't', 'yes', 'y', 'correct')).astype(np.int32)
+
+    return None
 
 
 def parse_filename(filepath):
@@ -24,36 +60,81 @@ def parse_filename(filepath):
     return None, None
 
 
+def _is_thresholds_export(path: Path) -> bool:
+    """Exported threshold summaries (not trial logs)."""
+    return path.name.lower().endswith('_thresholds.csv')
+
+
+def pseudo_csv_variant_from_filename(path: Path) -> Optional[str]:
+    """Classify pseudo-isochromatic trial CSV by filename (stem, case-insensitive).
+
+    Returns ``'QUEST'`` or ``'GENETIC'`` (MOCS / genetic color generator), else None.
+    ``QUEST`` is checked first if both substrings appeared in a pathological name.
+    """
+    stem = path.stem.upper()
+    if 'QUEST' in stem:
+        return 'QUEST'
+    if 'GENETIC' in stem:
+        return 'GENETIC'
+    return None
+
+
 def get_latest_files_per_subject(data_dir):
     """Get the latest file for each subject for each task.
 
+    Ignores ``*_thresholds.csv`` exports. For ``AppPseudoIsochromaticTest``, returns the
+    latest **QUEST** and **GENETIC** trial files separately (matched on filename), not
+    threshold summaries.
+
     Returns:
-        dict: {subject_id: {task_name: filepath}}
+        dict: ``{subject_id: {task_name: Path | {'QUEST': Path|None, 'GENETIC': Path|None}}}``
     """
     data_dir = Path(data_dir)
-    subject_data = defaultdict(lambda: defaultdict(list))
+    regular = defaultdict(lambda: defaultdict(list))
+    pseudo_trials = defaultdict(lambda: defaultdict(list))
 
-    # Iterate through task folders
     for task_folder in data_dir.iterdir():
         if not task_folder.is_dir():
             continue
 
         task_name = task_folder.name
 
-        # Get all CSV files in this task folder
         for csv_file in task_folder.glob('*.csv'):
+            if _is_thresholds_export(csv_file):
+                continue
             subject_id, timestamp_str = parse_filename(csv_file)
-            if subject_id:
-                subject_data[subject_id][task_name].append((timestamp_str, csv_file))
+            if not subject_id:
+                continue
 
-    # Select the latest file for each subject/task combination
-    latest_files = {}
-    for subject_id, tasks in subject_data.items():
+            if task_name == 'AppPseudoIsochromaticTest':
+                variant = pseudo_csv_variant_from_filename(csv_file)
+                if variant is None:
+                    continue
+                pseudo_trials[subject_id][variant].append((timestamp_str, csv_file))
+            else:
+                regular[subject_id][task_name].append((timestamp_str, csv_file))
+
+    all_subjects = set(regular.keys()) | set(pseudo_trials.keys())
+    latest_files: Dict[str, Dict[str, Any]] = {}
+
+    for subject_id in sorted(all_subjects):
         latest_files[subject_id] = {}
-        for task_name, files in tasks.items():
-            # Sort by timestamp and get the latest
+
+        for task_name, files in regular.get(subject_id, {}).items():
+            if not files:
+                continue
             files.sort(key=lambda x: x[0], reverse=True)
             latest_files[subject_id][task_name] = files[0][1]
+
+        pq = pseudo_trials.get(subject_id, {}).get('QUEST', [])
+        pg = pseudo_trials.get(subject_id, {}).get('GENETIC', [])
+        if pq or pg:
+            pq.sort(key=lambda x: x[0], reverse=True)
+            pg.sort(key=lambda x: x[0], reverse=True)
+            latest_files[subject_id]['AppPseudoIsochromaticTest'] = {
+                'QUEST': pq[0][1] if pq else None,
+                'GENETIC': pg[0][1] if pg else None,
+            }
 
     return latest_files
 
@@ -143,12 +224,33 @@ def analyze_temporal_afc(df, output_dir, subject_id):
     print(f"  Saved: {output_path}")
 
 
-def analyze_pseudoisochromatic(df, output_dir, subject_id):
-    """Analyze AppPseudoIsochromaticTest data (4AFC, 25% guessing rate)."""
+def _pseudo_plot_infix(variant: Optional[str]) -> str:
+    if not variant:
+        return ''
+    return f'_{variant}'
+
+
+def analyze_pseudoisochromatic(df, output_dir, subject_id, variant: Optional[str] = None):
+    """Analyze AppPseudoIsochromaticTest data (4AFC, 25% guessing rate).
+
+    Args:
+        variant: Filename tag from exports, e.g. ``'QUEST'`` or ``'GENETIC'`` (MOCS).
+    """
     # Check if metameric_axis exists
     if 'metameric_axis' not in df.columns:
         print(f"    Warning: No 'metameric_axis' column found, skipping analysis")
         return
+
+    correct = _coerce_correct_column(df)
+    if correct is None:
+        print(
+            "    Warning: No binary outcome column found "
+            "(expected 'correct' or aliases like is_correct / response_correct); "
+            f"columns are: {list(df.columns)}. Skipping pseudoisochromatic bar summaries."
+        )
+        return
+    df = df.copy()
+    df['correct'] = correct
 
     # Create genotype tuple (if genotype columns exist)
     if 'genotype_1' in df.columns and 'genotype_2' in df.columns:
@@ -240,22 +342,36 @@ def analyze_pseudoisochromatic(df, output_dir, subject_id):
 
             plot_idx += 1
 
-    fig.suptitle(f'AppPseudoIsochromaticTest - {subject_id}', fontsize=14, fontweight='bold')
+    tag = f' ({variant})' if variant else ''
+    fig.suptitle(f'AppPseudoIsochromaticTest{tag} - {subject_id}', fontsize=14, fontweight='bold')
 
     plt.tight_layout()
-    output_path = output_dir / 'AppPseudoIsochromaticTest_summary.png'
+    output_path = output_dir / f'AppPseudoIsochromaticTest{_pseudo_plot_infix(variant)}_summary.png'
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     plt.close()
 
     print(f"  Saved: {output_path}")
 
 
-def plot_pseudoisochromatic_clean(df, output_dir, subject_id):
-    """Create a clean, single-graph visualization with genotypes on x-axis."""
+def plot_pseudoisochromatic_clean(df, output_dir, subject_id, variant: Optional[str] = None):
+    """Create a clean, single-graph visualization with genotypes on x-axis.
+
+    Args:
+        variant: Optional ``'QUEST'`` / ``'GENETIC'`` tag for distinct output files.
+    """
     # Check if metameric_axis exists
     if 'metameric_axis' not in df.columns:
         print(f"    Warning: No 'metameric_axis' column found, skipping analysis")
         return
+
+    correct = _coerce_correct_column(df)
+    if correct is None:
+        print(
+            "    Warning: No binary outcome column for clean pseudoisochromatic plot; skipping."
+        )
+        return
+    df = df.copy()
+    df['correct'] = correct
 
     # Create genotype tuple (if genotype columns exist)
     if 'genotype_1' in df.columns and 'genotype_2' in df.columns:
@@ -327,7 +443,8 @@ def plot_pseudoisochromatic_clean(df, output_dir, subject_id):
     # Styling
     ax.set_xlabel('Genotype', fontsize=14, fontweight='bold')
     ax.set_ylabel('Accuracy', fontsize=14, fontweight='bold')
-    ax.set_title(f'Pseudoisochromatic Plate Test - {subject_id}',
+    tag = f' ({variant})' if variant else ''
+    ax.set_title(f'Pseudoisochromatic Plate Test{tag} - {subject_id}',
                  fontsize=16, fontweight='bold', pad=20)
     ax.set_xticks(x)
     ax.set_xticklabels(genotypes, fontsize=12)
@@ -343,7 +460,7 @@ def plot_pseudoisochromatic_clean(df, output_dir, subject_id):
     ax.spines['bottom'].set_linewidth(1.5)
 
     plt.tight_layout()
-    output_path = output_dir / 'AppPseudoIsochromaticTest_Clean.png'
+    output_path = output_dir / f'AppPseudoIsochromaticTest{_pseudo_plot_infix(variant)}_Clean.png'
     plt.savefig(output_path, dpi=300, bbox_inches='tight', facecolor='white')
     plt.close()
 
@@ -460,14 +577,23 @@ def analyze_subject(subject_id, task_files, results_dir):
     subject_dir.mkdir(parents=True, exist_ok=True)
 
     for task_name, filepath in task_files.items():
+        if task_name == 'AppPseudoIsochromaticTest' and isinstance(filepath, dict):
+            for variant in ('QUEST', 'GENETIC'):
+                path = filepath.get(variant)
+                if path is None:
+                    print(f"  Processing: {task_name} ({variant}) — no file, skipping")
+                    continue
+                print(f"  Processing: {task_name} ({variant}): {path.name}")
+                df = pd.read_csv(path)
+                analyze_pseudoisochromatic(df, subject_dir, subject_id, variant=variant)
+                plot_pseudoisochromatic_clean(df, subject_dir, subject_id, variant=variant)
+            continue
+
         print(f"  Processing: {task_name}")
         df = pd.read_csv(filepath)
 
         if task_name == 'AppTemporalAFC':
             analyze_temporal_afc(df, subject_dir, subject_id)
-        elif task_name == 'AppPseudoIsochromaticTest':
-            analyze_pseudoisochromatic(df, subject_dir, subject_id)
-            plot_pseudoisochromatic_clean(df, subject_dir, subject_id)
         elif task_name == 'AppScrambledFaceTest':
             analyze_scrambled_face(df, subject_dir, subject_id)
         else:
@@ -487,6 +613,15 @@ def aggregate_across_subjects(latest_files, results_dir):
     task_data = defaultdict(list)
     for subject_id, tasks in latest_files.items():
         for task_name, filepath in tasks.items():
+            if task_name == 'AppPseudoIsochromaticTest' and isinstance(filepath, dict):
+                for variant in ('QUEST', 'GENETIC'):
+                    path = filepath.get(variant)
+                    if path is None:
+                        continue
+                    df = pd.read_csv(path)
+                    df['subject_id_analysis'] = subject_id
+                    task_data[f'AppPseudoIsochromaticTest_{variant}'].append(df)
+                continue
             df = pd.read_csv(filepath)
             df['subject_id_analysis'] = subject_id  # Add subject ID for grouping
             task_data[task_name].append(df)
@@ -498,9 +633,16 @@ def aggregate_across_subjects(latest_files, results_dir):
 
         if task_name == 'AppTemporalAFC':
             analyze_temporal_afc(combined_df, aggregate_dir, 'All Subjects')
-        elif task_name == 'AppPseudoIsochromaticTest':
-            analyze_pseudoisochromatic(combined_df, aggregate_dir, 'All Subjects')
-            plot_pseudoisochromatic_clean(combined_df, aggregate_dir, 'All Subjects')
+        elif task_name == 'AppPseudoIsochromaticTest_QUEST':
+            analyze_pseudoisochromatic(
+                combined_df, aggregate_dir, 'All Subjects (QUEST)', variant='QUEST')
+            plot_pseudoisochromatic_clean(
+                combined_df, aggregate_dir, 'All Subjects (QUEST)', variant='QUEST')
+        elif task_name == 'AppPseudoIsochromaticTest_GENETIC':
+            analyze_pseudoisochromatic(
+                combined_df, aggregate_dir, 'All Subjects (GENETIC)', variant='GENETIC')
+            plot_pseudoisochromatic_clean(
+                combined_df, aggregate_dir, 'All Subjects (GENETIC)', variant='GENETIC')
         elif task_name == 'AppScrambledFaceTest':
             analyze_scrambled_face(combined_df, aggregate_dir, 'All Subjects')
 
@@ -551,7 +693,15 @@ Examples:
     for subject_id, tasks in latest_files.items():
         print(f"  {subject_id}:")
         for task_name, filepath in tasks.items():
-            print(f"    - {task_name}: {filepath.name}")
+            if task_name == 'AppPseudoIsochromaticTest' and isinstance(filepath, dict):
+                for variant in ('QUEST', 'GENETIC'):
+                    p = filepath.get(variant)
+                    if p is not None:
+                        print(f"    - {task_name} ({variant}): {p.name}")
+                    else:
+                        print(f"    - {task_name} ({variant}): (none)")
+            else:
+                print(f"    - {task_name}: {filepath.name}")
 
     # Analyze specific subject
     if args.subject:
