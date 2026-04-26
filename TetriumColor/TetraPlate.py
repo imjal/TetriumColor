@@ -8,7 +8,7 @@ from TetriumColor.Utils.CustomTypes import ColorTestResult
 from TetriumColor.Observer import *
 from TetriumColor import ColorSpaceType, ColorSpace
 from TetriumColor.PsychoPhys.IshiharaPlate import IshiharaPlateGenerator
-from TetriumColor.TetraColorPicker import ColorGenerator, GeneticColorGenerator
+from TetriumColor.TetraColorPicker import ColorGenerator, QuestColorGenerator
 from TetriumColor.Utils.ImageUtils import CreatePaddedGrid
 
 
@@ -836,16 +836,12 @@ if __name__ == "__main__":
 
         primaries = load_primaries_from_csv("./measurements/2025-10-10/primaries/")
         testing_dim = 3
-        color_generator = GeneticColorGenerator(
+        color_generator = QuestColorGenerator(
             sex='both', percentage_screened=0.99, display_primaries=primaries, dimensions=[testing_dim],
             metameric_axes=[2],
-            # list(range(1, testing_dim + 1)),
-            trials_per_direction=1, randomize_genotypes=False)
+            trials_per_direction=1,
+            mcs_k=1)
 
-        print("Number of Genotypes: ", len(color_generator.genotypes))
-
-        genotypes = color_generator.GetGenotypes()
-        print(f"Genotypes: {genotypes}")
         plate_generator = PseudoIsochromaticPlateGenerator(color_generator)
 
         lum_noise = 0.0

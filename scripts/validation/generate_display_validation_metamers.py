@@ -178,6 +178,7 @@ def generate_metamers(
     seed: int = 42,
     primaries_path: str = None,
     mc_samples: int = 1000,
+    use_display_midpoint: bool = True,
 ):
     """
     Generate fixed metamer pairs for validation using ColorSampler.
@@ -186,21 +187,27 @@ def generate_metamers(
     ColorSpace, then converts to BGYR for storage. This ensures each observer's metamers
     are generated in their own display space.
 
-    For each observer, this creates a grid×grid array of metamer pairs on a cubemap
-    face perpendicular to the Q-metameric direction. The ColorSampler handles the
-    grid sampling and metamer finding efficiently.
+    When use_display_midpoint=True (default), each observer's single metamer pair is
+    generated from the display midpoint [0.5, 0.5, 0.5, 0.5], matching the background
+    used by GeneticColorGenerator and QuestColorGenerator in the psychophysics app.
+
+    When use_display_midpoint=False, uses the legacy ColorSampler cubemap path which
+    samples a grid×grid array of metamer pairs on a cubemap face. Cubemap points are
+    at gamut boundary cusps and are dimmer than the display midpoint.
 
     Args:
         num_observers: Number of top observers to generate metamers for
         sex: Population to sample from ('male', 'female', 'both')
-        grid_size: Size of grid (e.g., 5 for 5×5 = 25 pairs per observer)
-        luminance: Luminance level in VSH space for the sampling plane
-        saturation: Saturation level in VSH space (controls distance from gray)
-        cube_face: Which cubemap face to sample (0-5, default 4 is +Z face)
+        grid_size: Size of grid for legacy cubemap mode (ignored when use_display_midpoint=True)
+        luminance: Luminance level in VSH space — only used in legacy cubemap mode
+        saturation: Saturation level in VSH space — only used in legacy cubemap mode
+        cube_face: Which cubemap face to sample — only used in legacy cubemap mode
         metameric_axis: Axis to be metameric over (default: 2 for Q cone)
         seed: Random seed for reproducibility
         primaries_path: Path to directory with display primaries (required)
         mc_samples: Number of Monte Carlo samples for observer variability simulation
+        use_display_midpoint: If True (default), generate one pair per observer from
+            DISP [0.5,0.5,0.5,0.5]. If False, use legacy cubemap grid sampling.
 
     Returns:
         Dictionary with structure:
@@ -241,9 +248,12 @@ def generate_metamers(
     # Compute degree-adjusted nominal observer parameters (must match Cone.cone internals)
     nom = _nominal_observer_params(degree=4.0)
 
-    print(f"Top {num_observers} observers using ColorSampler...")
-    print(f"Parameters: sex={sex}, grid_size={grid_size}×{grid_size}, seed={seed}")
-    print(f"Luminance={luminance}, saturation={saturation}, cube_face={cube_face}")
+    if use_display_midpoint:
+        print(f"Top {num_observers} observers using display midpoint [0.5, 0.5, 0.5, 0.5]...")
+    else:
+        print(f"Top {num_observers} observers using ColorSampler (legacy cubemap mode)...")
+        print(f"Parameters: sex={sex}, grid_size={grid_size}×{grid_size}, seed={seed}")
+        print(f"Luminance={luminance}, saturation={saturation}, cube_face={cube_face}")
     print(f"Metameric axis={metameric_axis}")
     print()
 
@@ -264,9 +274,12 @@ def generate_metamers(
     print()
 
     # Total number of metamer pairs per observer
-    num_pairs_per_observer = grid_size * grid_size
+    num_pairs_per_observer = 1 if use_display_midpoint else grid_size * grid_size
 
-    print(f"Generating {num_pairs_per_observer} metamer pairs per observer from cube face {cube_face}")
+    if use_display_midpoint:
+        print(f"Generating 1 metamer pair per observer from display midpoint [0.5, 0.5, 0.5, 0.5]")
+    else:
+        print(f"Generating {num_pairs_per_observer} metamer pairs per observer from cube face {cube_face}")
     print()
 
     observers_data = []
@@ -280,24 +293,35 @@ def generate_metamers(
         # Create ColorSpace with display primaries (always use DISP space)
         color_space = ColorSpace(observer, display_primaries=display_primaries, metameric_axis=metameric_axis)
 
-        # Create ColorSampler with the specified grid size
-        color_sampler = ColorSampler(color_space, cubemap_size=grid_size, disable=False)
-
-        print(f"  Using ColorSampler with {grid_size}×{grid_size} grid on cube face {cube_face}")
-
         try:
-            # Get metamer pairs for the specified cube face
-            # This returns (metamers_in_sampling_space, cones) where:
-            # - metamers_in_sampling_space: shape (grid_size^2, 2, 4) - pairs in DISP space (BGOR order)
-            # - cones: shape (grid_size^2, 2, 4) - pairs in CONE space
-            metamers_in_disp_space, cones = color_sampler.get_metameric_pairs(
-                luminance=luminance,
-                saturation=saturation,
-                cube_idx=cube_face,
-                metameric_axis=metameric_axis
-            )
-
-            print(f"  Generated {len(metamers_in_disp_space)} metamer pairs in DISP space")
+            if use_display_midpoint:
+                # Generate a single metamer pair from the display midpoint DISP [0.5, 0.5, 0.5, 0.5].
+                # This matches the background used by GeneticColorGenerator and QuestColorGenerator.
+                point = np.ones(color_space.dim) * 0.5
+                inside_disp, outside_disp, _ = color_space.get_maximal_pair_in_disp_from_pt(
+                    point, metameric_axis=metameric_axis, proportion=1.0,
+                    output_space=ColorSpaceType.DISP)
+                metamers_in_disp_space = np.array([[inside_disp, outside_disp]])
+                disp_pair = np.array([inside_disp, outside_disp])
+                cone_pair = color_space.convert(disp_pair, ColorSpaceType.DISP, ColorSpaceType.CONE)
+                cones = cone_pair[np.newaxis, :, :]  # shape (1, 2, dim)
+                effective_grid_size = 1
+                print(f"  Generated midpoint metamer pair in DISP space")
+            else:
+                # Legacy cubemap path: sample grid_size×grid_size points from the cubemap.
+                color_sampler = ColorSampler(color_space, cubemap_size=grid_size, disable=False)
+                print(f"  Using ColorSampler with {grid_size}×{grid_size} grid on cube face {cube_face}")
+                # Returns (metamers_in_sampling_space, cones):
+                # - metamers_in_sampling_space: shape (grid_size^2, 2, 4) in DISP space (BGOR order)
+                # - cones: shape (grid_size^2, 2, 4) in CONE space
+                metamers_in_disp_space, cones = color_sampler.get_metameric_pairs(
+                    luminance=luminance,
+                    saturation=saturation,
+                    cube_idx=cube_face,
+                    metameric_axis=metameric_axis
+                )
+                effective_grid_size = grid_size
+                print(f"  Generated {len(metamers_in_disp_space)} metamer pairs in DISP space")
 
             # Convert DISP (BGOR) to BGYR for storage using observer-specific ColorSpace
             print(f"  Converting DISP → BGYR for storage...")
@@ -313,8 +337,8 @@ def generate_metamers(
             metamer_pairs = []
             for i in range(n_points):
                 # Calculate grid position from flat index
-                row = i // grid_size
-                col = i % grid_size
+                row = i // effective_grid_size
+                col = i % effective_grid_size
 
                 # Get the two metamers in DISP space (BGOR order)
                 disp_1 = metamers_in_disp_space[i, 0]  # BGOR order
@@ -407,15 +431,31 @@ def generate_metamers(
     ]
 
     # Create output structure
+    if use_display_midpoint:
+        description = (
+            f'1 metamer pair per observer generated from display midpoint DISP [0.5,0.5,0.5,0.5]. '
+            f'Matches the background used by GeneticColorGenerator and QuestColorGenerator. '
+            f'Generated in DISP space (RGBO), converted to BGYR for storage.'
+        )
+        method = 'ColorSpace.get_maximal_pair_in_disp_from_pt(np.ones(dim)*0.5) in DISP space, converted to BGYR via ColorSpace.convert()'
+    else:
+        description = (
+            f'Grid of {grid_size}×{grid_size} metamer pairs per observer. '
+            f'Generated in DISP space (RGBO) using observer-specific ColorSpace, then converted to BGYR for storage. '
+            f'Sampled using ColorSampler on cube face {cube_face} at luminance={luminance}, saturation={saturation}'
+        )
+        method = 'ColorSampler.get_metameric_pairs() in DISP space, converted to BGYR via ColorSpace.convert()'
+
     output = {
         'metadata': {
             'num_observers': num_observers,
             'num_pairs_per_observer': num_pairs_per_observer,
             'sex': sex,
-            'grid_size': grid_size,
-            'luminance': luminance,
-            'saturation': saturation,
-            'cube_face': cube_face,
+            'grid_size': 1 if use_display_midpoint else grid_size,
+            'use_display_midpoint': use_display_midpoint,
+            'luminance': None if use_display_midpoint else luminance,
+            'saturation': None if use_display_midpoint else saturation,
+            'cube_face': None if use_display_midpoint else cube_face,
             'metameric_axis': metameric_axis,
             'seed': seed,
             'sampling_space': 'RGBO',
@@ -425,8 +465,8 @@ def generate_metamers(
             'primaries_order': 'BGOR',
             'wavelength_range': [int(wavelengths[0]), int(wavelengths[-1])],
             'total_metamer_pairs': sum(len(obs['metamers']) for obs in observers_data),
-            'description': f'Grid of {grid_size}×{grid_size} metamer pairs per observer. Generated in DISP space (RGBO) using observer-specific ColorSpace, then converted to BGYR for storage. Sampled using ColorSampler on cube face {cube_face} at luminance={luminance}, saturation={saturation}',
-            'method': 'ColorSampler.get_metameric_pairs() in DISP space, converted to BGYR via ColorSpace.convert()',
+            'description': description,
+            'method': method,
             'mc_samples': mc_samples,
             'mc_params': {
                 'note': 'means are degree-adjusted to match nominal observer at 4 deg',
@@ -532,6 +572,13 @@ Example:
         action='store_true',
         help='Skip generating the JND plot'
     )
+    parser.add_argument(
+        '--use-display-midpoint',
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help='Use display midpoint [0.5,0.5,0.5,0.5] as starting point (default: on). '
+             'Pass --no-use-display-midpoint for legacy cubemap grid sampling.'
+    )
 
     args = parser.parse_args()
 
@@ -547,6 +594,7 @@ Example:
         seed=args.seed,
         primaries_path=args.primaries_path,
         mc_samples=args.mc_samples,
+        use_display_midpoint=args.use_display_midpoint,
     )
 
     # Save to file

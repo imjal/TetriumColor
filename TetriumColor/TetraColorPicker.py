@@ -71,6 +71,7 @@ class QuestColorGenerator(ColorGenerator):
                  metameric_axes: Optional[List[int]] = [2],
                  bipolar: bool = False,
                  degree: float = 4.0,
+                 mcs_k: int = 0,
                  **kwargs):
         """Initialize Quest-based color generator.
 
@@ -88,6 +89,8 @@ class QuestColorGenerator(ColorGenerator):
             quest_params: Optional dictionary of Quest parameters (tGuess, tGuessSd, pThreshold, beta, delta, gamma)
             metameric_axes: Optional list of metameric axes to test (e.g., [2] for only testing 547nm cone). If None, tests all axes.
             bipolar: If True, sample in both direction and -direction, returning the -direction point instead of the background
+            mcs_k: If > 0, use Method of Constant Stimuli with K equally-spaced intensity levels instead of Quest adaptive algorithm.
+                   1 = max metamer only, K > 1 = linspace(0, 1, K). Bypasses Quest tracking entirely.
             **kwargs: Additional arguments including display_primaries
         """
         self.background_luminance = luminance
@@ -95,10 +98,14 @@ class QuestColorGenerator(ColorGenerator):
         self.num_genotypes = num_genotypes
         self.trials_per_direction = trials_per_direction
         self.sex = sex
+        self.peak_to_test = peak_to_test
         self.metameric_axes = metameric_axes if metameric_axes is not None else list(range(4))
         self.dim = 4
         self.bipolar = bipolar
         self.degree = degree
+        self.mcs_k = mcs_k
+        if mcs_k > 0:
+            self.mcs_proportions = [1.0] if mcs_k <= 1 else list(np.linspace(0.0, 1.0, mcs_k))
 
         # Add degree to kwargs for observer creation
         kwargs['degree'] = degree
@@ -195,17 +202,27 @@ class QuestColorGenerator(ColorGenerator):
         metadata = []
 
         for genotype, genotype_cs in self.genotype_mapping.items():
+            # Compute the sorted peak order (mirrors get_observer_for_peaks logic)
+            peaks_with_s = sorted(set([420] + list(genotype)))
 
             # For each metameric axis (each cone dimension)
             for metameric_axis in self.metameric_axes:
+                # Remap axis to the actual sorted index of peak_to_test (Q cone).
+                # peak_to_test may sort to a different index than the caller assumed
+                # (e.g. 547nm sorts to index 1 in [420,547,555,559], not index 2).
+                if self.peak_to_test in peaks_with_s:
+                    actual_axis = peaks_with_s.index(self.peak_to_test)
+                else:
+                    actual_axis = metameric_axis
+
                 # Get metameric direction in DISP space
                 direction = genotype_cs.get_metameric_axis_in(
                     ColorSpaceType.DISP,
-                    metameric_axis_num=metameric_axis
+                    metameric_axis_num=actual_axis
                 )
 
                 max_point_in_DISP, _, _ = genotype_cs.get_maximal_pair_in_disp_from_pt(
-                    self.background, metameric_axis=metameric_axis, output_space=ColorSpaceType.DISP)
+                    self.background, metameric_axis=actual_axis, output_space=ColorSpaceType.DISP)
 
                 max_distance = np.linalg.norm(max_point_in_DISP - self.background)
 
@@ -214,7 +231,7 @@ class QuestColorGenerator(ColorGenerator):
                 directions.append(direction * max_distance)
                 metadata.append({
                     'genotype': genotype,
-                    'metameric_axis': metameric_axis,
+                    'metameric_axis': actual_axis,
                     'type': 'cone_shift',
                 })
 
@@ -305,6 +322,8 @@ class QuestColorGenerator(ColorGenerator):
 
     def get_num_samples(self) -> int:
         """Get total number of samples (directions × trials per direction)."""
+        if self.mcs_k > 0:
+            return len(self.directions) * len(self.mcs_proportions) * self.trials_per_direction
         return len(self.directions) * self.trials_per_direction
 
     def _select_next_direction(self) -> int:
@@ -340,8 +359,50 @@ class QuestColorGenerator(ColorGenerator):
 
         return disp_point
 
+    def _generate_mcs_trials(self):
+        """Build shuffled MCS trial list: directions × proportions × repetitions."""
+        trial_list = []
+        for direction_idx in range(len(self.directions)):
+            for proportion in self.mcs_proportions:
+                for _ in range(self.trials_per_direction):
+                    trial_list.append((direction_idx, proportion))
+        np.random.shuffle(trial_list)
+        self._mcs_trial_list = trial_list
+        self._mcs_trial_idx = 0
+        print(
+            f"MCS trial list: {len(trial_list)} trials "
+            f"({len(self.directions)} directions × {len(self.mcs_proportions)} levels "
+            f"× {self.trials_per_direction} reps)")
+
+    def _get_color_for_direction_mcs(self, direction_idx: int, proportion: float) -> Tuple[npt.NDArray, npt.NDArray, ColorSpace, float]:
+        """Get color stimulus for MCS mode at a fixed proportion of max distance."""
+        direction_vec = self.directions[direction_idx]
+        background_disp = self.background
+        genotype_cs = self.genotype_mapping[self.direction_metadata[direction_idx]['genotype']]
+
+        if self.bipolar:
+            test_disp = self._disp_direction_to_point(background_disp, direction_vec, proportion)
+            negative_test_disp = self._disp_direction_to_point(background_disp, -direction_vec, proportion)
+            background_cone = genotype_cs.convert(
+                np.array([negative_test_disp]), ColorSpaceType.DISP, ColorSpaceType.CONE)[0]
+            test_cone = genotype_cs.convert(
+                np.array([test_disp]), ColorSpaceType.DISP, ColorSpaceType.CONE)[0]
+        else:
+            test_disp = self._disp_direction_to_point(background_disp, direction_vec, proportion)
+            background_cone = genotype_cs.convert(
+                np.array([background_disp]), ColorSpaceType.DISP, ColorSpaceType.CONE)[0]
+            test_cone = genotype_cs.convert(
+                np.array([test_disp]), ColorSpaceType.DISP, ColorSpaceType.CONE)[0]
+
+        return background_cone, test_cone, genotype_cs, proportion
+
     def NewColor(self) -> Tuple[npt.NDArray, npt.NDArray, ColorSpace, float]:
         """Get first color stimulus."""
+        if self.mcs_k > 0:
+            self._generate_mcs_trials()
+            direction_idx, proportion = self._mcs_trial_list[0]
+            self.current_direction_idx = direction_idx
+            return self._get_color_for_direction_mcs(direction_idx, proportion)
         self.current_direction_idx = 0
         return self._get_color_for_direction(self.current_direction_idx)
 
@@ -354,6 +415,17 @@ class QuestColorGenerator(ColorGenerator):
         Returns:
             Tuple of (background_cone, test_cone, color_space, saturation) or None if done
         """
+        if self.mcs_k > 0:
+            if not hasattr(self, '_mcs_trial_list'):
+                self._generate_mcs_trials()
+            self._mcs_trial_idx += 1
+            if self._mcs_trial_idx >= len(self._mcs_trial_list):
+                print("No more MCS trials")
+                return None
+            direction_idx, proportion = self._mcs_trial_list[self._mcs_trial_idx]
+            self.current_direction_idx = direction_idx
+            return self._get_color_for_direction_mcs(direction_idx, proportion)
+
         if self.current_direction_idx < 0 or self.current_direction_idx >= len(self.directions):
             return None
 
@@ -603,184 +675,6 @@ class GeneticCDFTestColorGenerator(ColorGenerator):
         # raise RuntimeError(f"Could not find valid metamer after {max_retries} attempts for genotype {self.current_idx}")
         print(f"Could not find valid metamer after {max_retries} attempts for genotype {self.current_idx}")
         return inside_cone, outside_cone, color_space, metamer_difference
-
-
-class GeneticColorGenerator(ColorGenerator):
-    def __init__(self, sex: str, percentage_screened: float, peak_to_test: float = 547,
-                 luminance: float = 1.0, saturation: float = 0.5,
-                 dimensions: Optional[List[int]] = [3], seed: int = 42,
-                 trials_per_direction: int = 50, metameric_axes: List[int] = [1, 2, 3],
-                 randomize_genotypes: bool = True, debug_middle: bool = False,
-                 degree: float = 4.0, mcs_k: int = 1, **kwargs):
-        """Color picker using Method of Constant Stimuli across trichromatic phenotypes.
-
-        Args:
-            sex (str): 'male' or 'female'
-            percentage_screened (float): Percentage of the population to screen
-            peak_to_test (float, optional): Peak to test for. Defaults to 547.
-            luminance (float, optional): Luminance level. Defaults to 1.0.
-            saturation (float, optional): Saturation level. Defaults to 0.5.
-            dimensions (Optional[List[int]], optional): Dimensions to screen. Defaults to [3].
-            seed (int): Seed for the random number generator
-            trials_per_direction (int, optional): Repetitions per (genotype × axis × condition). Defaults to 50.
-            metameric_axes (List[int], optional): Metameric axes to use. Defaults to [1, 2, 3].
-            mcs_k (int): Number of equally-spaced intensity levels in [0, 1]. 1 = max metamer only.
-            **kwargs: Additional arguments including display_primaries
-        """
-        self.observer_genotypes = ObserverGenotypes(dimensions=dimensions, seed=seed)
-        self.luminance = luminance
-        self.saturation = saturation
-        self.debug_middle = debug_middle
-        self.degree = degree
-
-        self.randomize_genotypes = randomize_genotypes
-
-        # Get genotypes covering the target probability
-        self.genotypes = self.observer_genotypes.get_genotypes_covering_probability(
-            target_probability=percentage_screened, sex=sex)
-
-        # Create mapping from genotype -> [color_space, color_sampler]
-        self.genotype_mapping: Dict[Tuple, Tuple[ColorSpace, List[npt.NDArray]]] = {}
-
-        # Add degree to kwargs for observer creation
-        kwargs['degree'] = degree
-
-        for genotype in self.genotypes:
-            if len(genotype) == 1:  # testing for hard dichromats
-                if 530 in genotype or 533 in genotype:  # protonope
-                    genotype = genotype + (559,)
-                else:
-                    genotype = (530,) + genotype  # deuteranope
-            elif len(genotype) == 2:  # testing for trichromats
-                if peak_to_test not in genotype:
-                    genotype = genotype + (peak_to_test,)
-                else:
-                    continue
-
-            # Create color space with the peak to test added
-            color_space = self.observer_genotypes.get_color_space_for_peaks(
-                genotype, **kwargs)
-
-            # Create color sampler and get cubemap values
-            color_sampler = ColorSampler(color_space, cubemap_size=5)
-            self.genotype_mapping[genotype] = [color_space, color_sampler]
-
-        self.list_of_genotypes = list(self.genotype_mapping.keys())
-
-        self.trials_per_direction = trials_per_direction
-        self.metameric_axes = metameric_axes
-        self.mcs_k = mcs_k
-
-        # Build equally-spaced intensity levels: K=1 → [1.0], K>1 → linspace(0,1,K)
-        if mcs_k <= 1:
-            self.mcs_proportions = [1.0]
-        else:
-            self.mcs_proportions = list(np.linspace(0.0, 1.0, mcs_k))
-
-    def _generate_trials(self):
-        """Generate all (genotype, metameric_axis, proportion) MCS tuples, shuffled."""
-        trial_list = []
-        for genotype in self.list_of_genotypes:
-            for metameric_axis in self.metameric_axes:
-                for proportion in self.mcs_proportions:
-                    for _ in range(self.trials_per_direction):
-                        trial_list.append((genotype, metameric_axis, proportion))
-        if self.randomize_genotypes:
-            np.random.shuffle(trial_list)
-        self._trial_list = trial_list
-        self._trial_idx = 0
-        print(f"MCS trial list: {len(trial_list)} trials "
-              f"({len(self.list_of_genotypes)} genotypes × {len(self.metameric_axes)} axes "
-              f"× {len(self.mcs_proportions)} levels × {self.trials_per_direction} reps)")
-
-    def NewColor(self):
-        """Return the cone, axis, etc. for the next trial."""
-        if not hasattr(self, "_trial_list"):
-            self._generate_trials()
-        elif self._trial_idx >= len(self._trial_list):
-            print("No more trials to generate")
-            return None
-        genotype, metameric_axis, proportion = self._trial_list[self._trial_idx]
-        self._trial_idx += 1
-        return self.GetMetamericPair(genotype, metameric_axis, proportion)
-
-    def GetColor(self, previous_result: ColorTestResult):
-        """Return the cone, axis, etc. for the next trial (non-adaptive)."""
-        return self.NewColor()
-
-    def GetDirection(self) -> Tuple[npt.NDArray, int]:
-        """Get the direction for the next trial."""
-        if not hasattr(self, "_trial_list") or self._trial_idx >= len(self._trial_list):
-            self._generate_trials()
-        genotype, metameric_axis, proportion = self._trial_list[self._trial_idx]
-        self._trial_idx += 1
-        return genotype, metameric_axis
-
-    def get_num_samples(self):
-        """Returns the total number of trials in the pool."""
-        return len(self.list_of_genotypes) * len(self.metameric_axes) * len(self.mcs_proportions) * self.trials_per_direction
-
-    def GetGenotypes(self) -> List[Tuple]:
-        """Get the list of genotypes.
-
-        Returns:
-            List[Tuple]: The list of genotypes.
-        """
-        return self.genotypes
-
-    def GetCurrentTestInfo(self) -> Tuple:
-        """Get the (genotype, metameric_axis) for the most recent trial."""
-        genotype, metameric_axis, proportion = self._trial_list[self._trial_idx - 1]
-        return genotype, metameric_axis
-
-    def GetMetamericPair(self, genotype: Tuple, metameric_axis: int = None,
-                         proportion: float = 1.0) -> Tuple[npt.NDArray, npt.NDArray, ColorSpace, float]:
-        """Get a metameric pair for a given genotype at a given intensity proportion.
-
-        Args:
-            genotype: The genotype tuple
-            metameric_axis: Metameric axis to use
-            proportion: Fraction in [0, 1] of the maximum metamer distance to use.
-                        0.0 = gray (background), 1.0 = maximum metamer.
-
-        Returns:
-            (inside_cone, outside_cone, color_space, intensity)
-        """
-        if genotype not in self.genotype_mapping:
-            raise ValueError(f"Genotype {genotype} not found in mapping")
-
-        color_space, color_sampler = self.genotype_mapping[genotype]
-
-        grid_points = color_sampler.output_cubemap_values(
-            self.luminance, self.saturation, ColorSpaceType.DISP, metameric_axis=metameric_axis)
-        if color_space.dim == 4:
-            grid_points = grid_points[4]
-        elif color_space.dim == 3:
-            grid_points = grid_points[0]
-
-        max_diff = 0.0
-        max_diff_idx = 0
-        for retry in range(10):
-            if self.debug_middle:
-                random_idx = len(grid_points) // 2
-                point = grid_points[random_idx]
-            else:
-                random_idx = np.random.randint(0, len(grid_points))
-                point = grid_points[random_idx]
-            inside_cone, outside_cone, diff = color_space.get_maximal_pair_in_disp_from_pt(
-                point, metameric_axis=metameric_axis, proportion=proportion)
-            if proportion == 0.0 or diff > 0.02 * proportion + 1e-6:
-                return inside_cone, outside_cone, color_space, proportion
-            else:
-                max_diff = max(max_diff, diff)
-                max_diff_idx = random_idx
-        print(
-            f"Could not find valid metamer after 10 retries for genotype {genotype} "
-            f"axis={metameric_axis} proportion={proportion:.2f}, returning best found.")
-        point = grid_points[max_diff_idx]
-        inside_cone, outside_cone, _ = color_space.get_maximal_pair_in_disp_from_pt(
-            point, metameric_axis=metameric_axis, proportion=proportion)
-        return inside_cone, outside_cone, color_space, proportion
 
 
 class CircleGridGenerator:

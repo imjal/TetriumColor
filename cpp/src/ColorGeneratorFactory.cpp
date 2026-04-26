@@ -4,122 +4,6 @@
 namespace TetriumColor
 {
 
-PyObject* ColorGeneratorFactory::CreateGeneticColorGenerator(
-    const std::string& sex,
-    float percentage_screened,
-    float peak_to_test,
-    float luminance,
-    float saturation,
-    const std::vector<int>& dimensions,
-    int seed,
-    int trials_per_direction,
-    const std::vector<int>& metameric_axes,
-    const std::string& display_primaries_path,
-    float degree,
-    int mcs_k,
-    bool debug_middle
-)
-{
-    // Load primaries from CSV first
-    PyObject* pMeasurementModule = PyImport_ImportModule("TetriumColor.Measurement");
-    if (!pMeasurementModule) {
-        PyErr_Print();
-        throw std::runtime_error("Failed to import TetriumColor.Measurement module");
-    }
-
-    PyObject* pLoadPrimariesFunc
-        = PyObject_GetAttrString(pMeasurementModule, "load_primaries_from_csv");
-    Py_DECREF(pMeasurementModule);
-
-    if (!pLoadPrimariesFunc) {
-        PyErr_Print();
-        throw std::runtime_error("Failed to get load_primaries_from_csv function");
-    }
-
-    PyObject* pPrimaries
-        = PyObject_CallFunction(pLoadPrimariesFunc, "s", display_primaries_path.c_str());
-    Py_DECREF(pLoadPrimariesFunc);
-
-    if (!pPrimaries) {
-        PyErr_Print();
-        throw std::runtime_error("Failed to load primaries from CSV: " + display_primaries_path);
-    }
-
-    // Import the ColorGenerator module
-    PyObject* pModule = PyImport_ImportModule("TetriumColor.TetraColorPicker");
-    if (!pModule) {
-        Py_DECREF(pPrimaries);
-        PyErr_Print();
-        throw std::runtime_error("Failed to import TetraColorPicker module");
-    }
-
-    // Get the GeneticColorGenerator class
-    PyObject* pClass = PyObject_GetAttrString(pModule, "GeneticColorGenerator");
-    Py_DECREF(pModule);
-
-    if (!pClass) {
-        Py_DECREF(pPrimaries);
-        PyErr_Print();
-        throw std::runtime_error("Failed to get GeneticColorGenerator class");
-    }
-
-    // Build dimensions list
-    PyObject* pDimensions = PyList_New(dimensions.size());
-    for (size_t i = 0; i < dimensions.size(); i++) {
-        PyList_SetItem(pDimensions, i, PyLong_FromLong(dimensions[i]));
-    }
-
-    // Build metameric_axes list
-    // If empty, Python will default to [1, 2, 3]
-    // Otherwise, pass the list of specific axes to test
-    PyObject* pMetamericAxes = nullptr;
-    if (metameric_axes.empty()) {
-        // Don't pass metameric_axes if empty - let Python use default [1, 2, 3]
-        pMetamericAxes = nullptr;
-    } else {
-        pMetamericAxes = PyList_New(metameric_axes.size());
-        for (size_t i = 0; i < metameric_axes.size(); i++) {
-            PyList_SetItem(pMetamericAxes, i, PyLong_FromLong(metameric_axes[i]));
-        }
-    }
-
-    // Create instance with keyword arguments
-    // Note: display_primaries is passed as List[Spectra] via **kwargs
-    PyObject* pKwargs = PyDict_New();
-    PyDict_SetItemString(pKwargs, "display_primaries", pPrimaries); // Steals reference
-    PyDict_SetItemString(pKwargs, "trials_per_direction", PyLong_FromLong(trials_per_direction));
-    PyDict_SetItemString(pKwargs, "degree", PyFloat_FromDouble(degree));
-    PyDict_SetItemString(pKwargs, "mcs_k", PyLong_FromLong(mcs_k));
-    PyDict_SetItemString(pKwargs, "debug_middle", debug_middle ? Py_True : Py_False);
-    if (pMetamericAxes) {
-        PyDict_SetItemString(pKwargs, "metameric_axes", pMetamericAxes); // Steals reference
-    }
-
-    PyObject* pArgs = PyTuple_New(7);
-    PyTuple_SetItem(pArgs, 0, PyUnicode_FromString(sex.c_str()));
-    PyTuple_SetItem(pArgs, 1, PyFloat_FromDouble(percentage_screened));
-    PyTuple_SetItem(pArgs, 2, PyFloat_FromDouble(peak_to_test));
-    PyTuple_SetItem(pArgs, 3, PyFloat_FromDouble(luminance));
-    PyTuple_SetItem(pArgs, 4, PyFloat_FromDouble(saturation));
-    PyTuple_SetItem(pArgs, 5, pDimensions);           // Steals reference
-    PyTuple_SetItem(pArgs, 6, PyLong_FromLong(seed)); // Steals reference
-
-    PyObject* pColorGenerator = PyObject_Call(pClass, pArgs, pKwargs);
-
-    Py_DECREF(pArgs);
-    Py_DECREF(pKwargs);
-    // Note: pDimensions reference was stolen by PyTuple_SetItem, don't DECREF it
-    // Note: pPrimaries reference was stolen by PyDict_SetItemString, don't DECREF it
-    Py_DECREF(pClass);
-
-    if (!pColorGenerator) {
-        PyErr_Print();
-        throw std::runtime_error("Failed to create GeneticColorGenerator instance");
-    }
-
-    return pColorGenerator;
-}
-
 PyObject* ColorGeneratorFactory::CreateQuestColorGenerator(
     const std::string& sex,
     float percentage_screened,
@@ -129,7 +13,8 @@ PyObject* ColorGeneratorFactory::CreateQuestColorGenerator(
     const std::vector<int>& dimensions,
     const std::string& display_primaries_path,
     bool bipolar,
-    float degree
+    float degree,
+    int mcs_k
 )
 {
     // Load primaries from CSV first
@@ -205,6 +90,7 @@ PyObject* ColorGeneratorFactory::CreateQuestColorGenerator(
     PyDict_SetItemString(pKwargs, "display_primaries", pPrimaries);  // Steals reference
     PyDict_SetItemString(pKwargs, "bipolar", bipolar ? Py_True : Py_False);
     PyDict_SetItemString(pKwargs, "degree", PyFloat_FromDouble(degree));
+    PyDict_SetItemString(pKwargs, "mcs_k", PyLong_FromLong(mcs_k));
 
     PyObject* pArgs = PyTuple_New(2);
     PyTuple_SetItem(pArgs, 0, PyUnicode_FromString(sex.c_str()));
@@ -406,6 +292,71 @@ PyObject* ColorGeneratorFactory::CreateGaussianBlobGenerator(
     }
 
     return pTestGenerator;
+}
+
+std::vector<float> ColorGeneratorFactory::GetObserverCDF(const std::string& sex, int dimension)
+{
+    PyObject* pModule = PyImport_ImportModule("TetriumColor.Observer.ObserverGenotypes");
+    if (!pModule) {
+        PyErr_Print();
+        throw std::runtime_error("Failed to import TetriumColor.Observer.ObserverGenotypes");
+    }
+
+    PyObject* pClass = PyObject_GetAttrString(pModule, "ObserverGenotypes");
+    Py_DECREF(pModule);
+    if (!pClass) {
+        PyErr_Print();
+        throw std::runtime_error("Failed to get ObserverGenotypes class");
+    }
+
+    PyObject* pDimensions = PyList_New(1);
+    PyList_SetItem(pDimensions, 0, PyLong_FromLong(dimension));
+
+    PyObject* pKwargs = PyDict_New();
+    PyDict_SetItemString(pKwargs, "dimensions", pDimensions);
+
+    PyObject* pArgs = PyTuple_New(0);
+    PyObject* pOG = PyObject_Call(pClass, pArgs, pKwargs);
+    Py_DECREF(pArgs);
+    Py_DECREF(pKwargs);
+    Py_DECREF(pClass);
+
+    if (!pOG) {
+        PyErr_Print();
+        throw std::runtime_error("Failed to create ObserverGenotypes instance");
+    }
+
+    PyObject* pCDF = PyObject_CallMethod(pOG, "get_cdf", "s", sex.c_str());
+    Py_DECREF(pOG);
+    if (!pCDF) {
+        PyErr_Print();
+        throw std::runtime_error("Failed to call get_cdf");
+    }
+
+    PyObject* pValues = PyObject_CallMethod(pCDF, "values", nullptr);
+    Py_DECREF(pCDF);
+    if (!pValues) {
+        PyErr_Print();
+        throw std::runtime_error("Failed to get CDF values");
+    }
+
+    PyObject* pList = PySequence_List(pValues);
+    Py_DECREF(pValues);
+    if (!pList) {
+        PyErr_Print();
+        throw std::runtime_error("Failed to convert CDF values to list");
+    }
+
+    std::vector<float> result;
+    Py_ssize_t n = PyList_Size(pList);
+    result.reserve(n);
+    for (Py_ssize_t i = 0; i < n; i++) {
+        PyObject* pVal = PyList_GetItem(pList, i); // borrowed reference
+        result.push_back(static_cast<float>(PyFloat_AsDouble(pVal)));
+    }
+    Py_DECREF(pList);
+
+    return result;
 }
 
 } // namespace TetriumColor
