@@ -410,7 +410,7 @@ def RenderPointCloud(name: str, points: npt.NDArray, rgb: npt.NDArray | None = N
         rgb (npt.NDArray | None, optional): N x 3 array of RGB colors. Defaults to None.
         radius (float, optional): Radius of the points. Defaults to 0.01.
     """
-    pcl = ps.register_point_cloud(name, points, radius=0.01, point_render_mode=mode)
+    pcl = ps.register_point_cloud(name, points, radius=radius, point_render_mode=mode)
     if rgb is not None:
         pcl.add_color_quantity(f"{name}_colors", rgb, enabled=True)
 
