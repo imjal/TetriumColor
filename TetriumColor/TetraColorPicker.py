@@ -727,6 +727,733 @@ class CircleGridGenerator:
         return self.genotypes
 
 
+class GaussianObserverSimulator:
+    """Simulated psychophysical observer for a trichromat tested on a 4D display.
+
+    The observer has a null DIRECTION (null_theta, null_phi): any chromatic stimulus
+    along this direction is completely invisible to them, regardless of amplitude.
+    Detection is driven by the component of the stimulus PERPENDICULAR to the null
+    direction.
+
+    Psychometric function
+    --------------------
+    signal(θ, φ, r) = r · sin(angle between d(θ,φ) and d_null)
+
+    P(θ, φ, r) = p_chance + (1 - p_chance) · (1 - exp(-signal² / (2·sigma²)))
+
+    Properties
+    ----------
+    * P → p_chance as r → 0 for every direction ✓
+    * P → p_chance along the null direction (sin = 0) for every r ✓
+    * Threshold surface r*(θ,φ) = sigma·sqrt(2·ln 3) / sin(angle) — very peaked
+      at (null_theta, null_phi) on the sphere.
+
+    Parameters
+    ----------
+    null_theta, null_phi : float
+        Spherical angles of the null direction in the 3D chromatic subspace.
+    sigma : float
+        Detection sensitivity width in chromatic amplitude units.
+        Threshold at 90° from null = sigma·sqrt(2·ln 3) ≈ 1.48·sigma.
+    p_chance : float
+        Chance-level detection probability (0.25 for 4AFC).
+    """
+
+    def __init__(self, null_theta: float = 0.0, null_phi: float = 0.0,
+                 null_r: float = None,   # unused, kept for API compatibility
+                 sigma: float = 0.05, p_chance: float = 0.25, seed: int = 42,
+                 null_direction: Optional[npt.NDArray] = None):
+        if null_direction is None:
+            self.d_null = np.array([
+                np.sin(null_theta) * np.cos(null_phi),
+                np.sin(null_theta) * np.sin(null_phi),
+                np.cos(null_theta),
+            ])
+        else:
+            self.d_null = np.asarray(null_direction, dtype=float)
+            self.d_null = self.d_null / (np.linalg.norm(self.d_null) + 1e-12)
+        self.sigma = sigma
+        self.p_chance = p_chance
+        self.rng = np.random.default_rng(seed)
+
+    def p_detect(self, theta: float, phi: float, r: float) -> float:
+        d_test = np.array([
+            np.sin(theta) * np.cos(phi),
+            np.sin(theta) * np.sin(phi),
+            np.cos(theta),
+        ])
+        cos_angle = float(np.clip(np.dot(d_test, self.d_null), -1.0, 1.0))
+        sin_angle = float(np.sqrt(max(1.0 - cos_angle ** 2, 0.0)))
+        signal = r * sin_angle
+        return self.p_chance + (1 - self.p_chance) * (1 - np.exp(-signal ** 2 / (2 * self.sigma ** 2)))
+
+    def p_detect_direction(self, direction: npt.NDArray, r: float) -> float:
+        d_test = np.asarray(direction, dtype=float)
+        d_test = d_test / (np.linalg.norm(d_test) + 1e-12)
+        cos_angle = float(np.clip(np.dot(d_test, self.d_null), -1.0, 1.0))
+        sin_angle = float(np.sqrt(max(1.0 - cos_angle ** 2, 0.0)))
+        signal = r * sin_angle
+        return self.p_chance + (1 - self.p_chance) * (1 - np.exp(-signal ** 2 / (2 * self.sigma ** 2)))
+
+    def simulate_response(self, theta: float, phi: float, r: float) -> int:
+        p = self.p_detect(theta, phi, r)
+        return int(self.rng.binomial(1, p))
+
+    def simulate_direction_response(self, direction: npt.NDArray, r: float) -> int:
+        p = self.p_detect_direction(direction, r)
+        return int(self.rng.binomial(1, p))
+
+
+class AEPsychThresholdContourGenerator(ColorGenerator):
+    """Adaptive threshold contour estimator using AEPsych's GP classifier.
+
+    Models f(a, b, r) -> P(detect) over the same 2D PCA patch used by
+    scripts/simulation/null_direction_viewer.py.  The patch lives in observer-0's
+    chromatic slice.  AEPsych samples square coordinates `(a, b) in [-1, 1]^2`;
+    those are mapped into the elliptical patch before making stimuli.  Each
+    sampled display direction is
+
+        d(u, v) = normalize(pca_mean_null + u * pca_e1 + v * pca_e2)
+
+    and the display point is
+
+        w = w0 + chrom_basis @ (r * d(u, v)).
+
+    `u` and `v` are tangent-plane coordinates inside the PCA ellipse.  `r` is
+    the amplitude along that observer-0 slice direction.
+    """
+
+    def __init__(
+        self,
+        center_genotype: Optional[Tuple] = None,
+        peak_to_test: float = 547,
+        n_trials: int = 300,
+        sex: str = 'both',
+        luminance: float = 0.5,
+        seed: int = 42,
+        n_cmf_samples: int = 200,
+        threshold_level: float = 0.75,
+        n_sobol: int = 20,
+        dimensions: Optional[List[int]] = None,
+        patch_sigma_scale: float = 5.0,
+        min_patch_major: float = 0.15,
+        min_patch_minor: float = 0.06,
+        max_radius: Optional[float] = 0.65,
+        **kwargs,
+    ):
+        import torch
+        from aepsych import GPClassificationModel, Strategy, SequentialStrategy
+        from aepsych.generators import OptimizeAcqfGenerator, SobolGenerator
+        from aepsych.acquisition import MCLevelSetEstimation
+
+        self.n_trials = n_trials
+        self.threshold_level = threshold_level
+        self.trial_count = 0
+        self.luminance = luminance
+        self._last_x = None
+        self.last_theta = None
+        self.last_phi = None
+        self.last_u = None
+        self.last_v = None
+        self.last_a = None
+        self.last_b = None
+        self.last_direction = None
+        self.last_disp = None
+        self.stimulus_disp_log = []
+        self.last_r = None
+        self._peak_to_test = peak_to_test
+        self.patch_sigma_scale = patch_sigma_scale
+        self.requested_max_radius = max_radius
+
+        dims = dimensions if dimensions is not None else [3]
+        self._og_wavelengths = np.arange(380, 781, 5)
+        self.observer_genotypes = ObserverGenotypes(
+            wavelengths=self._og_wavelengths,
+            dimensions=dims,
+            seed=seed,
+        )
+        if center_genotype is None:
+            center_genotype = self.observer_genotypes.get_genotypes_covering_probability(
+                target_probability=0.999,
+                sex=sex,
+            )[0]
+
+        display_primaries = kwargs.get('display_primaries', None)
+        center_genotype_full = tuple(sorted(tuple(center_genotype) + (peak_to_test,)))
+        center_obs = self._create_observer_for_peaks(center_genotype_full)
+        self.center_cs = ColorSpace(center_obs, display_primaries=display_primaries)
+
+        q_axis = self._find_axis_for_peak(self.center_cs.observer, peak_to_test)
+        self.q_axis = q_axis
+        self.chrom_basis = self._build_chromatic_basis(self.center_cs, q_axis)
+
+        # Match scripts/simulation/null_direction_viewer.py: the adapting point
+        # is the physical display midgray, not ColorSpace.get_background().
+        self.w0 = np.full(self.chrom_basis.shape[0], float(luminance))
+
+        self._compute_patch_from_cmf_samples(
+            dims, sex, seed, n_cmf_samples, display_primaries,
+            patch_sigma_scale, min_patch_major, min_patch_minor,
+        )
+        r_min, r_max = self._compute_r_bounds_from_gamut()
+        if max_radius is not None:
+            r_max = min(float(max_radius), r_max)
+        self.actual_max_radius = r_max
+
+        self._lb_np = np.array([-1.0, -1.0, r_min])
+        self._ub_np = np.array([1.0, 1.0, r_max])
+        self.patch_bounds = np.array([
+            [-self.patch_angle_major, self.patch_angle_major],
+            [-self.patch_angle_minor, self.patch_angle_minor],
+        ])
+
+        lb = torch.tensor(self._lb_np, dtype=torch.float64)
+        ub = torch.tensor(self._ub_np, dtype=torch.float64)
+
+        sobol_gen = SobolGenerator(lb=lb, ub=ub, seed=seed)
+        model = GPClassificationModel(dim=3)
+        opt_gen = OptimizeAcqfGenerator(
+            lb=lb, ub=ub,
+            acqf=MCLevelSetEstimation,
+            acqf_kwargs={'target': threshold_level},
+        )
+        n_adaptive = max(1, n_trials - n_sobol)
+        s1 = Strategy(generator=sobol_gen, lb=lb, ub=ub,
+                      outcome_types=['binary'], min_asks=n_sobol)
+        s2 = Strategy(generator=opt_gen, lb=lb, ub=ub,
+                      outcome_types=['binary'], model=model,
+                      min_asks=n_adaptive)
+        self.strategy = SequentialStrategy([s1, s2])
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _find_axis_for_peak(observer: Observer, peak: float) -> int:
+        for axis_idx, cone in enumerate(observer.sensors):
+            if abs(cone.peak - peak) < 1.0:
+                return axis_idx
+        return 2
+
+    @staticmethod
+    def _build_chromatic_basis(cst: ColorSpace, q_axis: int) -> npt.NDArray:
+        cone_to_disp = cst._get_cone_to_disp()
+        disp_to_cone = np.linalg.inv(cone_to_disp)
+        lum_cone = np.ones(cst.dim)
+        lum_cone[q_axis] = 0.0
+        lum_cone /= np.linalg.norm(lum_cone)
+        lum_disp = disp_to_cone.T @ lum_cone
+        _, _, Vt = np.linalg.svd(lum_disp.reshape(1, -1), full_matrices=True)
+        return Vt[1:, :].T
+
+    def _create_observer_for_peaks(self, peaks_with_q, params=None):
+        """Create observers the same way null_direction_viewer.py does."""
+        from TetriumColor.Observer.Observer import Cone, Observer as _Observer
+
+        if params is None:
+            params = {
+                'od_lm': 0.5,
+                'od_s': 0.4,
+                'macular': 1.0,
+                'lens': 1.0,
+            }
+
+        peaks = tuple(sorted(peaks_with_q))
+        if 420 not in peaks:
+            peaks = tuple(sorted((420,) + peaks))
+
+        cones = []
+        for peak in peaks:
+            od = params['od_s'] if peak == 420 else params['od_lm']
+            cone = Cone.templates['neitz'](
+                self._og_wavelengths, peak
+            ).with_preceptoral(
+                od=od,
+                macular=params['macular'],
+                lens=params['lens'],
+            )
+            cone.peak = int(peak)
+            cones.append(cone)
+
+        return _Observer(cones, illuminant=None)
+
+    def _observer_from_sample_params(self, genotype_3d, params, sampler):
+        from TetriumColor.Observer.Observer import Cone, Observer as _Observer
+
+        peaks_4d = tuple(sorted(set(genotype_3d) | {self._peak_to_test}))
+        s_peak = 420
+        if s_peak not in peaks_4d:
+            peaks_4d = (s_peak,) + peaks_4d
+        peaks_4d = tuple(sorted(peaks_4d))
+
+        cones = []
+        for peak in peaks_4d:
+            od = float(params['od_s']) if peak == s_peak else float(params['od_lm'])
+            cone = Cone.templates[sampler.template](sampler.wavelengths, peak).with_preceptoral(
+                od=od,
+                macular=float(params['macular']),
+                lens=float(params['lens']),
+            )
+            cone.peak = int(peak)
+            cones.append(cone)
+        return _Observer(cones, illuminant=None)
+
+    def _compute_patch_from_cmf_samples(
+        self, dims, sex, seed, n_cmf_samples, display_primaries,
+        patch_sigma_scale, min_patch_major, min_patch_minor,
+    ) -> None:
+        """Compute observer-0-slice PCA patch from projected CMF null directions."""
+        from TetriumColor.Observer.CMFSampler import CMFSampler
+        from TetriumColor import ColorSpace as _ColorSpace
+
+        sampler = CMFSampler(
+            self.observer_genotypes,
+            wavelengths=self._og_wavelengths,
+            seed=seed,
+            top_n_genotypes=10,
+        )
+        try:
+            samples_3d = sampler.sample(n_samples=n_cmf_samples, sex=sex)
+        except Exception:
+            samples_3d = []
+
+        projected_dirs = []
+        for _, params in samples_3d:
+            try:
+                observer_4d = self._observer_from_sample_params(
+                    params['genotype'], params, sampler)
+                obs_cs = _ColorSpace(
+                    observer_4d,
+                    display_primaries=display_primaries,
+                    metameric_axis=2,
+                )
+                q_axis = self._find_axis_for_peak(obs_cs.observer, self._peak_to_test)
+                meta_dir = obs_cs.get_metameric_axis_in(
+                    ColorSpaceType.DISP, metameric_axis_num=q_axis)
+                norm = np.linalg.norm(meta_dir)
+                if norm < 1e-10:
+                    continue
+                meta_dir = meta_dir / norm
+                alpha = self.chrom_basis.T @ meta_dir  # (3,) chromatic projection
+                alpha_norm = float(np.linalg.norm(alpha))
+                if alpha_norm < 1e-10:
+                    continue
+                projected_dirs.append(alpha / alpha_norm)
+            except Exception:
+                continue
+
+        if len(projected_dirs) < 5:
+            center_dir = self._center_null_direction()
+            self.pca_mean_null = center_dir
+            self.pca_e1, self.pca_e2 = self._orthonormal_tangent_basis(center_dir)
+            self.patch_angle_major = min_patch_major
+            self.patch_angle_minor = min_patch_minor
+            return
+
+        dirs = np.array(projected_dirs)
+        mean_dir = dirs.mean(axis=0)
+        mean_dir /= np.linalg.norm(mean_dir)
+        tangent = dirs - (dirs @ mean_dir)[:, None] * mean_dir
+
+        _, _, Vt = np.linalg.svd(tangent, full_matrices=False)
+        e1 = Vt[0]
+        e2 = Vt[1]
+
+        spread_e1 = float(np.std(tangent @ e1) * patch_sigma_scale)
+        spread_e2 = float(np.std(tangent @ e2) * patch_sigma_scale)
+
+        self.pca_mean_null = mean_dir
+        self.pca_e1 = e1 / np.linalg.norm(e1)
+        self.pca_e2 = e2 / np.linalg.norm(e2)
+        self.patch_angle_major = max(spread_e1, min_patch_major)
+        self.patch_angle_minor = max(spread_e2, min_patch_minor)
+
+    def _center_null_direction(self) -> npt.NDArray:
+        meta_dir = self.center_cs.get_metameric_axis_in(
+            ColorSpaceType.DISP, metameric_axis_num=self.q_axis)
+        meta_dir = meta_dir / (np.linalg.norm(meta_dir) + 1e-12)
+        alpha = self.chrom_basis.T @ meta_dir
+        return alpha / (np.linalg.norm(alpha) + 1e-12)
+
+    @staticmethod
+    def _orthonormal_tangent_basis(mean_dir: npt.NDArray) -> Tuple[npt.NDArray, npt.NDArray]:
+        candidate = np.array([1.0, 0.0, 0.0])
+        if abs(np.dot(candidate, mean_dir)) > 0.9:
+            candidate = np.array([0.0, 1.0, 0.0])
+        e1 = candidate - np.dot(candidate, mean_dir) * mean_dir
+        e1 /= np.linalg.norm(e1)
+        e2 = np.cross(mean_dir, e1)
+        e2 /= np.linalg.norm(e2)
+        return e1, e2
+
+    def _compute_r_bounds_from_gamut(self) -> Tuple[float, float]:
+        """r bounds from gamut extents across the PCA patch."""
+        vals = np.linspace(-1.0, 1.0, 21)
+        r_max_values = []
+        for a in vals:
+            for b in vals:
+                u, v = self.patch_coords_from_model(a, b)
+                d = self.direction_from_patch(u, v)
+                r_max_values.append(self._compute_r_max(self.chrom_basis @ d))
+        r_max = float(np.min(r_max_values)) if r_max_values else 0.01
+        return 0.001, float(min(max(r_max, 0.01), 1.5))
+
+    def _compute_r_max(self, dir_4d: npt.NDArray) -> float:
+        """Max r such that w0 + dir_4d * r remains in [0, 1]^4."""
+        r_max = np.inf
+        for i in range(4):
+            if dir_4d[i] > 1e-12:
+                r_max = min(r_max, (1.0 - self.w0[i]) / dir_4d[i])
+            elif dir_4d[i] < -1e-12:
+                r_max = min(r_max, (0.0 - self.w0[i]) / dir_4d[i])
+        return float(r_max) if r_max < 1e9 else 1.0
+
+    def _in_patch(self, u: float, v: float) -> bool:
+        a = max(self.patch_angle_major, 1e-8)
+        b = max(self.patch_angle_minor, 1e-8)
+        return (u / a) ** 2 + (v / b) ** 2 <= 1.0
+
+    @staticmethod
+    def _square_to_disk(a: float, b: float) -> Tuple[float, float]:
+        """Concentric square-to-disk map, avoiding rejected AEPsych asks."""
+        if abs(a) < 1e-12 and abs(b) < 1e-12:
+            return 0.0, 0.0
+        if abs(a) > abs(b):
+            r = a
+            theta = (np.pi / 4.0) * (b / a)
+        else:
+            r = b
+            theta = (np.pi / 2.0) - (np.pi / 4.0) * (a / b)
+        return float(r * np.cos(theta)), float(r * np.sin(theta))
+
+    def patch_coords_from_model(self, a: float, b: float) -> Tuple[float, float]:
+        disk_x, disk_y = self._square_to_disk(
+            float(np.clip(a, -1.0, 1.0)),
+            float(np.clip(b, -1.0, 1.0)),
+        )
+        return self.patch_angle_major * disk_x, self.patch_angle_minor * disk_y
+
+    def direction_from_patch(self, u: float, v: float) -> npt.NDArray:
+        d = self.pca_mean_null + u * self.pca_e1 + v * self.pca_e2
+        return d / (np.linalg.norm(d) + 1e-12)
+
+    def _disp_from_patch(self, u: float, v: float, r: float) -> npt.NDArray:
+        d3 = self.direction_from_patch(u, v)
+        return self.w0 + self.chrom_basis @ (d3 * r)
+
+    def _in_gamut(self, w: npt.NDArray) -> bool:
+        return bool(np.all(w >= 0) and np.all(w <= 1))
+
+    def _posterior_detect_prob(self, a: float, b: float, r: float) -> float:
+        import torch
+        x_q = torch.tensor([[a, b, r]], dtype=torch.float32)
+        mean, _ = self.strategy.model.predict(x_q, probability_space=True)
+        return float(mean.item())
+
+    def _estimate_threshold_radius(
+        self, a: float, b: float, r_hi: float
+    ) -> Tuple[float, bool, bool, float, float, float]:
+        """Estimate threshold radius and report whether a crossing exists.
+
+        Returns
+        -------
+        r_star
+            Estimated radius, or the nearest sampled bound when no crossing
+            exists inside [r_lo, r_hi].
+        threshold_found
+            True when posterior P(detect) crosses threshold_level.
+        lower_saturated
+            True when even the lower radius is already above threshold.
+        p_lo, p_hi, p_star
+            Posterior detection probabilities at the relevant radii.
+        """
+        r_lo = float(self._lb_np[2])
+        r_hi = float(r_hi)
+        p_lo = self._posterior_detect_prob(a, b, r_lo)
+        p_hi = self._posterior_detect_prob(a, b, r_hi)
+
+        if p_lo >= self.threshold_level:
+            return r_lo, False, True, p_lo, p_hi, p_lo
+        if p_hi < self.threshold_level:
+            return r_hi, False, False, p_lo, p_hi, p_hi
+
+        lo, hi = r_lo, r_hi
+        p_star = p_hi
+        for _ in range(25):
+            mid = (lo + hi) / 2.0
+            p_mid = self._posterior_detect_prob(a, b, mid)
+            if p_mid < self.threshold_level:
+                lo = mid
+            else:
+                hi = mid
+                p_star = p_mid
+        return (lo + hi) / 2.0, True, False, p_lo, p_hi, p_star
+
+    # ------------------------------------------------------------------
+    # ColorGenerator interface
+    # ------------------------------------------------------------------
+
+    def get_num_samples(self) -> int:
+        return self.n_trials
+
+    def NewColor(self) -> Tuple[npt.NDArray, npt.NDArray, ColorSpace, float]:
+        x = self.strategy.gen()
+        a, b, r = float(x[0, 0]), float(x[0, 1]), float(x[0, 2])
+        u, v = self.patch_coords_from_model(a, b)
+        w = self._disp_from_patch(u, v, r)
+        if not np.all(np.isfinite(w)) or not self._in_gamut(w):
+            raise RuntimeError(
+                f"AEPsych generated non-displayable DISP stimulus: "
+                f"model=({a:.4f}, {b:.4f}, {r:.4f}), "
+                f"patch=({u:.4f}, {v:.4f}), disp={w}"
+            )
+        self._last_x = x
+        self.last_a = a
+        self.last_b = b
+        self.last_u = u
+        self.last_v = v
+        self.last_direction = self.direction_from_patch(u, v)
+        self.last_theta = float(np.arccos(np.clip(self.last_direction[2], -1.0, 1.0)))
+        self.last_phi = float(np.arctan2(self.last_direction[1], self.last_direction[0]))
+        self.last_r = r
+        self.last_disp = w.copy()
+        self.stimulus_disp_log.append(w.copy())
+        bg_cone = self.center_cs.convert(
+            self.w0.reshape(1, -1), ColorSpaceType.DISP, ColorSpaceType.CONE)[0]
+        test_cone = self.center_cs.convert(
+            w.reshape(1, -1), ColorSpaceType.DISP, ColorSpaceType.CONE)[0]
+        return bg_cone, test_cone, self.center_cs, r
+
+    def GetColor(
+        self, previous_result: ColorTestResult
+    ) -> Optional[Tuple[npt.NDArray, npt.NDArray, ColorSpace, float]]:
+        import torch
+        if self.trial_count >= self.n_trials or self._last_x is None:
+            return None
+        response = 1.0 if previous_result == ColorTestResult.Success else 0.0
+        y = torch.tensor([response])
+        self.strategy.add_data(self._last_x, y)
+        self.trial_count += 1
+        if self.trial_count >= self.n_trials:
+            return None
+        return self.NewColor()
+
+    # ------------------------------------------------------------------
+    # Analysis
+    # ------------------------------------------------------------------
+
+    def get_threshold_surface(
+        self, n_theta: int = 30, n_phi: int = 60
+    ) -> Tuple[npt.NDArray, npt.NDArray, npt.NDArray, npt.NDArray]:
+        """Extract threshold surface r*(u, v) from GP posterior.
+
+        Returns
+        -------
+        xs, ys, zs : (N,) arrays of Cartesian chromatic coordinates
+        gamut_clipped : (N,) bool array — True where r* exceeded the gamut extent
+        """
+        if self.strategy.model is None:
+            raise RuntimeError("GP model not fitted yet; run trials first.")
+
+        model_as = np.linspace(self._lb_np[0], self._ub_np[0], n_theta)
+        model_bs = np.linspace(self._lb_np[1], self._ub_np[1], n_phi)
+
+        xs, ys, zs, gamut_clipped, r_stars = [], [], [], [], []
+        r_lo_bound, r_hi_bound = self._lb_np[2], self._ub_np[2]
+
+        for a in model_as:
+            for b in model_bs:
+                u, v = self.patch_coords_from_model(a, b)
+                d3 = self.direction_from_patch(u, v)
+                dir_4d = self.chrom_basis @ d3
+                r_max_gamut = self._compute_r_max(dir_4d)
+
+                r_hi = min(r_hi_bound, r_max_gamut)
+                r_star, found, lower_sat, _, _, _ = self._estimate_threshold_radius(
+                    a, b, r_hi)
+
+                is_clipped = (
+                    (not found and not lower_sat) or
+                    r_star >= r_max_gamut * 0.97
+                )
+                gamut_clipped.append(is_clipped)
+                r_stars.append(r_star)
+
+                xs.append(d3[0] * r_star)
+                ys.append(d3[1] * r_star)
+                zs.append(d3[2] * r_star)
+
+        return (np.array(xs), np.array(ys), np.array(zs),
+                np.array(gamut_clipped, dtype=bool))
+
+    def get_threshold_patch_data(
+        self, n_a: int = 31, n_b: int = 31
+    ) -> Dict[str, npt.NDArray]:
+        """Exportable threshold contour data in real display coordinates.
+
+        The returned `disp_points` are actual 4-primary display values.  The
+        other arrays preserve the parameterization:
+
+            model_ab -> patch_uv -> directions_3d -> r_star -> disp_points
+        """
+        if self.strategy.model is None:
+            raise RuntimeError("GP model not fitted yet; run trials first.")
+
+        model_as = np.linspace(self._lb_np[0], self._ub_np[0], n_a)
+        model_bs = np.linspace(self._lb_np[1], self._ub_np[1], n_b)
+
+        model_ab = []
+        patch_uv = []
+        directions_3d = []
+        r_stars = []
+        r_max_gamut = []
+        gamut_clipped = []
+        threshold_found = []
+        lower_saturated = []
+        posterior_p_lo = []
+        posterior_p_hi = []
+        posterior_p_star = []
+        disp_points = []
+
+        r_lo_bound, r_hi_bound = self._lb_np[2], self._ub_np[2]
+
+        for a in model_as:
+            for b in model_bs:
+                u, v = self.patch_coords_from_model(a, b)
+                d3 = self.direction_from_patch(u, v)
+                dir_4d = self.chrom_basis @ d3
+                r_max = self._compute_r_max(dir_4d)
+
+                r_hi = min(r_hi_bound, r_max)
+                r_star, found, lower_sat, p_lo, p_hi, p_star = (
+                    self._estimate_threshold_radius(a, b, r_hi))
+                clipped = (not found and not lower_sat) or r_star >= r_max * 0.97
+                disp = self.w0 + dir_4d * r_star
+
+                model_ab.append([a, b])
+                patch_uv.append([u, v])
+                directions_3d.append(d3)
+                r_stars.append(r_star)
+                r_max_gamut.append(r_max)
+                gamut_clipped.append(clipped)
+                threshold_found.append(found)
+                lower_saturated.append(lower_sat)
+                posterior_p_lo.append(p_lo)
+                posterior_p_hi.append(p_hi)
+                posterior_p_star.append(p_star)
+                disp_points.append(disp)
+
+        return {
+            "format_version": np.array([1], dtype=np.int32),
+            "model_ab": np.array(model_ab, dtype=float),
+            "patch_uv": np.array(patch_uv, dtype=float),
+            "directions_3d": np.array(directions_3d, dtype=float),
+            "r_star": np.array(r_stars, dtype=float),
+            "r_max_gamut": np.array(r_max_gamut, dtype=float),
+            "gamut_clipped": np.array(gamut_clipped, dtype=bool),
+            "threshold_found": np.array(threshold_found, dtype=bool),
+            "lower_saturated": np.array(lower_saturated, dtype=bool),
+            "posterior_p_lo": np.array(posterior_p_lo, dtype=float),
+            "posterior_p_hi": np.array(posterior_p_hi, dtype=float),
+            "posterior_p_star": np.array(posterior_p_star, dtype=float),
+            "disp_points": np.array(disp_points, dtype=float),
+            "w0": np.array(self.w0, dtype=float),
+            "chrom_basis": np.array(self.chrom_basis, dtype=float),
+            "pca_mean_null": np.array(self.pca_mean_null, dtype=float),
+            "pca_e1": np.array(self.pca_e1, dtype=float),
+            "pca_e2": np.array(self.pca_e2, dtype=float),
+            "patch_bounds": np.array(self.patch_bounds, dtype=float),
+            "model_bounds": np.stack([self._lb_np, self._ub_np], axis=0),
+            "requested_max_radius": np.array(
+                [-1.0 if self.requested_max_radius is None else self.requested_max_radius],
+                dtype=float,
+            ),
+            "actual_max_radius": np.array([self.actual_max_radius], dtype=float),
+            "threshold_level": np.array([self.threshold_level], dtype=float),
+            "grid_shape": np.array([n_a, n_b], dtype=np.int32),
+        }
+
+    def export_threshold_patch_npz(
+        self, filename: str, n_a: int = 31, n_b: int = 31
+    ) -> Dict[str, npt.NDArray]:
+        """Write threshold contour data loadable by null_direction_viewer.py."""
+        data = self.get_threshold_patch_data(n_a=n_a, n_b=n_b)
+        np.savez_compressed(filename, **data)
+        return data
+
+    def fit_threshold_ellipsoid(
+        self, n_theta: int = 30, n_phi: int = 60
+    ) -> Tuple:
+        """Fit a PCA ellipsoid to the valid (non-gamut-clipped) threshold surface points.
+
+        Returns
+        -------
+        center : (3,) Cartesian chromatic coordinates of ellipsoid center
+        axes   : (3, 3) eigenvectors as columns (principal axes)
+        semi_lengths : (3,) semi-axis lengths (sqrt of eigenvalues)
+        residuals    : (N,) Mahalanobis residuals from ellipsoid surface
+        """
+        xs, ys, zs, clipped = self.get_threshold_surface(n_theta, n_phi)
+        valid = ~clipped
+        if valid.sum() < 4:
+            return None, None, None, None
+
+        pts = np.stack([xs[valid], ys[valid], zs[valid]], axis=1)
+        center = pts.mean(axis=0)
+        cov = np.cov((pts - center).T)
+        eigenvalues, eigenvectors = np.linalg.eigh(cov)
+        semi_lengths = np.sqrt(np.maximum(eigenvalues, 0.0))
+
+        pts_c = pts - center
+        if np.all(semi_lengths > 1e-12):
+            pts_scaled = (pts_c @ eigenvectors) / semi_lengths
+            residuals = np.abs(np.linalg.norm(pts_scaled, axis=1) - 1.0)
+        else:
+            residuals = np.zeros(len(pts))
+
+        return center, eigenvectors, semi_lengths, residuals
+
+    def plot_threshold_contour(self, ax=None):
+        """3-D scatter of threshold surface coloured by r*, with fitted ellipsoid center."""
+        import matplotlib.pyplot as plt
+
+        if ax is None:
+            fig = plt.figure(figsize=(10, 8))
+            ax = fig.add_subplot(111, projection='3d')
+
+        xs, ys, zs, clipped = self.get_threshold_surface()
+        mag = np.sqrt(xs**2 + ys**2 + zs**2)
+        valid = ~clipped
+
+        sc = ax.scatter(xs[valid], ys[valid], zs[valid],
+                        c=mag[valid], cmap='viridis', s=20, alpha=0.8)
+        plt.colorbar(sc, ax=ax, label='r* (threshold amplitude)')
+
+        if clipped.any():
+            ax.scatter(xs[clipped], ys[clipped], zs[clipped],
+                       c='red', s=25, marker='x', alpha=0.5, label='gamut-clipped')
+
+        scale = float(np.max(mag[valid])) if valid.any() else 0.2
+        ax.quiver(0, 0, 0,
+                  self.pca_mean_null[0], self.pca_mean_null[1], self.pca_mean_null[2],
+                  length=scale, color='orange',
+                  linewidth=2, label='patch center null dir')
+
+        center, _, _, _ = self.fit_threshold_ellipsoid()
+        if center is not None:
+            ax.scatter(*center, c='yellow', s=150, marker='*', zorder=5,
+                       label='ellipsoid center (null pt est.)')
+
+        ax.set_xlabel('Chromatic e1')
+        ax.set_ylabel('Chromatic e2')
+        ax.set_zlabel('Chromatic e3')
+        ax.set_title('Threshold contour in chromatic subspace')
+        ax.legend(fontsize=8)
+        plt.tight_layout()
+        return ax
+
+
 if __name__ == "__main__":
     from TetriumColor.Measurement import load_primaries_from_csv
     import matplotlib.pyplot as plt

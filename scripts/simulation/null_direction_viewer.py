@@ -113,6 +113,34 @@ def sph_to_cart(theta, phi):
                      np.cos(theta)])
 
 
+def load_aepsych_contour_npz(path: str) -> dict:
+    """Load AEPsych contour output for rendering in this viewer.
+
+    Required field:
+      disp_points: (N, 4) real display-primary coordinates in [0, 1].
+
+    Optional fields such as model_ab, patch_uv, r_star, r_max_gamut, and
+    gamut_clipped are preserved for inspection and color/render decisions.
+    """
+    with np.load(path, allow_pickle=False) as data:
+        contour = {key: data[key] for key in data.files}
+
+    if "disp_points" not in contour:
+        raise ValueError(f"{path} is missing required field 'disp_points'")
+
+    disp_points = np.asarray(contour["disp_points"], dtype=float)
+    if disp_points.ndim != 2 or disp_points.shape[1] != 4:
+        raise ValueError(
+            f"{path} field 'disp_points' must have shape (N, 4); "
+            f"got {disp_points.shape}"
+        )
+
+    contour["disp_points"] = disp_points
+    contour["all_in_gamut"] = np.array(
+        [bool(np.all((disp_points >= 0) & (disp_points <= 1)))])
+    return contour
+
+
 # ---------------------------------------------------------------------------
 # Main viewer class
 # ---------------------------------------------------------------------------
@@ -123,9 +151,18 @@ class NullDirectionViewer:
     sigma_minor: float = 0.06   # ellipsoid semi-axis perpendicular to null direction
     patch_angle_major: float = 0.25  # PCA major-axis angular half-width (rad)
     patch_angle_minor: float = 0.10  # PCA minor-axis angular half-width (rad)
-    point_size: float = 0.015
+    point_size: float = 0.004
     font_size: float = 6.0           # billboard label font size
     labels_enabled: bool = False
+    display_code_levels: int = 255
+    resolution_grid_half_width: int = 2
+    ground_truth_sigma: float = 0.010
+    ground_truth_max_radius: float = 0.65
+    ground_truth_threshold: float = 0.75
+    ground_truth_p_chance: float = 0.25
+    ground_truth_null_u: float = 0.0
+    ground_truth_null_v: float = 0.0
+    ground_truth_grid_n: int = 31
 
     # Sphere sampling resolution
     N_THETA = 180
@@ -140,12 +177,21 @@ class NullDirectionViewer:
         [1.0, 0.6, 0.0], [0.6, 0.3, 1.0], [0.3, 0.8, 0.8],
         [0.8, 0.8, 0.3],
     ]
+    DISP_AXIS_COLORS = np.array([
+        [0.25, 0.55, 1.0],
+        [0.15, 1.0, 0.35],
+        [1.0, 0.85, 0.15],
+        [1.0, 0.25, 0.15],
+    ])
 
     def __init__(self, primaries_dir: str, num_observers: int = 10,
-                 display_basis=PolyscopeDisplayType.HERING_BGYR):
+                 display_basis=PolyscopeDisplayType.HERING_BGYR,
+                 aepsych_contour_path: str | None = None):
         self.num_observers = num_observers
         self.display_basis = display_basis
         self.window_open = True
+        self.aepsych_contour_path = aepsych_contour_path
+        self.aepsych_contour = None
 
         print(f"Loading primaries from {primaries_dir}…")
         self.primaries = load_primaries_from_csv(primaries_dir, extract_zero=False)
@@ -208,6 +254,17 @@ class NullDirectionViewer:
 
         # Compute PCA of null direction variation across the CMF population
         self._compute_pca_null_dirs()
+
+        if self.aepsych_contour_path:
+            self.aepsych_contour = load_aepsych_contour_npz(
+                self.aepsych_contour_path)
+            disp = self.aepsych_contour["disp_points"]
+            print("Loaded AEPsych contour:")
+            print(f"  path={self.aepsych_contour_path}")
+            print(f"  count={len(disp)}")
+            print(f"  min={np.array2string(disp.min(axis=0), precision=5)}")
+            print(f"  max={np.array2string(disp.max(axis=0), precision=5)}")
+            print(f"  all_in_gamut={bool(self.aepsych_contour['all_in_gamut'][0])}")
 
         # Polyscope init
         ps.init()
@@ -588,6 +645,261 @@ class NullDirectionViewer:
 
         return viz_pts, patch_faces
 
+    def _display_resolution_reference(self, idx=0, sign=+1):
+        """Local display-code lattice around a null endpoint.
+
+        Intersections in the rendered curve network are actual quantized display
+        codes.  The full 4-D 8-bit lattice is too dense to render globally, so
+        this shows a local neighborhood around observer `idx`'s selected null
+        endpoint.
+        """
+        ref_disp = self._null_gamut_disp(idx, sign)
+        levels = max(int(self.display_code_levels), 1)
+        step = 1.0 / levels
+        ref_code = np.clip(np.round(ref_disp * levels), 0, levels).astype(int)
+        ref_gamma_disp = ref_code / levels
+        half = max(int(self.resolution_grid_half_width), 1)
+
+        offsets = np.array(np.meshgrid(*([np.arange(-half, half + 1)] * 4),
+                                       indexing='ij')).reshape(4, -1).T
+        codes = ref_code[None, :] + offsets
+        valid = np.all((codes >= 0) & (codes <= levels), axis=1)
+        valid &= np.any((codes == 0) | (codes == levels), axis=1)
+        codes = codes[valid]
+        if len(codes) == 0:
+            codes = ref_code.reshape(1, -1)
+
+        # Deduplicate after boundary clipping/filtering while preserving lookup.
+        code_tuples = [tuple(row.tolist()) for row in codes]
+        code_to_idx = {code: i for i, code in enumerate(code_tuples)}
+        disp_pts = codes / levels
+        viz_pts = self._disp_to_ref_viz(disp_pts)
+
+        edges = []
+        edge_colors = []
+        for i, code in enumerate(code_tuples):
+            code_arr = np.array(code)
+            for axis in range(4):
+                neighbor = code_arr.copy()
+                neighbor[axis] += 1
+                neighbor_tuple = tuple(neighbor.tolist())
+                j = code_to_idx.get(neighbor_tuple)
+                if j is not None:
+                    edges.append([i, j])
+                    edge_colors.append(self.DISP_AXIS_COLORS[axis])
+
+        return {
+            "step": step,
+            "ref_disp": ref_disp,
+            "ref_gamma_disp": ref_gamma_disp,
+            "grid_viz": viz_pts,
+            "grid_edges": np.array(edges, dtype=np.int32),
+            "grid_edge_colors": np.array(edge_colors),
+        }
+
+    def _render_display_resolution_reference(self):
+        res = self._display_resolution_reference(0, +1)
+
+        if len(res["grid_edges"]) > 0:
+            ps_grid = ps.register_curve_network(
+                "display_resolution_grid_lines",
+                res["grid_viz"],
+                res["grid_edges"],
+                radius=0.000006,
+            )
+            ps_grid.add_color_quantity(
+                "display_resolution_grid_line_colors",
+                res["grid_edge_colors"],
+                defined_on='edges',
+                enabled=True,
+            )
+
+        print("  Display resolution reference:")
+        print(f"    step={res['step']:.6f}")
+        print(f"    null_disp={np.array2string(res['ref_disp'], precision=5)}")
+        print(f"    gamma_disp={np.array2string(res['ref_gamma_disp'], precision=5)}")
+
+    @staticmethod
+    def _square_to_disk(a: float, b: float):
+        if abs(a) < 1e-12 and abs(b) < 1e-12:
+            return 0.0, 0.0
+        if abs(a) > abs(b):
+            r = a
+            theta = (np.pi / 4.0) * (b / a)
+        else:
+            r = b
+            theta = (np.pi / 2.0) - (np.pi / 4.0) * (a / b)
+        return float(r * np.cos(theta)), float(r * np.sin(theta))
+
+    def _patch_coords_from_model(self, a: float, b: float):
+        disk_x, disk_y = self._square_to_disk(
+            float(np.clip(a, -1.0, 1.0)),
+            float(np.clip(b, -1.0, 1.0)),
+        )
+        return self.patch_angle_major * disk_x, self.patch_angle_minor * disk_y
+
+    def _direction_from_patch(self, u: float, v: float):
+        d = self.pca_mean_null + u * self.pca_e1 + v * self.pca_e2
+        return d / (np.linalg.norm(d) + 1e-12)
+
+    def _ground_truth_contour_data(self, idx=0):
+        """Gaussian observer ground-truth threshold contour in real DISP space.
+
+        This matches GaussianObserverSimulator.p_detect_direction:
+
+          p = p_chance + (1-p_chance) * (1-exp(-(r*sin(angle))^2/(2*sigma^2)))
+
+        The returned contour is clipped to min(ground_truth_max_radius, local
+        display-gamut radius).  Points where the analytical threshold exceeds
+        that cap are marked clipped.
+        """
+        sigma = max(float(self.ground_truth_sigma), 1e-8)
+        p_chance = float(self.ground_truth_p_chance)
+        target = float(self.ground_truth_threshold)
+        target = np.clip(target, p_chance + 1e-8, 1.0 - 1e-8)
+        max_radius = max(float(self.ground_truth_max_radius), 1e-8)
+
+        frac = (target - p_chance) / max(1.0 - p_chance, 1e-8)
+        threshold_signal = sigma * np.sqrt(-2.0 * np.log(max(1.0 - frac, 1e-12)))
+
+        w0 = self.w0s[idx]
+        cb = self.chrom_bases[idx]
+        d_null = self._direction_from_patch(
+            self.ground_truth_null_u,
+            self.ground_truth_null_v,
+        )
+
+        vals = np.linspace(-1.0, 1.0, int(self.ground_truth_grid_n))
+        disp_pts, r_stars, clipped, p_at_cap = [], [], [], []
+
+        for a in vals:
+            for b in vals:
+                u, v = self._patch_coords_from_model(a, b)
+                d = self._direction_from_patch(u, v)
+                cos_angle = float(np.clip(np.dot(d, d_null), -1.0, 1.0))
+                sin_angle = float(np.sqrt(max(1.0 - cos_angle ** 2, 0.0)))
+                if sin_angle < 1e-10:
+                    r_true = np.inf
+                else:
+                    r_true = threshold_signal / sin_angle
+
+                local_rmax = r_max_in_direction(w0, cb, d)
+                cap = min(max_radius, local_rmax)
+                r_plot = min(r_true, cap)
+                is_clipped = not np.isfinite(r_true) or r_true > cap
+
+                signal_at_cap = cap * sin_angle
+                p_cap = p_chance + (1.0 - p_chance) * (
+                    1.0 - np.exp(-(signal_at_cap ** 2) / (2.0 * sigma ** 2)))
+
+                disp_pts.append(w0 + cb @ (d * r_plot))
+                r_stars.append(r_plot)
+                clipped.append(is_clipped)
+                p_at_cap.append(p_cap)
+
+        return {
+            "disp_points": np.array(disp_pts),
+            "r_star": np.array(r_stars),
+            "clipped": np.array(clipped, dtype=bool),
+            "p_at_cap": np.array(p_at_cap),
+        }
+
+    def _render_ground_truth_contour(self):
+        data = self._ground_truth_contour_data(0)
+        disp = data["disp_points"]
+        viz = self._disp_to_ref_viz(disp)
+        r_star = data["r_star"]
+        clipped = data["clipped"]
+
+        lo, hi = float(np.nanmin(r_star)), float(np.nanmax(r_star))
+        t = np.clip((r_star - lo) / max(hi - lo, 1e-12), 0.0, 1.0)
+        colors = np.column_stack([
+            0.75 + 0.25 * t,
+            0.15 + 0.25 * (1.0 - t),
+            1.00 - 0.35 * t,
+        ])
+
+        valid = ~clipped
+        if np.any(valid):
+            RenderPointCloud(
+                "ground_truth_contour_pts",
+                viz[valid],
+                colors[valid],
+                radius=self.point_size * 1.0,
+            )
+        if np.any(clipped):
+            RenderPointCloud(
+                "ground_truth_contour_clipped_pts",
+                viz[clipped],
+                np.tile([1.0, 0.15, 0.65], (int(np.sum(clipped)), 1)),
+                radius=self.point_size * 0.7,
+            )
+
+        print("  Ground truth contour:")
+        print(f"    sigma={self.ground_truth_sigma:.5f}")
+        print(f"    max_radius={self.ground_truth_max_radius:.5f}")
+        print(f"    threshold={self.ground_truth_threshold:.3f}, p_chance={self.ground_truth_p_chance:.3f}")
+        print(f"    r* plotted range=[{lo:.5f}, {hi:.5f}]")
+        print(f"    clipped_count={int(np.sum(clipped))}/{len(clipped)}")
+        print(f"    p_at_cap range=[{np.min(data['p_at_cap']):.5f}, {np.max(data['p_at_cap']):.5f}]")
+
+    def _render_aepsych_contour(self):
+        """Render exported AEPsych threshold contour as real DISP points."""
+        if not self.aepsych_contour:
+            return
+
+        disp = self.aepsych_contour["disp_points"]
+        viz_pts = self._disp_to_ref_viz(disp)
+
+        r_star = self.aepsych_contour.get("r_star")
+        if r_star is None:
+            colors = np.tile([1.0, 0.95, 0.15], (len(viz_pts), 1))
+        else:
+            r_star = np.asarray(r_star, dtype=float)
+            lo, hi = float(np.nanmin(r_star)), float(np.nanmax(r_star))
+            t = np.clip((r_star - lo) / max(hi - lo, 1e-12), 0.0, 1.0)
+            colors = np.column_stack([
+                0.15 + 0.85 * t,
+                0.95 - 0.35 * t,
+                1.00 - 0.85 * t,
+            ])
+
+        clipped = self.aepsych_contour.get("gamut_clipped")
+        if clipped is not None:
+            clipped = np.asarray(clipped, dtype=bool)
+            valid = ~clipped
+            if np.any(valid):
+                RenderPointCloud(
+                    "aepsych_contour_pts",
+                    viz_pts[valid],
+                    colors[valid],
+                    radius=self.point_size * 0.8,
+                )
+            if np.any(clipped):
+                RenderPointCloud(
+                    "aepsych_contour_clipped_pts",
+                    viz_pts[clipped],
+                    np.tile([1.0, 0.05, 0.05], (int(np.sum(clipped)), 1)),
+                    radius=self.point_size * 1.2,
+                )
+        else:
+            RenderPointCloud(
+                "aepsych_contour_pts",
+                viz_pts,
+                colors,
+                radius=self.point_size * 0.8,
+            )
+
+        print("  AEPsych contour:")
+        print(f"    count={len(disp)}")
+        if r_star is not None:
+            print(f"    r* range=[{np.nanmin(r_star):.5f}, {np.nanmax(r_star):.5f}]")
+        if clipped is not None:
+            print(f"    clipped_count={int(np.sum(clipped))}")
+        found = self.aepsych_contour.get("threshold_found")
+        if found is not None:
+            print(f"    threshold_found_count={int(np.sum(found))}")
+
     # ------------------------------------------------------------------
     # Rendering
     # ------------------------------------------------------------------
@@ -657,6 +969,11 @@ class NullDirectionViewer:
                      np.array([0.2, 1.0, 0.2]),
                      radius=0.004)
 
+        # Local display-code resolution marker at observer 1's + null endpoint.
+        self._render_display_resolution_reference()
+        self._render_ground_truth_contour()
+        self._render_aepsych_contour()
+
         # --- 3. Gamut surface patch (PCA-parameterized elliptical cap) ----
         print("  Computing PCA gamut patch…")
         patch_viz, patch_faces = self._gamut_patch_pca(0)
@@ -714,15 +1031,18 @@ class NullDirectionViewer:
             except:
                 pass
         for name in ["null_pts", "cmf_null_pts", "bg_sphere", "gaussian_contour",
-                     "null_gamut_patch", "vl_hyperplane_solid"]:
+                     "null_gamut_patch", "vl_hyperplane_solid",
+                     "aepsych_contour_pts", "aepsych_contour_clipped_pts",
+                     "ground_truth_contour_pts", "ground_truth_contour_clipped_pts"]:
             try:
                 ps.remove_point_cloud(name)
             except:
                 pass
-        try:
-            ps.remove_curve_network("null_arrow")
-        except:
-            pass
+        for name in ["null_arrow", "display_resolution_grid_lines"]:
+            try:
+                ps.remove_curve_network(name)
+            except:
+                pass
         for i in range(self.num_observers):
             try:
                 ps.remove_billboard_text(f"label_obs_{i:02d}")
@@ -747,6 +1067,13 @@ class NullDirectionViewer:
         _, new_sn = psim.SliderFloat("sigma_minor (perp)",      self.sigma_minor, 0.01, 1.5)
 
         psim.Separator()
+        psim.Text("Ground-truth Gaussian contour  (matches AEPsych simulation)")
+        _, new_gt_sigma = psim.SliderFloat(
+            "truth sigma", self.ground_truth_sigma, 0.005, 0.12)
+        _, new_gt_max = psim.SliderFloat(
+            "truth max radius", self.ground_truth_max_radius, 0.05, 0.9)
+
+        psim.Separator()
         psim.Text("Gamut patch  (PCA elliptical cap)")
         _, new_pa_maj = psim.SliderFloat("Patch angle major (rad)", self.patch_angle_major, 0.02, 1.2)
         _, new_pa_min = psim.SliderFloat("Patch angle minor (rad)", self.patch_angle_minor, 0.01, 1.2)
@@ -758,6 +1085,8 @@ class NullDirectionViewer:
         changed = (
             abs(new_sm - self.sigma_major) > 1e-4 or
             abs(new_sn - self.sigma_minor) > 1e-4 or
+            abs(new_gt_sigma - self.ground_truth_sigma) > 1e-4 or
+            abs(new_gt_max - self.ground_truth_max_radius) > 1e-4 or
             abs(new_pa_maj - self.patch_angle_major) > 1e-4 or
             abs(new_pa_min - self.patch_angle_minor) > 1e-4 or
             abs(new_pt_size - self.point_size) > 1e-4 or
@@ -766,6 +1095,8 @@ class NullDirectionViewer:
 
         self.sigma_major = new_sm
         self.sigma_minor = new_sn
+        self.ground_truth_sigma = new_gt_sigma
+        self.ground_truth_max_radius = new_gt_max
         self.patch_angle_major = new_pa_maj
         self.patch_angle_minor = new_pa_min
         self.point_size = new_pt_size
@@ -784,6 +1115,9 @@ class NullDirectionViewer:
         psim.Text("Legend:")
         psim.Text("  Colored pts    – null direction ± gamut endpoints per CMF")
         psim.Text("  Green arrow    – null direction (observer 1)")
+        psim.Text("  Small grid     – local display-code lattice on the gamut boundary")
+        psim.Text("  Magenta pts    – Gaussian ground-truth contour in real DISP")
+        psim.Text("  AEPsych pts    – exported real DISP threshold contour")
         psim.Text("  Cyan surface   – PCA-parameterized gamut patch")
         psim.Text("  Hot surface    – ellipsoid: r=1/sqrt(cos²α/σ_maj²+sin²α/σ_min²)")
 
@@ -801,11 +1135,14 @@ def main():
     parser.add_argument("--primaries_dir", type=str,
                         default="../../measurements/2026-03-03/primaries/")
     parser.add_argument("--num_observers", type=int, default=10)
+    parser.add_argument("--aepsych_contour", type=str, default=None,
+                        help="NPZ contour file exported by aepsych_contour_simulation.py")
     args = parser.parse_args()
 
     viewer = NullDirectionViewer(
         primaries_dir=args.primaries_dir,
         num_observers=args.num_observers,
+        aepsych_contour_path=args.aepsych_contour,
     )
     viewer.show()
 
