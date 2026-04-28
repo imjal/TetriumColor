@@ -55,6 +55,8 @@ def main():
     parser.add_argument('--contour-output', type=str,
                         default='aepsych_threshold_contour.npz',
                         help='Output NPZ path for null_direction_viewer.py')
+    parser.add_argument('--model-output', type=str, default=None,
+                        help='Optional pickle path for the trained AEPsych generator')
     parser.add_argument('--surface-na', type=int, default=31,
                         help='Number of exported contour samples along model a')
     parser.add_argument('--surface-nb', type=int, default=31,
@@ -151,6 +153,10 @@ def main():
           f"{contour_data['r_star'].max():.5f}]")
     print(f"  posterior_p_hi_range=[{contour_data['posterior_p_hi'].min():.5f}, "
           f"{contour_data['posterior_p_hi'].max():.5f}]")
+
+    if args.model_output:
+        print(f"Saving trained AEPsych model to {args.model_output}")
+        generator.save_model_state(args.model_output)
 
     # Plot
     print(f"Saving plot to {args.output}")

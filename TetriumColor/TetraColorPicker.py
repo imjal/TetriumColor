@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+import pickle
 from typing import Tuple, Optional, List, Dict
 
 import numpy as np
@@ -1152,7 +1153,8 @@ class AEPsychThresholdContourGenerator(ColorGenerator):
         return float(mean.item())
 
     def _estimate_threshold_radius(
-        self, a: float, b: float, r_hi: float
+        self, a: float, b: float, r_hi: float,
+        threshold_level: Optional[float] = None,
     ) -> Tuple[float, bool, bool, float, float, float]:
         """Estimate threshold radius and report whether a crossing exists.
 
@@ -1168,14 +1170,15 @@ class AEPsychThresholdContourGenerator(ColorGenerator):
         p_lo, p_hi, p_star
             Posterior detection probabilities at the relevant radii.
         """
+        threshold = self.threshold_level if threshold_level is None else float(threshold_level)
         r_lo = float(self._lb_np[2])
         r_hi = float(r_hi)
         p_lo = self._posterior_detect_prob(a, b, r_lo)
         p_hi = self._posterior_detect_prob(a, b, r_hi)
 
-        if p_lo >= self.threshold_level:
+        if p_lo >= threshold:
             return r_lo, False, True, p_lo, p_hi, p_lo
-        if p_hi < self.threshold_level:
+        if p_hi < threshold:
             return r_hi, False, False, p_lo, p_hi, p_hi
 
         lo, hi = r_lo, r_hi
@@ -1183,7 +1186,7 @@ class AEPsychThresholdContourGenerator(ColorGenerator):
         for _ in range(25):
             mid = (lo + hi) / 2.0
             p_mid = self._posterior_detect_prob(a, b, mid)
-            if p_mid < self.threshold_level:
+            if p_mid < threshold:
                 lo = mid
             else:
                 hi = mid
@@ -1244,7 +1247,8 @@ class AEPsychThresholdContourGenerator(ColorGenerator):
     # ------------------------------------------------------------------
 
     def get_threshold_surface(
-        self, n_theta: int = 30, n_phi: int = 60
+        self, n_theta: int = 30, n_phi: int = 60,
+        threshold_level: Optional[float] = None,
     ) -> Tuple[npt.NDArray, npt.NDArray, npt.NDArray, npt.NDArray]:
         """Extract threshold surface r*(u, v) from GP posterior.
 
@@ -1271,7 +1275,7 @@ class AEPsychThresholdContourGenerator(ColorGenerator):
 
                 r_hi = min(r_hi_bound, r_max_gamut)
                 r_star, found, lower_sat, _, _, _ = self._estimate_threshold_radius(
-                    a, b, r_hi)
+                    a, b, r_hi, threshold_level=threshold_level)
 
                 is_clipped = (
                     (not found and not lower_sat) or
@@ -1288,7 +1292,8 @@ class AEPsychThresholdContourGenerator(ColorGenerator):
                 np.array(gamut_clipped, dtype=bool))
 
     def get_threshold_patch_data(
-        self, n_a: int = 31, n_b: int = 31
+        self, n_a: int = 31, n_b: int = 31,
+        threshold_level: Optional[float] = None,
     ) -> Dict[str, npt.NDArray]:
         """Exportable threshold contour data in real display coordinates.
 
@@ -1300,6 +1305,7 @@ class AEPsychThresholdContourGenerator(ColorGenerator):
         if self.strategy.model is None:
             raise RuntimeError("GP model not fitted yet; run trials first.")
 
+        threshold = self.threshold_level if threshold_level is None else float(threshold_level)
         model_as = np.linspace(self._lb_np[0], self._ub_np[0], n_a)
         model_bs = np.linspace(self._lb_np[1], self._ub_np[1], n_b)
 
@@ -1327,7 +1333,8 @@ class AEPsychThresholdContourGenerator(ColorGenerator):
 
                 r_hi = min(r_hi_bound, r_max)
                 r_star, found, lower_sat, p_lo, p_hi, p_star = (
-                    self._estimate_threshold_radius(a, b, r_hi))
+                    self._estimate_threshold_radius(
+                        a, b, r_hi, threshold_level=threshold))
                 clipped = (not found and not lower_sat) or r_star >= r_max * 0.97
                 disp = self.w0 + dir_4d * r_star
 
@@ -1370,17 +1377,34 @@ class AEPsychThresholdContourGenerator(ColorGenerator):
                 dtype=float,
             ),
             "actual_max_radius": np.array([self.actual_max_radius], dtype=float),
-            "threshold_level": np.array([self.threshold_level], dtype=float),
+            "threshold_level": np.array([threshold], dtype=float),
             "grid_shape": np.array([n_a, n_b], dtype=np.int32),
         }
 
     def export_threshold_patch_npz(
-        self, filename: str, n_a: int = 31, n_b: int = 31
+        self, filename: str, n_a: int = 31, n_b: int = 31,
+        threshold_level: Optional[float] = None,
     ) -> Dict[str, npt.NDArray]:
         """Write threshold contour data loadable by null_direction_viewer.py."""
-        data = self.get_threshold_patch_data(n_a=n_a, n_b=n_b)
+        data = self.get_threshold_patch_data(
+            n_a=n_a, n_b=n_b, threshold_level=threshold_level)
         np.savez_compressed(filename, **data)
         return data
+
+    def save_model_state(self, filename: str) -> None:
+        """Save the trained generator so posterior contours can be re-exported."""
+        with open(filename, "wb") as f:
+            pickle.dump(self, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+    @staticmethod
+    def load_model_state(filename: str) -> "AEPsychThresholdContourGenerator":
+        """Load a generator saved by save_model_state()."""
+        with open(filename, "rb") as f:
+            generator = pickle.load(f)
+        if not isinstance(generator, AEPsychThresholdContourGenerator):
+            raise TypeError(
+                f"{filename} did not contain an AEPsychThresholdContourGenerator")
+        return generator
 
     def fit_threshold_ellipsoid(
         self, n_theta: int = 30, n_phi: int = 60
