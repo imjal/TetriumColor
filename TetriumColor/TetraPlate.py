@@ -12,6 +12,14 @@ from TetriumColor.TetraColorPicker import ColorGenerator, QuestColorGenerator
 from TetriumColor.Utils.ImageUtils import CreatePaddedGrid
 
 
+def _color_generator_metadata(color_generator: ColorGenerator) -> dict:
+    if hasattr(color_generator, "GetCurrentTrialMetadata"):
+        metadata = color_generator.GetCurrentTrialMetadata()
+        if isinstance(metadata, dict):
+            return metadata
+    return {}
+
+
 class TestGenerator(ABC):
     def __init__(self, color_generator: ColorGenerator):
         self.color_generator = color_generator
@@ -124,15 +132,13 @@ class PseudoIsochromaticPlateGenerator(PlateGenerator):
             rgb_path = f"{filename}_SRGB.png"
             ocv_path = rgb_path  # For SRGB, both paths are the same
 
-        # Extract genotype if available
-        genotype = getattr(color_space, 'genotype', None)
-        if genotype:
+        if hasattr(self.color_generator, 'GetCurrentTestInfo'):
+            genotype, metameric_axis = self.color_generator.GetCurrentTestInfo()
             genotype_str = str(genotype)
         else:
-            genotype_str = "unknown"
-
-        # Extract metameric axis if available
-        metameric_axis = getattr(color_space, 'metameric_axis', -1)
+            genotype = getattr(color_space, 'genotype', None)
+            genotype_str = str(genotype) if genotype else "unknown"
+            metameric_axis = getattr(color_space, 'metameric_axis', -1)
 
         # Return trial data as dictionary
         return {
@@ -147,7 +153,8 @@ class PseudoIsochromaticPlateGenerator(PlateGenerator):
                 'inside_cone': inside_cone.tolist(),
                 'outside_cone': outside_cone.tolist(),
                 'lum_noise': lum_noise,
-                's_cone_noise': s_cone_noise
+                's_cone_noise': s_cone_noise,
+                **_color_generator_metadata(self.color_generator),
             }
         }
 
@@ -215,7 +222,8 @@ class PseudoIsochromaticPlateGenerator(PlateGenerator):
                 'inside_cone': inside_cone.tolist(),
                 'outside_cone': outside_cone.tolist(),
                 'lum_noise': lum_noise,
-                's_cone_noise': s_cone_noise
+                's_cone_noise': s_cone_noise,
+                **_color_generator_metadata(self.color_generator),
             }
         }
 
@@ -328,15 +336,13 @@ class BipartiteFieldGenerator(TestGenerator):
             ocv_path = rgb_path
             img.save(rgb_path)
 
-        # Extract genotype if available
-        genotype = getattr(color_space, 'genotype', None)
-        if genotype:
+        if hasattr(self.color_generator, 'GetCurrentTestInfo'):
+            genotype, metameric_axis = self.color_generator.GetCurrentTestInfo()
             genotype_str = str(genotype)
         else:
-            genotype_str = "unknown"
-
-        # Extract metameric axis if available
-        metameric_axis = getattr(color_space, 'metameric_axis', -1)
+            genotype = getattr(color_space, 'genotype', None)
+            genotype_str = str(genotype) if genotype else "unknown"
+            metameric_axis = getattr(color_space, 'metameric_axis', -1)
 
         # Return trial data as dictionary
         return {
@@ -349,7 +355,8 @@ class BipartiteFieldGenerator(TestGenerator):
             'metadata': {
                 'inside_cone': inside_cone.tolist(),
                 'outside_cone': outside_cone.tolist(),
-                'size': self.size
+                'size': self.size,
+                **_color_generator_metadata(self.color_generator),
             }
         }
 
@@ -427,7 +434,8 @@ class BipartiteFieldGenerator(TestGenerator):
             'metadata': {
                 'inside_cone': inside_cone.tolist(),
                 'outside_cone': outside_cone.tolist(),
-                'size': self.size
+                'size': self.size,
+                **_color_generator_metadata(self.color_generator),
             }
         }
 
@@ -624,6 +632,7 @@ class GaussianBlobGenerator(TestGenerator):
                 'degree': degree,
                 'lum_noise': lum_noise,
                 's_cone_noise': s_cone_noise,
+                **_color_generator_metadata(self.color_generator),
             }
         }
 

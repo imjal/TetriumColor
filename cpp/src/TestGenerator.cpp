@@ -763,4 +763,118 @@ bool TestGenerator::ExportThresholds(const std::string& filename)
     return success;
 }
 
+bool TestGenerator::SaveModelState(const std::string& filename)
+{
+    if (!pInstance) {
+        return false;
+    }
+
+    PyObject* pColorGenerator = PyObject_GetAttrString(pInstance, "color_generator");
+    if (!pColorGenerator) {
+        PyErr_Clear();
+        return false;
+    }
+
+    PyObject* pMethod = PyObject_GetAttrString(pColorGenerator, "save_model_state");
+    Py_DECREF(pColorGenerator);
+    if (!pMethod || !PyCallable_Check(pMethod)) {
+        Py_XDECREF(pMethod);
+        return false;
+    }
+
+    PyObject* pArgs = PyTuple_New(1);
+    PyTuple_SetItem(pArgs, 0, PyUnicode_FromString(filename.c_str()));
+    PyObject* pResult = PyObject_CallObject(pMethod, pArgs);
+    Py_DECREF(pMethod);
+    Py_DECREF(pArgs);
+
+    bool success = (pResult != nullptr);
+    if (pResult) {
+        Py_DECREF(pResult);
+    } else {
+        PyErr_Clear();
+    }
+    return success;
+}
+
+bool TestGenerator::ExportThresholdPatch(
+    const std::string& filename,
+    int n_a,
+    int n_b,
+    double threshold_level
+)
+{
+    if (!pInstance) {
+        return false;
+    }
+
+    PyObject* pColorGenerator = PyObject_GetAttrString(pInstance, "color_generator");
+    if (!pColorGenerator) {
+        PyErr_Clear();
+        return false;
+    }
+
+    PyObject* pMethod = PyObject_GetAttrString(pColorGenerator, "export_threshold_patch_npz");
+    Py_DECREF(pColorGenerator);
+    if (!pMethod || !PyCallable_Check(pMethod)) {
+        Py_XDECREF(pMethod);
+        return false;
+    }
+
+    PyObject* pArgs = PyTuple_New(1);
+    PyTuple_SetItem(pArgs, 0, PyUnicode_FromString(filename.c_str()));
+
+    PyObject* pKwargs = PyDict_New();
+    PyDict_SetItemString(pKwargs, "n_a", PyLong_FromLong(n_a));
+    PyDict_SetItemString(pKwargs, "n_b", PyLong_FromLong(n_b));
+    PyDict_SetItemString(pKwargs, "threshold_level", PyFloat_FromDouble(threshold_level));
+
+    PyObject* pResult = PyObject_Call(pMethod, pArgs, pKwargs);
+    Py_DECREF(pMethod);
+    Py_DECREF(pArgs);
+    Py_DECREF(pKwargs);
+
+    bool success = (pResult != nullptr);
+    if (pResult) {
+        Py_DECREF(pResult);
+    } else {
+        PyErr_Clear();
+    }
+    return success;
+}
+
+bool TestGenerator::ExportColorGeneratorTrialLog(const std::string& filename)
+{
+    if (!pInstance) {
+        return false;
+    }
+
+    PyObject* pColorGenerator = PyObject_GetAttrString(pInstance, "color_generator");
+    if (!pColorGenerator) {
+        PyErr_Clear();
+        return false;
+    }
+
+    PyObject* pMethod = PyObject_GetAttrString(pColorGenerator, "export_trial_log_csv");
+    Py_DECREF(pColorGenerator);
+    if (!pMethod || !PyCallable_Check(pMethod)) {
+        Py_XDECREF(pMethod);
+        return false;
+    }
+
+    PyObject* pArgs = PyTuple_New(1);
+    PyTuple_SetItem(pArgs, 0, PyUnicode_FromString(filename.c_str()));
+    PyObject* pResult = PyObject_CallObject(pMethod, pArgs);
+    Py_DECREF(pMethod);
+    Py_DECREF(pArgs);
+
+    bool success = (pResult != nullptr);
+    if (pResult) {
+        Py_DECREF(pResult);
+    } else {
+        PyErr_Clear();
+    }
+    return success;
+}
+
 } // namespace TetriumColor

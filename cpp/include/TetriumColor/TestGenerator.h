@@ -87,6 +87,20 @@ class TestGenerator
     // Returns true if successful, false otherwise
     bool ExportThresholds(const std::string& filename);
 
+    // Save Python color generator model state when supported.
+    bool SaveModelState(const std::string& filename);
+
+    // Export AEPsych threshold contour patch when supported.
+    bool ExportThresholdPatch(
+        const std::string& filename,
+        int n_a,
+        int n_b,
+        double threshold_level
+    );
+
+    // Export Python-side color generator trial log when supported.
+    bool ExportColorGeneratorTrialLog(const std::string& filename);
+
   private:
     PyObject* pInstance; // Python TestGenerator instance
 

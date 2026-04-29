@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+import csv
 import pickle
 from typing import Tuple, Optional, List, Dict
 
@@ -73,6 +74,7 @@ class QuestColorGenerator(ColorGenerator):
                  bipolar: bool = False,
                  degree: float = 4.0,
                  mcs_k: int = 0,
+                 observer_indices: Optional[List[int]] = None,
                  **kwargs):
         """Initialize Quest-based color generator.
 
@@ -92,6 +94,9 @@ class QuestColorGenerator(ColorGenerator):
             bipolar: If True, sample in both direction and -direction, returning the -direction point instead of the background
             mcs_k: If > 0, use Method of Constant Stimuli with K equally-spaced intensity levels instead of Quest adaptive algorithm.
                    1 = max metamer only, K > 1 = linspace(0, 1, K). Bypasses Quest tracking entirely.
+            observer_indices: Optional zero-based indices into the population-sorted genotype list.
+                   If provided, tests exactly those genotypes instead of all genotypes up to
+                   percentage_screened.
             **kwargs: Additional arguments including display_primaries
         """
         self.background_luminance = luminance
@@ -131,9 +136,20 @@ class QuestColorGenerator(ColorGenerator):
             seed=seed
         )
 
-        # Get genotypes covering the target probability
-        self.genotypes = self.observer_genotypes.get_genotypes_covering_probability(
-            target_probability=percentage_screened, sex=sex)
+        # Get genotypes covering the target probability, or an explicit subset by
+        # zero-based index in the same population-sorted order.
+        if observer_indices is not None and len(observer_indices) > 0:
+            pdf_genotypes = list(self.observer_genotypes.get_pdf(sex).keys())
+            invalid = [idx for idx in observer_indices
+                       if idx < 0 or idx >= len(pdf_genotypes)]
+            if invalid:
+                raise ValueError(
+                    f"observer_indices out of range for {len(pdf_genotypes)} genotypes: {invalid}"
+                )
+            self.genotypes = [pdf_genotypes[idx] for idx in observer_indices]
+        else:
+            self.genotypes = self.observer_genotypes.get_genotypes_covering_probability(
+                target_probability=percentage_screened, sex=sex)
 
         # Create mapping from genotype -> [color_space, color_sampler]
         self.genotype_mapping: Dict[Tuple, Tuple[ColorSpace, List[npt.NDArray]]] = {}
@@ -175,6 +191,7 @@ class QuestColorGenerator(ColorGenerator):
 
         # Store threshold estimates
         self.thresholds = {}
+        self._current_trial_metadata = {}
 
     def _generate_directions(self) -> Tuple[List[npt.NDArray], List[Dict]]:
         """Generate chromatic sampling directions based on mode.
@@ -382,20 +399,22 @@ class QuestColorGenerator(ColorGenerator):
         genotype_cs = self.genotype_mapping[self.direction_metadata[direction_idx]['genotype']]
 
         if self.bipolar:
-            test_disp = self._disp_direction_to_point(background_disp, direction_vec, proportion)
-            negative_test_disp = self._disp_direction_to_point(background_disp, -direction_vec, proportion)
-            background_cone = genotype_cs.convert(
-                np.array([negative_test_disp]), ColorSpaceType.DISP, ColorSpaceType.CONE)[0]
-            test_cone = genotype_cs.convert(
-                np.array([test_disp]), ColorSpaceType.DISP, ColorSpaceType.CONE)[0]
+            inside_disp = self._disp_direction_to_point(background_disp, direction_vec, proportion)
+            outside_disp = self._disp_direction_to_point(background_disp, -direction_vec, proportion)
+            inside_cone = genotype_cs.convert(
+                np.array([inside_disp]), ColorSpaceType.DISP, ColorSpaceType.CONE)[0]
+            outside_cone = genotype_cs.convert(
+                np.array([outside_disp]), ColorSpaceType.DISP, ColorSpaceType.CONE)[0]
         else:
-            test_disp = self._disp_direction_to_point(background_disp, direction_vec, proportion)
-            background_cone = genotype_cs.convert(
+            inside_disp = self._disp_direction_to_point(background_disp, direction_vec, proportion)
+            outside_disp = background_disp
+            outside_cone = genotype_cs.convert(
                 np.array([background_disp]), ColorSpaceType.DISP, ColorSpaceType.CONE)[0]
-            test_cone = genotype_cs.convert(
-                np.array([test_disp]), ColorSpaceType.DISP, ColorSpaceType.CONE)[0]
+            inside_cone = genotype_cs.convert(
+                np.array([inside_disp]), ColorSpaceType.DISP, ColorSpaceType.CONE)[0]
 
-        return background_cone, test_cone, genotype_cs, proportion
+        self._record_current_trial_metadata(direction_idx, proportion, inside_disp, outside_disp)
+        return inside_cone, outside_cone, genotype_cs, proportion
 
     def NewColor(self) -> Tuple[npt.NDArray, npt.NDArray, ColorSpace, float]:
         """Get first color stimulus."""
@@ -414,7 +433,7 @@ class QuestColorGenerator(ColorGenerator):
             previous_result: Result from previous trial
 
         Returns:
-            Tuple of (background_cone, test_cone, color_space, saturation) or None if done
+            Tuple of (inside_cone, outside_cone, color_space, saturation) or None if done
         """
         if self.mcs_k > 0:
             if not hasattr(self, '_mcs_trial_list'):
@@ -486,18 +505,17 @@ class QuestColorGenerator(ColorGenerator):
         genotype_cs = self.genotype_mapping[self.direction_metadata[direction_idx]['genotype']]
 
         if self.bipolar:
-            # Sample in both direction and -direction
-            # Get test point in positive direction
-            test_disp = self._disp_direction_to_point(background_disp, direction_vec, proportion)
-            # Get test point in negative direction
-            negative_test_disp = self._disp_direction_to_point(background_disp, -direction_vec, proportion)
+            # Sample in both direction and -direction. Return the positive
+            # direction endpoint first so polarity matches
+            # ColorSpace.get_maximal_pair_in_disp_from_pt().
+            inside_disp = self._disp_direction_to_point(background_disp, direction_vec, proportion)
+            outside_disp = self._disp_direction_to_point(background_disp, -direction_vec, proportion)
 
             # Convert both to cone space
-            # Return negative direction point as "background" and positive direction point as "test"
-            background_cone = genotype_cs.convert(
-                np.array([negative_test_disp]), ColorSpaceType.DISP, ColorSpaceType.CONE)[0]
-            test_cone = genotype_cs.convert(
-                np.array([test_disp]), ColorSpaceType.DISP, ColorSpaceType.CONE)[0]
+            inside_cone = genotype_cs.convert(
+                np.array([inside_disp]), ColorSpaceType.DISP, ColorSpaceType.CONE)[0]
+            outside_cone = genotype_cs.convert(
+                np.array([outside_disp]), ColorSpaceType.DISP, ColorSpaceType.CONE)[0]
 
             # For bipolar, return proportion (0-1) representing proportion of max_distance
             # The distance between the two points is 2 * (proportion * max_distance),
@@ -506,17 +524,37 @@ class QuestColorGenerator(ColorGenerator):
             # Original behavior: sample in one direction, return background and test point
             # Get test point in DISP space
             # direction_vec is already scaled by max_distance, so proportion directly scales it
-            test_disp = self._disp_direction_to_point(background_disp, direction_vec, proportion)
+            inside_disp = self._disp_direction_to_point(background_disp, direction_vec, proportion)
+            outside_disp = background_disp
 
             # Convert both to cone space
-            background_cone = genotype_cs.convert(
+            outside_cone = genotype_cs.convert(
                 np.array([background_disp]), ColorSpaceType.DISP, ColorSpaceType.CONE)[0]
-            test_cone = genotype_cs.convert(
-                np.array([test_disp]), ColorSpaceType.DISP, ColorSpaceType.CONE)[0]
+            inside_cone = genotype_cs.convert(
+                np.array([inside_disp]), ColorSpaceType.DISP, ColorSpaceType.CONE)[0]
 
         # Return proportion (0-1) as intensity, representing proportion of max_distance
         # This is consistent with threshold_proportion and makes intensity comparable across directions
-        return background_cone, test_cone, genotype_cs, proportion
+        self._record_current_trial_metadata(direction_idx, proportion, inside_disp, outside_disp)
+        return inside_cone, outside_cone, genotype_cs, proportion
+
+    def _record_current_trial_metadata(
+            self, direction_idx: int, proportion: float,
+            inside_disp: npt.NDArray, outside_disp: npt.NDArray):
+        metadata = self.direction_metadata[direction_idx]
+        self._current_trial_metadata = {
+            'quest_direction_idx': int(direction_idx),
+            'quest_proportion': float(proportion),
+            'quest_bipolar': bool(self.bipolar),
+            'quest_background_disp': self.background.tolist(),
+            'quest_inside_disp': np.asarray(inside_disp).tolist(),
+            'quest_outside_disp': np.asarray(outside_disp).tolist(),
+            'quest_genotype': str(metadata.get('genotype')),
+            'quest_metameric_axis': metadata.get('metameric_axis'),
+        }
+
+    def GetCurrentTrialMetadata(self) -> Dict:
+        return self._current_trial_metadata
 
     def _compute_final_thresholds(self):
         """Compute final threshold estimates for all directions."""
@@ -848,6 +886,7 @@ class AEPsychThresholdContourGenerator(ColorGenerator):
         from aepsych.acquisition import MCLevelSetEstimation
 
         self.n_trials = n_trials
+        self.n_sobol = n_sobol
         self.threshold_level = threshold_level
         self.trial_count = 0
         self.luminance = luminance
@@ -861,6 +900,8 @@ class AEPsychThresholdContourGenerator(ColorGenerator):
         self.last_direction = None
         self.last_disp = None
         self.stimulus_disp_log = []
+        self.trial_log = []
+        self._current_trial_metadata = {}
         self.last_r = None
         self._peak_to_test = peak_to_test
         self.patch_sigma_scale = patch_sigma_scale
@@ -878,6 +919,7 @@ class AEPsychThresholdContourGenerator(ColorGenerator):
                 target_probability=0.999,
                 sex=sex,
             )[0]
+        self.center_genotype = tuple(center_genotype)
 
         display_primaries = kwargs.get('display_primaries', None)
         center_genotype_full = tuple(sorted(tuple(center_genotype) + (peak_to_test,)))
@@ -925,6 +967,42 @@ class AEPsychThresholdContourGenerator(ColorGenerator):
                       outcome_types=['binary'], model=model,
                       min_asks=n_adaptive)
         self.strategy = SequentialStrategy([s1, s2])
+
+    def _metadata_value(self, value):
+        if isinstance(value, np.ndarray):
+            return value.tolist()
+        if isinstance(value, (np.floating, np.integer)):
+            return value.item()
+        if isinstance(value, tuple):
+            return list(value)
+        return value
+
+    def _build_current_trial_metadata(self) -> Dict:
+        sample_index = len(self.stimulus_disp_log) - 1
+        phase = "sobol" if sample_index < self.n_sobol else "adaptive"
+        return {
+            "aepsych_sample_index": sample_index,
+            "aepsych_completed_trials": self.trial_count,
+            "aepsych_phase": phase,
+            "aepsych_a": self.last_a,
+            "aepsych_b": self.last_b,
+            "aepsych_u": self.last_u,
+            "aepsych_v": self.last_v,
+            "aepsych_r": self.last_r,
+            "aepsych_theta": self.last_theta,
+            "aepsych_phi": self.last_phi,
+            "aepsych_direction": self._metadata_value(self.last_direction),
+            "aepsych_disp": self._metadata_value(self.last_disp),
+            "aepsych_q_axis": self.q_axis,
+            "aepsych_actual_max_radius": self.actual_max_radius,
+            "aepsych_threshold_level": self.threshold_level,
+        }
+
+    def GetCurrentTestInfo(self) -> Tuple:
+        return self.center_genotype, self.q_axis
+
+    def GetCurrentTrialMetadata(self) -> Dict:
+        return dict(self._current_trial_metadata)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -1222,6 +1300,8 @@ class AEPsychThresholdContourGenerator(ColorGenerator):
         self.last_r = r
         self.last_disp = w.copy()
         self.stimulus_disp_log.append(w.copy())
+        self._current_trial_metadata = self._build_current_trial_metadata()
+        self.trial_log.append(dict(self._current_trial_metadata))
         bg_cone = self.center_cs.convert(
             self.w0.reshape(1, -1), ColorSpaceType.DISP, ColorSpaceType.CONE)[0]
         test_cone = self.center_cs.convert(
@@ -1234,13 +1314,34 @@ class AEPsychThresholdContourGenerator(ColorGenerator):
         import torch
         if self.trial_count >= self.n_trials or self._last_x is None:
             return None
-        response = 1.0 if previous_result == ColorTestResult.Success else 0.0
+        response_value = getattr(previous_result, "value", previous_result)
+        response = 1.0 if response_value == ColorTestResult.Success.value else 0.0
+        if self.trial_log:
+            self.trial_log[-1]["aepsych_response"] = response
+            self.trial_log[-1]["aepsych_result"] = (
+                "success" if response > 0.5 else "failure")
         y = torch.tensor([response])
         self.strategy.add_data(self._last_x, y)
         self.trial_count += 1
         if self.trial_count >= self.n_trials:
             return None
         return self.NewColor()
+
+    def export_trial_log_csv(self, filename: str) -> None:
+        if not self.trial_log:
+            with open(filename, "w", newline="") as f:
+                f.write("")
+            return
+
+        headers = sorted({key for row in self.trial_log for key in row.keys()})
+        with open(filename, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=headers)
+            writer.writeheader()
+            for row in self.trial_log:
+                writer.writerow({
+                    key: self._metadata_value(value)
+                    for key, value in row.items()
+                })
 
     # ------------------------------------------------------------------
     # Analysis

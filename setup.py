@@ -19,6 +19,8 @@ setup(
         "scipy>=1.14.1",
         "screeninfo>=0.8.1",
         "setuptools>=75.1.0",
+        "aepsych>=0.6.0",
+        "torch>=2.0.0",
         "tqdm>=4.67.0",
     ],  # Core dependencies
 )

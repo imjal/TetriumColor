@@ -22,7 +22,25 @@ class ColorGeneratorFactory
         const std::string& display_primaries_path = "",
         bool bipolar = false,
         float degree = 4.0f,
-        int mcs_k = 0  // >0: use MCS with K equally-spaced levels instead of Quest adaptive
+        int mcs_k = 0, // >0: use MCS with K equally-spaced levels instead of Quest adaptive
+        const std::vector<int>& observer_indices = {}
+    );
+
+    // Create an AEPsychThresholdContourGenerator instance
+    static PyObject* CreateAEPsychThresholdContourGenerator(
+        int n_trials = 300,
+        int n_sobol = 20,
+        float threshold_level = 0.75f,
+        const std::string& sex = "both",
+        float background_luminance = 0.5f,
+        const std::vector<int>& dimensions = {3},
+        const std::string& display_primaries_path = "",
+        int seed = 42,
+        int n_cmf_samples = 200,
+        float patch_sigma_scale = 5.0f,
+        float min_patch_major = 0.15f,
+        float min_patch_minor = 0.06f,
+        float max_radius = 0.65f
     );
 
     // Create a TestGenerator (PseudoIsochromaticPlateGenerator) instance

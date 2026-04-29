@@ -4,6 +4,15 @@
 namespace TetriumColor
 {
 
+namespace
+{
+void SetDictItem(PyObject* dict, const char* key, PyObject* value)
+{
+    PyDict_SetItemString(dict, key, value);
+    Py_DECREF(value);
+}
+} // namespace
+
 PyObject* ColorGeneratorFactory::CreateQuestColorGenerator(
     const std::string& sex,
     float percentage_screened,
@@ -14,7 +23,8 @@ PyObject* ColorGeneratorFactory::CreateQuestColorGenerator(
     const std::string& display_primaries_path,
     bool bipolar,
     float degree,
-    int mcs_k
+    int mcs_k,
+    const std::vector<int>& observer_indices
 )
 {
     // Load primaries from CSV first
@@ -80,6 +90,17 @@ PyObject* ColorGeneratorFactory::CreateQuestColorGenerator(
         PyList_SetItem(pDimensions, i, PyLong_FromLong(dimensions[i]));
     }
 
+    PyObject* pObserverIndices = nullptr;
+    if (observer_indices.empty()) {
+        pObserverIndices = Py_None;
+        Py_INCREF(Py_None);
+    } else {
+        pObserverIndices = PyList_New(observer_indices.size());
+        for (size_t i = 0; i < observer_indices.size(); i++) {
+            PyList_SetItem(pObserverIndices, i, PyLong_FromLong(observer_indices[i]));
+        }
+    }
+
     // Create instance with keyword arguments
     // QuestColorGenerator has many optional parameters, so we use PyObject_Call with kwargs dict
     PyObject* pKwargs = PyDict_New();
@@ -91,6 +112,7 @@ PyObject* ColorGeneratorFactory::CreateQuestColorGenerator(
     PyDict_SetItemString(pKwargs, "bipolar", bipolar ? Py_True : Py_False);
     PyDict_SetItemString(pKwargs, "degree", PyFloat_FromDouble(degree));
     PyDict_SetItemString(pKwargs, "mcs_k", PyLong_FromLong(mcs_k));
+    PyDict_SetItemString(pKwargs, "observer_indices", pObserverIndices);
 
     PyObject* pArgs = PyTuple_New(2);
     PyTuple_SetItem(pArgs, 0, PyUnicode_FromString(sex.c_str()));
@@ -107,11 +129,104 @@ PyObject* ColorGeneratorFactory::CreateQuestColorGenerator(
     if (metameric_axes.empty()) {
         Py_DECREF(pMetamericAxes); // Decrement the Py_None reference we incremented
     }
+    Py_DECREF(pObserverIndices);
     Py_DECREF(pClass);
 
     if (!pColorGenerator) {
         PyErr_Print();
         throw std::runtime_error("Failed to create QuestColorGenerator instance");
+    }
+
+    return pColorGenerator;
+}
+
+PyObject* ColorGeneratorFactory::CreateAEPsychThresholdContourGenerator(
+    int n_trials,
+    int n_sobol,
+    float threshold_level,
+    const std::string& sex,
+    float background_luminance,
+    const std::vector<int>& dimensions,
+    const std::string& display_primaries_path,
+    int seed,
+    int n_cmf_samples,
+    float patch_sigma_scale,
+    float min_patch_major,
+    float min_patch_minor,
+    float max_radius
+)
+{
+    PyObject* pMeasurementModule = PyImport_ImportModule("TetriumColor.Measurement");
+    if (!pMeasurementModule) {
+        PyErr_Print();
+        throw std::runtime_error("Failed to import TetriumColor.Measurement module");
+    }
+
+    PyObject* pLoadPrimariesFunc
+        = PyObject_GetAttrString(pMeasurementModule, "load_primaries_from_csv");
+    Py_DECREF(pMeasurementModule);
+    if (!pLoadPrimariesFunc) {
+        PyErr_Print();
+        throw std::runtime_error("Failed to get load_primaries_from_csv function");
+    }
+
+    PyObject* pPrimaries
+        = PyObject_CallFunction(pLoadPrimariesFunc, "s", display_primaries_path.c_str());
+    Py_DECREF(pLoadPrimariesFunc);
+    if (!pPrimaries) {
+        PyErr_Print();
+        throw std::runtime_error("Failed to load primaries from CSV: " + display_primaries_path);
+    }
+
+    PyObject* pModule = PyImport_ImportModule("TetriumColor.TetraColorPicker");
+    if (!pModule) {
+        Py_DECREF(pPrimaries);
+        PyErr_Print();
+        throw std::runtime_error("Failed to import TetraColorPicker module");
+    }
+
+    PyObject* pClass = PyObject_GetAttrString(pModule, "AEPsychThresholdContourGenerator");
+    Py_DECREF(pModule);
+    if (!pClass) {
+        Py_DECREF(pPrimaries);
+        PyErr_Print();
+        throw std::runtime_error("Failed to get AEPsychThresholdContourGenerator class");
+    }
+
+    PyObject* pDimensions = PyList_New(dimensions.size());
+    for (size_t i = 0; i < dimensions.size(); i++) {
+        PyList_SetItem(pDimensions, i, PyLong_FromLong(dimensions[i]));
+    }
+
+    PyObject* pKwargs = PyDict_New();
+    SetDictItem(pKwargs, "n_trials", PyLong_FromLong(n_trials));
+    SetDictItem(pKwargs, "n_sobol", PyLong_FromLong(n_sobol));
+    SetDictItem(pKwargs, "threshold_level", PyFloat_FromDouble(threshold_level));
+    SetDictItem(pKwargs, "sex", PyUnicode_FromString(sex.c_str()));
+    SetDictItem(pKwargs, "luminance", PyFloat_FromDouble(background_luminance));
+    SetDictItem(pKwargs, "dimensions", pDimensions);
+    SetDictItem(pKwargs, "display_primaries", pPrimaries);
+    SetDictItem(pKwargs, "seed", PyLong_FromLong(seed));
+    SetDictItem(pKwargs, "n_cmf_samples", PyLong_FromLong(n_cmf_samples));
+    SetDictItem(pKwargs, "patch_sigma_scale", PyFloat_FromDouble(patch_sigma_scale));
+    SetDictItem(pKwargs, "min_patch_major", PyFloat_FromDouble(min_patch_major));
+    SetDictItem(pKwargs, "min_patch_minor", PyFloat_FromDouble(min_patch_minor));
+    if (max_radius > 0.0f) {
+        SetDictItem(pKwargs, "max_radius", PyFloat_FromDouble(max_radius));
+    } else {
+        Py_INCREF(Py_None);
+        SetDictItem(pKwargs, "max_radius", Py_None);
+    }
+
+    PyObject* pArgs = PyTuple_New(0);
+    PyObject* pColorGenerator = PyObject_Call(pClass, pArgs, pKwargs);
+    Py_DECREF(pArgs);
+    Py_DECREF(pKwargs);
+    Py_DECREF(pClass);
+
+    if (!pColorGenerator) {
+        PyErr_Print();
+        throw std::runtime_error("Failed to create AEPsychThresholdContourGenerator instance");
     }
 
     return pColorGenerator;
