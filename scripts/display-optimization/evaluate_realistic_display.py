@@ -978,7 +978,7 @@ def plot_pareto_front(pareto_results: List[dict], output_dir: Path, gamma: float
 
     real_display_points: list of dicts with keys 'label', 'f_tetra', 'f_pop', 'led_peaks'.
     """
-    from TetriumColor.Visualization.PlotStyle import apply_style, SINGLE_COL, DOUBLE_COL
+    from TetriumColor.Plotting.PlotStyle import apply_style, SINGLE_COL, DOUBLE_COL
     apply_style()
 
     betas = [r['beta'] for r in pareto_results]
@@ -1064,7 +1064,7 @@ def plot_combined_summary(ideal_display: PopulationDisplay,
                           real_display_points: Optional[List[dict]] = None):
     """Combined figure: ideal display spectra (top-left), real display spectra (bottom-left),
     pareto front (right column spanning both rows)."""
-    from TetriumColor.Visualization.PlotStyle import apply_style, DOUBLE_COL
+    from TetriumColor.Plotting.PlotStyle import apply_style, DOUBLE_COL
     apply_style()
 
     fig = plt.figure(figsize=(DOUBLE_COL, DOUBLE_COL * 0.5))

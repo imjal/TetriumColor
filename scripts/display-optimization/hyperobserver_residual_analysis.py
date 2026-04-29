@@ -34,7 +34,7 @@ import seaborn as sns
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from TetriumColor.Observer.Observer import Observer
-from TetriumColor.Visualization.PlotStyle import (
+from TetriumColor.Plotting.PlotStyle import (
     apply_style, COLORS as CONE_COLORS, WAVELENGTHS, ALL_PEAKS,
     SINGLE_COL, build_observers,
 )

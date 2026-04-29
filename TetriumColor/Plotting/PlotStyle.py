@@ -2,7 +2,7 @@
 Shared plot style for publication figures (ACM SIGGRAPH / acmart.cls).
 
 Usage:
-    from TetriumColor.Visualization.PlotStyle import apply_style, COLORS, WAVELENGTHS, build_observers
+    from TetriumColor.Plotting.PlotStyle import apply_style, COLORS, WAVELENGTHS, build_observers
 
     apply_style()  # call once at module level
 """
@@ -44,16 +44,14 @@ COLORS = {
 # SIGGRAPH column widths (inches)
 SINGLE_COL = 3.33
 DOUBLE_COL = 7.0
-FULL_PAGE = 7.5  # full text width including margins for wide figures
-
 
 def apply_style():
     """Apply the shared publication plot style.
 
-    Uses Linux Biolinum (sans-serif) via LaTeX for consistent rendering.
+    Uses explicit point sizes so figure text matches the LaTeX document when
+    the generated figure width is included at the same width in the paper.
     """
     sns.set_style("whitegrid")
-    sns.set_context("paper", font_scale=1.3)
     plt.rcParams.update({
         'text.usetex': True,
         'text.latex.preamble': (
@@ -62,7 +60,26 @@ def apply_style():
             r'\renewcommand{\familydefault}{\sfdefault}'
         ),
         'font.family': 'sans-serif',
+        'font.size': 6,
+        'axes.labelsize': 6,
+        'axes.titlesize': 8,
+        'xtick.labelsize': 6,
+        'ytick.labelsize': 6,
+        'legend.fontsize': 6,
+        'figure.titlesize': 8,
+        'axes.linewidth': 0.6,
+        'grid.linewidth': 0.4,
+        'lines.linewidth': 1.0,
+        'lines.markersize': 3.5,
+        'xtick.major.width': 0.6,
+        'ytick.major.width': 0.6,
+        'xtick.major.size': 2.5,
+        'ytick.major.size': 2.5,
+        'savefig.dpi': 300,
+        'figure.dpi': 150,
     })
+
+    sns.set_style("ticks")   
 
 
 def build_observers(wavelengths=None) -> dict:

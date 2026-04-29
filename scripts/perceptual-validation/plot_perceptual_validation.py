@@ -37,7 +37,7 @@ from matplotlib.gridspec import GridSpec
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from TetriumColor.Visualization.PlotStyle import apply_style, DOUBLE_COL
+from TetriumColor.Plotting.PlotStyle import apply_style, DOUBLE_COL
 from TetriumColor.Observer.Observer import Observer
 from TetriumColor.Observer import Cone, Spectra
 from TetriumColor import ColorSpace, ColorSpaceType

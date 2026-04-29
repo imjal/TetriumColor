@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 try:
-    from TetriumColor.Visualization.PlotStyle import apply_style as shared_apply_style
+    from TetriumColor.Plotting.PlotStyle import apply_style as shared_apply_style
 except Exception:
     shared_apply_style = None
 

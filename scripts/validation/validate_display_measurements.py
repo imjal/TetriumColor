@@ -98,18 +98,23 @@ def validate_measurements(
     for obs_data in config['observers']:
         genotype = tuple(sorted(obs_data['genotype']))
         obs_idx = obs_data['observer_index']
+        observer_metameric_axis = obs_data.get('metameric_axis', metameric_axis)
         observer = observer_genotypes.get_observer_for_peaks(
             genotype, degree=VALIDATION_OBSERVER_DEGREE)
 
         # Create observer-specific ColorSpace with display primaries
-        color_space = ColorSpace(observer, display_primaries=primaries, metameric_axis=metameric_axis)
+        color_space = ColorSpace(
+            observer,
+            display_primaries=primaries,
+            metameric_axis=observer_metameric_axis)
 
-        # Determine Q index in the sorted LMSQ ordering
+        # Determine the resolved validation axis in the sorted LMSQ ordering.
         sorted_with_s = tuple(sorted((420,) + genotype))
-        q_index = sorted_with_s.index(547)
+        q_index = observer_metameric_axis
         lms_indices = [i for i in range(len(sorted_with_s)) if i != q_index]
+        q_peak = sorted_with_s[q_index]
 
-        print(f"\nObserver {obs_idx}: genotype={genotype}, Q at index {q_index}")
+        print(f"\nObserver {obs_idx}: genotype={genotype}, validation axis {q_index} ({q_peak} nm)")
         print(f"  Using observer-specific ColorSpace for BGYR→BGOR conversion")
 
         for metamer in obs_data['metamers']:

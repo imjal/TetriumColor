@@ -97,9 +97,11 @@ def convert_bgyr_to_bgor(
         # Create observer-specific ColorSpace with display primaries
         observer = observer_genotypes.get_observer_for_peaks(
             genotype, degree=VALIDATION_OBSERVER_DEGREE)
-        metameric_axis = config['metadata'].get('metameric_axis', 2)
+        metameric_axis = obs_data.get(
+            'metameric_axis',
+            config['metadata'].get('metameric_axis', 2))
         color_space = ColorSpace(observer, display_primaries=primaries, metameric_axis=metameric_axis)
-        print(f"  Created observer-specific ColorSpace for conversion")
+        print(f"  Created observer-specific ColorSpace for conversion using axis {metameric_axis}")
 
         # Convert each metamer pair
         for metamer in obs_data['metamers']:

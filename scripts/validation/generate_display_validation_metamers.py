@@ -168,6 +168,19 @@ def _reconstruct_spectrum(bgor_weights, display_primaries, wavelengths):
     return spectrum_data
 
 
+def _resolve_metameric_axis(genotype, requested_axis: int, peak_to_test: float = 547) -> int:
+    """Resolve the validation axis to the sorted cone index of peak_to_test.
+
+    QuestColorGenerator remaps the requested Q-axis to the actual sorted cone
+    index for each genotype. Do the same here so validation metamers target the
+    same 547 nm cone even when it is not index 2.
+    """
+    peaks_with_s = sorted(set([420] + list(genotype)))
+    if peak_to_test in peaks_with_s:
+        return peaks_with_s.index(peak_to_test)
+    return requested_axis
+
+
 def generate_metamers(
     num_observers: int = 8,
     sex: str = 'both',
@@ -289,12 +302,22 @@ def generate_metamers(
     for observer_idx, (genotype, probability) in enumerate(zip(genotypes, probabilities)):
         print(f"Processing observer {observer_idx+1}/{num_observers}: {genotype}")
 
+        observer_metameric_axis = _resolve_metameric_axis(genotype, metameric_axis)
+        peaks_with_s = sorted(set([420] + list(genotype)))
+        metameric_peak = peaks_with_s[observer_metameric_axis]
+
         # Create observer (add S cone at 420nm if not present)
         observer = observer_genotypes.get_observer_for_peaks(
             genotype, degree=VALIDATION_OBSERVER_DEGREE)
 
         # Create ColorSpace with display primaries (always use DISP space)
-        color_space = ColorSpace(observer, display_primaries=display_primaries, metameric_axis=metameric_axis)
+        color_space = ColorSpace(
+            observer,
+            display_primaries=display_primaries,
+            metameric_axis=observer_metameric_axis)
+        print(
+            f"  Requested axis={metameric_axis}; resolved validation axis="
+            f"{observer_metameric_axis} ({metameric_peak} nm)")
 
         try:
             if use_display_midpoint:
@@ -302,7 +325,7 @@ def generate_metamers(
                 # This matches the background used by GeneticColorGenerator and QuestColorGenerator.
                 point = np.ones(color_space.dim) * 0.5
                 inside_disp, outside_disp, _ = color_space.get_maximal_pair_in_disp_from_pt(
-                    point, metameric_axis=metameric_axis, proportion=proportion,
+                    point, metameric_axis=observer_metameric_axis, proportion=proportion,
                     output_space=ColorSpaceType.DISP)
                 metamers_in_disp_space = np.array([[inside_disp, outside_disp]])
                 disp_pair = np.array([inside_disp, outside_disp])
@@ -321,7 +344,7 @@ def generate_metamers(
                     luminance=luminance,
                     saturation=saturation,
                     cube_idx=cube_face,
-                    metameric_axis=metameric_axis
+                    metameric_axis=observer_metameric_axis
                 )
                 effective_grid_size = grid_size
                 print(f"  Generated {len(metamers_in_disp_space)} metamer pairs in DISP space")
@@ -354,14 +377,14 @@ def generate_metamers(
                 cone_1 = cones[i, 0]
                 cone_2 = cones[i, 1]
 
-                # Calculate metamer difference (Q channel)
-                metamer_diff = abs(cone_1[metameric_axis] - cone_2[metameric_axis])
+                # Calculate metamer difference in the resolved validation channel
+                metamer_diff = abs(cone_1[observer_metameric_axis] - cone_2[observer_metameric_axis])
 
                 # Nominal observer d_lms (excluding metameric axis)
                 n_cones = len(cone_1)
                 avg = np.maximum((cone_1 + cone_2) / 2.0, 1e-10)
                 delta = (cone_1 - cone_2) / avg
-                lms_idx = [j for j in range(n_cones) if j != metameric_axis]
+                lms_idx = [j for j in range(n_cones) if j != observer_metameric_axis]
                 nominal_d_lms = float(np.sqrt(np.sum(delta[lms_idx] ** 2)))
 
                 # Convert BGOR to RGBO for output
@@ -374,7 +397,7 @@ def generate_metamers(
                 mc_result = monte_carlo_metamer_robustness(
                     peaks=genotype, wavelengths=wavelengths,
                     spectrum_1_data=spec_1, spectrum_2_data=spec_2,
-                    n_samples=mc_samples, metameric_axis=metameric_axis,
+                    n_samples=mc_samples, metameric_axis=observer_metameric_axis,
                     template='neitz', seed=seed + i,
                     mpod_mean=nom['mpod'], lens_mean=nom['lens'],
                     od_lm_mean=nom['od_lm'], od_s_mean=nom['od_s'],
@@ -386,6 +409,9 @@ def generate_metamers(
                     'cone_1': cone_1.tolist(),
                     'cone_2': cone_2.tolist(),
                     'metamer_difference': float(metamer_diff),
+                    'requested_metameric_axis': int(metameric_axis),
+                    'metameric_axis': int(observer_metameric_axis),
+                    'metameric_peak_nm': float(metameric_peak),
                     'rgbo_1': rgbo_1.tolist(),  # Original DISP values (RGBO order)
                     'rgbo_2': rgbo_2.tolist(),
                     'bgyr_1': bgyr_1.tolist(),  # Converted to BGYR for storage
@@ -403,7 +429,9 @@ def generate_metamers(
                     print(f"    RGBO2: {metamer_dict['rgbo_2']}")
                     print(f"    BGYR1: {metamer_dict['bgyr_1']}")
                     print(f"    BGYR2: {metamer_dict['bgyr_2']}")
-                    print(f"    Metamer diff ({['S', 'M', 'Q', 'L'][metameric_axis]}): {metamer_diff:.4f}")
+                    print(
+                        f"    Metamer diff (axis {observer_metameric_axis}, "
+                        f"{metameric_peak} nm): {metamer_diff:.4f}")
                     print(f"    Nominal d_lms: {nominal_d_lms:.4f}")
                     print(f"    MC population d_lms: mean={mc_result['mc_mean_d_lms']:.3f}, "
                           f"p95={mc_result['mc_p95_d_lms']:.3f}")
@@ -412,6 +440,9 @@ def generate_metamers(
                 'observer_index': observer_idx,
                 'genotype': list(genotype),
                 'probability': float(probability),
+                'requested_metameric_axis': int(metameric_axis),
+                'metameric_axis': int(observer_metameric_axis),
+                'metameric_peak_nm': float(metameric_peak),
                 'metamers': metamer_pairs
             })
 
@@ -438,10 +469,10 @@ def generate_metamers(
         description = (
             f'1 metamer pair per observer generated from display midpoint DISP [0.5,0.5,0.5,0.5] '
             f'at proportion={proportion} of the maximal metameric extent. '
-            f'Matches the background used by GeneticColorGenerator and QuestColorGenerator. '
+            f'Matches the background and per-observer 547 nm axis resolution used by QuestColorGenerator. '
             f'Generated in DISP space (RGBO), converted to BGYR for storage.'
         )
-        method = f'ColorSpace.get_maximal_pair_in_disp_from_pt(np.ones(dim)*0.5, proportion={proportion}) in DISP space, converted to BGYR via ColorSpace.convert()'
+        method = f'ColorSpace.get_maximal_pair_in_disp_from_pt(np.ones(dim)*0.5, resolved_547_axis, proportion={proportion}) in DISP space, converted to BGYR via ColorSpace.convert()'
     else:
         description = (
             f'Grid of {grid_size}×{grid_size} metamer pairs per observer. '
@@ -461,7 +492,13 @@ def generate_metamers(
             'luminance': None if use_display_midpoint else luminance,
             'saturation': None if use_display_midpoint else saturation,
             'cube_face': None if use_display_midpoint else cube_face,
+            'requested_metameric_axis': metameric_axis,
             'metameric_axis': metameric_axis,
+            'metameric_axis_note': (
+                'Legacy fallback only. New configs store the resolved per-observer '
+                '547 nm validation axis in each observer/metamer as metameric_axis.'
+            ),
+            'metameric_peak_nm': 547,
             'observer_degree': VALIDATION_OBSERVER_DEGREE,
             'seed': seed,
             'sampling_space': 'RGBO',

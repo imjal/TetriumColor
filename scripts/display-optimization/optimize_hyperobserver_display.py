@@ -52,7 +52,7 @@ import matplotlib.pyplot as plt
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from TetriumColor.Observer.Observer import Observer
 from TetriumColor.Observer.Spectra import Spectra
-from TetriumColor.Visualization.PlotStyle import (
+from TetriumColor.Plotting.PlotStyle import (
     apply_style, COLORS, WAVELENGTHS as STYLE_WL,
     SINGLE_COL, DOUBLE_COL, build_observers,
 )
