@@ -39,6 +39,8 @@ from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
+VALIDATION_OBSERVER_DEGREE = 2.0
+
 # Hyperobserver cone info
 HYPER_PEAKS = [420, 530, 533, 536, 547, 551, 552, 553, 555, 556, 556.5, 559]
 HYPER_CONE_LABELS = [
@@ -240,7 +242,8 @@ def generate_summary(
 
     # Build hyperobserver and trichromat for sRGB rendering
     print("Building hyperobserver (12D)...")
-    hyperobs = Observer.hyperobserver(wavelengths=wavelengths)
+    hyperobs = Observer.hyperobserver(
+        wavelengths=wavelengths, degree=VALIDATION_OBSERVER_DEGREE)
     trichromat = Observer.trichromat(wavelengths=wavelengths)
     trichromat_cs = ColorSpace(trichromat, display_primaries=primaries, metameric_axis=metameric_axis)
 
@@ -266,7 +269,8 @@ def generate_summary(
         genotype_with_q = tuple(sorted(ml_peaks + (547,)))
         genotype_ml = tuple(sorted(ml_peaks))
 
-        observer = observer_genotypes.get_observer_for_peaks(genotype_with_q)
+        observer = observer_genotypes.get_observer_for_peaks(
+            genotype_with_q, degree=VALIDATION_OBSERVER_DEGREE)
         color_space = ColorSpace(observer, display_primaries=primaries, metameric_axis=metameric_axis)
         scaling_factor = color_space._disp_metadata['scaling_factor']
 
@@ -402,7 +406,8 @@ def generate_summary(
     print("Building per-observer trichromat color spaces...")
     observer_trichromats = []
     for od in observer_data:
-        obs_tri = observer_genotypes.get_observer_for_peaks(od['ml_peaks'])
+        obs_tri = observer_genotypes.get_observer_for_peaks(
+            od['ml_peaks'], degree=VALIDATION_OBSERVER_DEGREE)
         cs_tri = ColorSpace(obs_tri, display_primaries=primaries, metameric_axis=metameric_axis)
         observer_trichromats.append((obs_tri, cs_tri))
 

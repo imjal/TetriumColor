@@ -31,6 +31,8 @@ import seaborn as sns
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
+VALIDATION_OBSERVER_DEGREE = 2.0
+
 sns.set_style("whitegrid")
 sns.set_context("paper", font_scale=1.3)
 sns.set_palette("husl")
@@ -96,7 +98,8 @@ def validate_measurements(
     for obs_data in config['observers']:
         genotype = tuple(sorted(obs_data['genotype']))
         obs_idx = obs_data['observer_index']
-        observer = observer_genotypes.get_observer_for_peaks(genotype)
+        observer = observer_genotypes.get_observer_for_peaks(
+            genotype, degree=VALIDATION_OBSERVER_DEGREE)
 
         # Create observer-specific ColorSpace with display primaries
         color_space = ColorSpace(observer, display_primaries=primaries, metameric_axis=metameric_axis)
@@ -312,12 +315,14 @@ def validate_measurements(
     config_observer_list = []  # list of (obs_idx, peaks_tuple, Observer)
     for obs_data in config['observers']:
         g = tuple(sorted(obs_data['genotype']))
-        obs = observer_genotypes.get_observer_for_peaks(g)
+        obs = observer_genotypes.get_observer_for_peaks(
+            g, degree=VALIDATION_OBSERVER_DEGREE)
         config_observer_list.append((obs_data['observer_index'], g, obs))
 
     # Build the 12D hyperobserver once
     print("  Building hyperobserver (12D)...")
-    hyperobs = Observer.hyperobserver(wavelengths=wavelengths)
+    hyperobs = Observer.hyperobserver(
+        wavelengths=wavelengths, degree=VALIDATION_OBSERVER_DEGREE)
 
     for pair_data in all_pair_data:
         fname_a = _plot_all_observers_bars(pair_data, config_observer_list, plots_path)

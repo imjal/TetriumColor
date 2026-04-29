@@ -20,6 +20,8 @@ import sys
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
+VALIDATION_OBSERVER_DEGREE = 2.0
+
 
 def convert_bgyr_to_bgor(
     metamers_config_path: str,
@@ -93,7 +95,8 @@ def convert_bgyr_to_bgor(
         print(f"Processing observer {obs_data['observer_index']}: {genotype} (Q at index {q_index})")
 
         # Create observer-specific ColorSpace with display primaries
-        observer = observer_genotypes.get_observer_for_peaks(genotype)
+        observer = observer_genotypes.get_observer_for_peaks(
+            genotype, degree=VALIDATION_OBSERVER_DEGREE)
         metameric_axis = config['metadata'].get('metameric_axis', 2)
         color_space = ColorSpace(observer, display_primaries=primaries, metameric_axis=metameric_axis)
         print(f"  Created observer-specific ColorSpace for conversion")

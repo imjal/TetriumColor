@@ -26,6 +26,8 @@ import sys
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
+VALIDATION_OBSERVER_DEGREE = 2.0
+
 
 def monte_carlo_metamer_robustness(
     peaks, wavelengths, spectrum_1_data, spectrum_2_data,
@@ -49,8 +51,7 @@ def monte_carlo_metamer_robustness(
         OD_LM: Uniform(od_lm_mean - half_range, od_lm_mean + half_range)
         OD_S:  Uniform(od_s_mean - half_range, od_s_mean + half_range)
 
-    Defaults are centered on the nominal observer used in get_observer_for_peaks()
-    at 4 degrees: lens=1.0, macular=0.9089, od_lm=0.485, od_s=0.3875.
+    Defaults are centered on the nominal observer degree used for validation.
 
     Returns dict with noise-weighted LMS cone-distance statistics (d_lms)
     across the sampled observers. d_lms > 1 means ~1 JND match breakdown.
@@ -179,6 +180,7 @@ def generate_metamers(
     primaries_path: str = None,
     mc_samples: int = 1000,
     use_display_midpoint: bool = True,
+    proportion: float = 0.8,
 ):
     """
     Generate fixed metamer pairs for validation using ColorSampler.
@@ -246,7 +248,7 @@ def generate_metamers(
     print(f"Generating metamer grid in DISPLAY PRIMARY space (RGBO)")
 
     # Compute degree-adjusted nominal observer parameters (must match Cone.cone internals)
-    nom = _nominal_observer_params(degree=4.0)
+    nom = _nominal_observer_params(degree=VALIDATION_OBSERVER_DEGREE)
 
     if use_display_midpoint:
         print(f"Top {num_observers} observers using display midpoint [0.5, 0.5, 0.5, 0.5]...")
@@ -288,7 +290,8 @@ def generate_metamers(
         print(f"Processing observer {observer_idx+1}/{num_observers}: {genotype}")
 
         # Create observer (add S cone at 420nm if not present)
-        observer = observer_genotypes.get_observer_for_peaks(genotype)
+        observer = observer_genotypes.get_observer_for_peaks(
+            genotype, degree=VALIDATION_OBSERVER_DEGREE)
 
         # Create ColorSpace with display primaries (always use DISP space)
         color_space = ColorSpace(observer, display_primaries=display_primaries, metameric_axis=metameric_axis)
@@ -299,7 +302,7 @@ def generate_metamers(
                 # This matches the background used by GeneticColorGenerator and QuestColorGenerator.
                 point = np.ones(color_space.dim) * 0.5
                 inside_disp, outside_disp, _ = color_space.get_maximal_pair_in_disp_from_pt(
-                    point, metameric_axis=metameric_axis, proportion=1.0,
+                    point, metameric_axis=metameric_axis, proportion=proportion,
                     output_space=ColorSpaceType.DISP)
                 metamers_in_disp_space = np.array([[inside_disp, outside_disp]])
                 disp_pair = np.array([inside_disp, outside_disp])
@@ -433,11 +436,12 @@ def generate_metamers(
     # Create output structure
     if use_display_midpoint:
         description = (
-            f'1 metamer pair per observer generated from display midpoint DISP [0.5,0.5,0.5,0.5]. '
+            f'1 metamer pair per observer generated from display midpoint DISP [0.5,0.5,0.5,0.5] '
+            f'at proportion={proportion} of the maximal metameric extent. '
             f'Matches the background used by GeneticColorGenerator and QuestColorGenerator. '
             f'Generated in DISP space (RGBO), converted to BGYR for storage.'
         )
-        method = 'ColorSpace.get_maximal_pair_in_disp_from_pt(np.ones(dim)*0.5) in DISP space, converted to BGYR via ColorSpace.convert()'
+        method = f'ColorSpace.get_maximal_pair_in_disp_from_pt(np.ones(dim)*0.5, proportion={proportion}) in DISP space, converted to BGYR via ColorSpace.convert()'
     else:
         description = (
             f'Grid of {grid_size}×{grid_size} metamer pairs per observer. '
@@ -453,10 +457,12 @@ def generate_metamers(
             'sex': sex,
             'grid_size': 1 if use_display_midpoint else grid_size,
             'use_display_midpoint': use_display_midpoint,
+            'proportion': proportion if use_display_midpoint else None,
             'luminance': None if use_display_midpoint else luminance,
             'saturation': None if use_display_midpoint else saturation,
             'cube_face': None if use_display_midpoint else cube_face,
             'metameric_axis': metameric_axis,
+            'observer_degree': VALIDATION_OBSERVER_DEGREE,
             'seed': seed,
             'sampling_space': 'RGBO',
             'storage_space': 'BGYR',
@@ -469,7 +475,7 @@ def generate_metamers(
             'method': method,
             'mc_samples': mc_samples,
             'mc_params': {
-                'note': 'means are degree-adjusted to match nominal observer at 4 deg',
+                'note': f'means are degree-adjusted to match nominal observer at {VALIDATION_OBSERVER_DEGREE:g} deg',
                 'mpod': {'mean': nom['mpod'], 'std': 0.25, 'min': 0.0, 'max': 2.0},
                 'lens': {'mean': nom['lens'], 'half_range_frac': 0.25},
                 'od_lm': {'mean': nom['od_lm'], 'half_range': 0.1},
@@ -579,6 +585,14 @@ Example:
         help='Use display midpoint [0.5,0.5,0.5,0.5] as starting point (default: on). '
              'Pass --no-use-display-midpoint for legacy cubemap grid sampling.'
     )
+    parser.add_argument(
+        '--proportion',
+        type=float,
+        default=0.8,
+        help='Fraction of the maximal metameric extent to use (default: 0.8). '
+             'Values < 1.0 keep metamers away from the gamut boundary, making them '
+             'robust to day-to-day primaries drift. Only used with --use-display-midpoint.'
+    )
 
     args = parser.parse_args()
 
@@ -595,6 +609,7 @@ Example:
         primaries_path=args.primaries_path,
         mc_samples=args.mc_samples,
         use_display_midpoint=args.use_display_midpoint,
+        proportion=args.proportion,
     )
 
     # Save to file
