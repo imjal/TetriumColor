@@ -646,7 +646,9 @@ class ObserverGenotypes:
         """
         return self.get_genotypes_covering_probability(threshold_probability, sex)
 
-    def get_observer_for_peaks(self, peaks: Tuple[float, ...], od: float = 0.5, degree: float = 4.0) -> Observer:
+    def get_observer_for_peaks(
+            self, peaks: Tuple[float, ...], od: float = 0.5,
+            degree: float = 4.0, illuminant=None) -> Observer:
         """
         Create an Observer object for specific peak wavelengths, with sorted peaks.
 
@@ -670,7 +672,7 @@ class ObserverGenotypes:
                 cone = Cone.cone(peak, wavelengths=self.wavelengths, template='neitz', od=od, degree=degree)
             cones.append(cone)
 
-        return Observer(cones, illuminant=None)
+        return Observer(cones, illuminant=illuminant)
 
     def get_color_space_for_peaks(self, peaks: Tuple[float, ...], **kwargs) -> ColorSpace:
         """
@@ -686,8 +688,10 @@ class ObserverGenotypes:
         # Extract degree from kwargs if provided (for observer creation)
         degree = kwargs.pop('degree', 4.0)
         od = kwargs.pop('od', 0.5)
+        illuminant = kwargs.pop('illuminant', None)
 
-        observer = self.get_observer_for_peaks(peaks, od=od, degree=degree)
+        observer = self.get_observer_for_peaks(
+            peaks, od=od, degree=degree, illuminant=illuminant)
         return ColorSpace(observer, **kwargs)
 
     def get_observers_by_probability(self, sex: str = 'male') -> List[Observer]:

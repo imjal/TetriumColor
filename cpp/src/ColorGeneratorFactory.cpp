@@ -24,7 +24,8 @@ PyObject* ColorGeneratorFactory::CreateQuestColorGenerator(
     bool bipolar,
     float degree,
     int mcs_k,
-    const std::vector<int>& observer_indices
+    const std::vector<int>& observer_indices,
+    const std::string& color_picking_space
 )
 {
     // Load primaries from CSV first
@@ -113,6 +114,9 @@ PyObject* ColorGeneratorFactory::CreateQuestColorGenerator(
     PyDict_SetItemString(pKwargs, "degree", PyFloat_FromDouble(degree));
     PyDict_SetItemString(pKwargs, "mcs_k", PyLong_FromLong(mcs_k));
     PyDict_SetItemString(pKwargs, "observer_indices", pObserverIndices);
+    PyDict_SetItemString(
+        pKwargs, "color_picking_space", PyUnicode_FromString(color_picking_space.c_str())
+    );
 
     PyObject* pArgs = PyTuple_New(2);
     PyTuple_SetItem(pArgs, 0, PyUnicode_FromString(sex.c_str()));
@@ -367,7 +371,8 @@ PyObject* ColorGeneratorFactory::CreateBipartiteFieldGenerator(
 PyObject* ColorGeneratorFactory::CreateGaussianBlobGenerator(
     PyObject* color_generator,
     int seed,
-    int size
+    int size,
+    float blob_size
 )
 {
     if (!color_generator) {
@@ -391,6 +396,7 @@ PyObject* ColorGeneratorFactory::CreateGaussianBlobGenerator(
     PyObject* pKwargs = PyDict_New();
     PyDict_SetItemString(pKwargs, "seed", PyLong_FromLong(seed));
     PyDict_SetItemString(pKwargs, "size", PyLong_FromLong(size));
+    PyDict_SetItemString(pKwargs, "blob_size", PyFloat_FromDouble(blob_size));
 
     PyObject* pArgs = PyTuple_New(1);
     Py_INCREF(color_generator);

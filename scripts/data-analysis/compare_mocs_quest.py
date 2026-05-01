@@ -1,11 +1,11 @@
 """
-Compare MOCS (Genetic) vs Quest trial data for a given subject.
+Compare MOCS (Genetic) and/or Quest trial data for a given subject.
 
 Automatically finds the latest Genetic and Quest trial files for the subject,
 then for each genotype × axis plots:
   1. MOCS: mean accuracy per fixed intensity bucket
   2. Quest: raw 0/1 scatter + fitted Weibull psychometric function
-  3. Both overlaid
+  3. Both overlaid when both files are present
 
 Filename convention: {subject_id}_{Genetic|Quest}_{...}_{YYYYMMDD_HHMMSS_mmm}.csv
 
@@ -106,11 +106,44 @@ def fit_weibull(intensities, corrects):
 
 # ── load ───────────────────────────────────────────────────────────────────────
 def load_trials(path: Path) -> pd.DataFrame:
-    df = pd.read_csv(path)
+    df = read_trial_scalar_columns(path)
     df["genotype_key"] = df.apply(
         lambda r: format_genotype_key(row_genotype_peaks(r)), axis=1
     )
     df["axis_peak_nm"] = df.apply(axis_peak_from_row, axis=1)
+    return df
+
+
+def read_trial_scalar_columns(path: Path) -> pd.DataFrame:
+    """Read trial CSV columns needed for analysis.
+
+    Some recent logs include list-valued Quest metadata written without CSV
+    quoting, which makes normal CSV parsers shift later columns. The columns
+    used by this analysis are all scalar and appear before those list fields, so
+    read that stable prefix directly.
+    """
+    with open(path, "r", newline="") as f:
+        header = f.readline().rstrip("\n").split(",")
+        if "color_picking_space" in header:
+            prefix_len = header.index("color_picking_space") + 1
+        else:
+            prefix_len = len(header)
+        prefix_header = header[:prefix_len]
+
+        rows = []
+        for line in f:
+            line = line.rstrip("\n")
+            if not line:
+                continue
+            parts = line.split(",", maxsplit=prefix_len - 1)
+            if len(parts) < prefix_len:
+                parts.extend([""] * (prefix_len - len(parts)))
+            rows.append(parts[:prefix_len])
+
+    df = pd.DataFrame(rows, columns=prefix_header)
+    for col in ("genotype_1", "genotype_2", "genotype_3", "metameric_axis", "correct", "intensity"):
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
     return df
 
 
@@ -248,51 +281,58 @@ def plot_panel(ax, mocs_group, quest_group, n_quest_bins=5):
     # ax.legend(fontsize=6, loc="upper left", frameon=True, framealpha=0.85)
 
 
-def legend_handles():
-    return [
-        Patch(
-            facecolor=MOCS_COLOR,
-            edgecolor=MOCS_COLOR,
-            alpha=0.35,
-            label="MOCS binned",
-        ),
-        Line2D(
-            [0], [0],
-            marker="o",
-            color=MOCS_COLOR,
-            lw=1.6,
-            markersize=4,
-            label="MOCS mean",
-        ),
-        Patch(
-            facecolor=QUEST_COLOR,
-            edgecolor=QUEST_COLOR,
-            alpha=0.35,
-            label="Quest binned",
-        ),
-        Line2D(
-            [0], [0],
-            marker="o",
-            color=QUEST_COLOR,
-            linestyle="None",
-            alpha=0.3,
-            markersize=4,
-            label="Quest trials",
-        ),
-        Line2D(
-            [0], [0],
-            color=QUEST_COLOR,
-            lw=1.8,
-            label="Quest Weibull",
-        ),
-        Line2D(
-            [0], [0],
-            color=QUEST_COLOR,
-            linestyle="--",
-            lw=1.0,
-            alpha=0.8,
-            label="Quest threshold",
-        ),
+def legend_handles(include_mocs=True, include_quest=True):
+    handles = []
+    if include_mocs:
+        handles.extend([
+            Patch(
+                facecolor=MOCS_COLOR,
+                edgecolor=MOCS_COLOR,
+                alpha=0.35,
+                label="MOCS binned",
+            ),
+            Line2D(
+                [0], [0],
+                marker="o",
+                color=MOCS_COLOR,
+                lw=1.6,
+                markersize=4,
+                label="MOCS mean",
+            ),
+        ])
+    if include_quest:
+        handles.extend([
+            Patch(
+                facecolor=QUEST_COLOR,
+                edgecolor=QUEST_COLOR,
+                alpha=0.35,
+                label="Quest binned",
+            ),
+            Line2D(
+                [0], [0],
+                marker="o",
+                color=QUEST_COLOR,
+                linestyle="None",
+                alpha=0.3,
+                markersize=4,
+                label="Quest trials",
+            ),
+            Line2D(
+                [0], [0],
+                color=QUEST_COLOR,
+                lw=1.8,
+                label="Quest Weibull",
+            ),
+            Line2D(
+                [0], [0],
+                color=QUEST_COLOR,
+                linestyle="--",
+                lw=1.0,
+                alpha=0.8,
+                label="Quest threshold",
+            ),
+        ])
+    handles.extend([
         Line2D(
             [0], [0],
             color=NEUTRAL_COLOR,
@@ -309,14 +349,23 @@ def legend_handles():
             alpha=0.6,
             label=f"Criterion ({CRITERION:.2f})",
         ),
-    ]
+    ])
+    return handles
 
 
 # ── main figure ───────────────────────────────────────────────────────────────
 def make_figure(subject, mocs_df, quest_df, output_dir):
+    has_mocs = mocs_df is not None and len(mocs_df) > 0
+    has_quest = quest_df is not None and len(quest_df) > 0
+
+    key_sets = []
+    if has_quest:
+        key_sets.append(set(zip(quest_df["genotype_key"], quest_df["metameric_axis"])))
+    if has_mocs:
+        key_sets.append(set(zip(mocs_df["genotype_key"], mocs_df["metameric_axis"])))
+
     panel_keys = sorted(
-        set(zip(quest_df["genotype_key"], quest_df["metameric_axis"]))
-        | set(zip(mocs_df["genotype_key"], mocs_df["metameric_axis"]))
+        set().union(*key_sets) if key_sets else set()
     )
     if not panel_keys:
         print("No genotype/axis data to plot.")
@@ -344,14 +393,21 @@ def make_figure(subject, mocs_df, quest_df, output_dir):
         col = panel_idx % n_cols
         ax = grid[row][col]
 
-        q_grp = quest_df[
-            (quest_df["genotype_key"] == geno) &
-            (quest_df["metameric_axis"] == axis)
-        ]
-        m_grp = mocs_df[
-            (mocs_df["genotype_key"] == geno) &
-            (mocs_df["metameric_axis"] == axis)
-        ]
+        if has_quest:
+            q_grp = quest_df[
+                (quest_df["genotype_key"] == geno) &
+                (quest_df["metameric_axis"] == axis)
+            ]
+        else:
+            q_grp = pd.DataFrame()
+
+        if has_mocs:
+            m_grp = mocs_df[
+                (mocs_df["genotype_key"] == geno) &
+                (mocs_df["metameric_axis"] == axis)
+            ]
+        else:
+            m_grp = pd.DataFrame()
 
         plot_panel(
             ax,
@@ -379,7 +435,7 @@ def make_figure(subject, mocs_df, quest_df, output_dir):
     for spine in legend_ax.spines.values():
         spine.set_visible(False)
     legend_ax.legend(
-        handles=legend_handles(),
+        handles=legend_handles(include_mocs=has_mocs, include_quest=has_quest),
         loc="center",
         frameon=True,
         framealpha=0.95,
@@ -396,8 +452,14 @@ def make_figure(subject, mocs_df, quest_df, output_dir):
         grid[row][col].set_visible(False)
 
     plt.tight_layout(rect=(0, 0, 1, 0.94))
-    out_png = output_dir / f"{subject}_mocs_vs_quest.png"
-    out_pdf = output_dir / f"{subject}_mocs_vs_quest.pdf"
+    if has_mocs and has_quest:
+        suffix = "mocs_vs_quest"
+    elif has_mocs:
+        suffix = "mocs"
+    else:
+        suffix = "quest"
+    out_png = output_dir / f"{subject}_{suffix}.png"
+    out_pdf = output_dir / f"{subject}_{suffix}.pdf"
     plt.savefig(out_png, dpi=300, bbox_inches="tight", facecolor="white")
     plt.savefig(out_pdf, bbox_inches="tight", facecolor="white")
     plt.close()
@@ -447,19 +509,22 @@ def main():
         return
 
     methods = all_files[subject]
-    if "Genetic" not in methods:
-        print(f"No Genetic (MOCS) file found for subject '{subject}'.")
-        return
-    if "Quest" not in methods:
-        print(f"No Quest file found for subject '{subject}'.")
+    if "Genetic" not in methods and "Quest" not in methods:
+        print(f"No Genetic (MOCS) or Quest file found for subject '{subject}'.")
         return
 
     print(f"Subject:      {subject}")
-    print(f"MOCS file:    {methods['Genetic'].name}")
-    print(f"Quest file:   {methods['Quest'].name}")
+    if "Genetic" in methods:
+        print(f"MOCS file:    {methods['Genetic'].name}")
+    else:
+        print("MOCS file:    not found")
+    if "Quest" in methods:
+        print(f"Quest file:   {methods['Quest'].name}")
+    else:
+        print("Quest file:   not found")
 
-    mocs_df  = load_trials(methods["Genetic"])
-    quest_df = load_trials(methods["Quest"])
+    mocs_df = load_trials(methods["Genetic"]) if "Genetic" in methods else None
+    quest_df = load_trials(methods["Quest"]) if "Quest" in methods else None
 
     make_figure(subject, mocs_df, quest_df, output_dir)
 

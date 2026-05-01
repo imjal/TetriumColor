@@ -7,8 +7,6 @@ Outputs (saved to output/observer_distributions/):
   2. trichromat_pdf.pdf  — PDF bar chart of trichromat genotypes (both sexes)
 """
 
-from TetriumColor.Visualization.PlotStyle import apply_style, SINGLE_COL, DOUBLE_COL
-from TetriumColor.Observer.ObserverGenotypes import ObserverGenotypes
 import sys
 from pathlib import Path
 
@@ -17,6 +15,9 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+from TetriumColor.Plotting.PlotStyle import apply_style, SINGLE_COL, DOUBLE_COL
+from TetriumColor.Observer.ObserverGenotypes import ObserverGenotypes
 
 apply_style()
 

@@ -401,7 +401,7 @@ class Cone(Spectra):
 
 class Observer:
     def __init__(self, sensors: List[Cone],
-                 illuminant: Optional[Spectra] = Illuminant.get('D65'),
+                 illuminant: Optional[Spectra | str] = Illuminant.get('D65'),
                  degree: Optional[float] = 2,
                  verbose: bool = False):
         self.dimension = len(sensors)
@@ -416,7 +416,11 @@ class Observer:
         # take the average of non S-cone sensors
         self.v_lambda = self.sensor_matrix[1:].sum(axis=0) / (len(self.sensors) - 1)
 
-        if illuminant is not None:
+        self.raw_illuminant = isinstance(illuminant, str) and illuminant.lower() == "raw"
+
+        if self.raw_illuminant:
+            illuminant = None
+        elif illuminant is not None:
             # illuminant = Illuminant.get('E').interpolate_values(self.wavelengths)
             illuminant = illuminant.interpolate_values(self.wavelengths)
         else:
@@ -682,6 +686,8 @@ class Observer:
     def get_whitepoint(self, wavelengths: Optional[npt.NDArray] = None):
         sensor_matrix = self.get_sensor_matrix(wavelengths)
 
+        if self.raw_illuminant:
+            return np.ones(sensor_matrix.shape[0])
         return np.matmul(sensor_matrix, self.illuminant.data)
 
     def get_wavelength_sensitivity(self, wavelengths):
@@ -716,6 +722,8 @@ class Observer:
             npt.NDArray: Normalized sensor matrix at specific wavelengths as sensors x wavelengths
         """
         sensor_matrix = self.get_sensor_matrix(wavelengths)
+        if self.raw_illuminant:
+            return sensor_matrix
         interp_illum_data = self.illuminant.interpolate_values(wavelengths).data
         whitepoint = np.matmul(sensor_matrix, interp_illum_data)
         return ((sensor_matrix * interp_illum_data).T / whitepoint).T
@@ -734,8 +742,10 @@ class Observer:
         else:
             assert data.size == self.wavelengths.size, f"Data shape {data.shape} must match wavelengths shape {self.wavelengths.shape}"
 
-        self.illuminant_data = self.illuminant.interpolate_values(self.wavelengths).data
+        if self.raw_illuminant:
+            return np.matmul(self.sensor_matrix, data)
 
+        self.illuminant_data = self.illuminant.interpolate_values(self.wavelengths).data
         observed_color = np.matmul(self.sensor_matrix, data * self.illuminant_data)
         whitepoint = np.matmul(self.sensor_matrix, self.illuminant_data)
         return np.divide(observed_color, whitepoint)

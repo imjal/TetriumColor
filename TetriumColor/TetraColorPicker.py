@@ -11,7 +11,7 @@ from TetriumColor import ColorSpace, ColorSampler, ColorSpaceType
 from TetriumColor.Observer.ObserverGenotypes import ObserverGenotypes, Observer
 from TetriumColor.Measurement import load_primaries_from_csv
 from TetriumColor.PsychoPhys.Quest import Quest
-from TetriumColor.ColorMath.SubSpaceIntersection import FindMaximumWidthAlongDirection
+from TetriumColor.ColorMath.SubSpaceIntersection import FindMaximumIn1DimDirection, FindMaximumWidthAlongDirection
 
 
 class ColorGenerator(ABC):
@@ -75,6 +75,9 @@ class QuestColorGenerator(ColorGenerator):
                  degree: float = 4.0,
                  mcs_k: int = 0,
                  observer_indices: Optional[List[int]] = None,
+                 color_picking_space: str = 'cone_contrast',
+                 adapting_background: Optional[npt.NDArray] = None,
+                 adapting_background_space: ColorSpaceType = ColorSpaceType.DISP,
                  **kwargs):
         """Initialize Quest-based color generator.
 
@@ -97,6 +100,11 @@ class QuestColorGenerator(ColorGenerator):
             observer_indices: Optional zero-based indices into the population-sorted genotype list.
                    If provided, tests exactly those genotypes instead of all genotypes up to
                    percentage_screened.
+            color_picking_space: 'cone_contrast' computes directions as cone-contrast axes
+                   relative to the adapting background. 'cone' preserves the previous raw
+                   cone-axis behavior.
+            adapting_background: Background used for cone contrast. Defaults to DISP midpoint.
+            adapting_background_space: Color space for adapting_background.
             **kwargs: Additional arguments including display_primaries
         """
         self.background_luminance = luminance
@@ -110,6 +118,21 @@ class QuestColorGenerator(ColorGenerator):
         self.bipolar = bipolar
         self.degree = degree
         self.mcs_k = mcs_k
+        self.color_picking_space = color_picking_space.lower()
+        if self.color_picking_space not in {'cone_contrast', 'cone'}:
+            raise ValueError(
+                "color_picking_space must be 'cone_contrast' or 'cone'"
+            )
+        self.adapting_background_space = (
+            ColorSpaceType(adapting_background_space.lower())
+            if isinstance(adapting_background_space, str)
+            else adapting_background_space
+        )
+        self.adapting_background = (
+            np.asarray(adapting_background, dtype=float)
+            if adapting_background is not None
+            else None
+        )
         if mcs_k > 0:
             self.mcs_proportions = [1.0] if mcs_k <= 1 else list(np.linspace(0.0, 1.0, mcs_k))
 
@@ -174,7 +197,11 @@ class QuestColorGenerator(ColorGenerator):
             color_sampler = ColorSampler(color_space, cubemap_size=5)
             self.genotype_mapping[genotype] = color_space
 
-        self.background = np.ones(dimensions[0] + 1) * 0.5
+        default_background = np.ones(dimensions[0] + 1) * 0.5
+        if adapting_background is not None and self.adapting_background_space == ColorSpaceType.DISP:
+            self.background = np.asarray(adapting_background, dtype=float)
+        else:
+            self.background = default_background
 
         # Generate sampling directions (which include max points)
         self.directions, self.direction_metadata = self._generate_directions()
@@ -207,6 +234,22 @@ class QuestColorGenerator(ColorGenerator):
         else:
             raise ValueError(f"Unknown mode: {self.mode}")
 
+    def _get_axis_direction_in_disp(
+            self,
+            color_space: ColorSpace,
+            metameric_axis: int) -> npt.NDArray:
+        """Return the requested raw-cone or cone-contrast axis in DISP space."""
+        if self.color_picking_space == 'cone':
+            return color_space.get_metameric_axis_in(
+                ColorSpaceType.DISP,
+                metameric_axis_num=metameric_axis
+            )
+        return color_space.get_cone_contrast_null_direction_in_disp(
+            metameric_axis_num=metameric_axis,
+            background=self.adapting_background,
+            background_space=self.adapting_background_space,
+        )
+
     def _generate_cone_shift_directions(self) -> Tuple[List[npt.NDArray], List[Dict]]:
         """Generate directions based on metameric axes of top observer genotypes.
 
@@ -233,24 +276,26 @@ class QuestColorGenerator(ColorGenerator):
                 else:
                     actual_axis = metameric_axis
 
-                # Get metameric direction in DISP space
-                direction = genotype_cs.get_metameric_axis_in(
-                    ColorSpaceType.DISP,
-                    metameric_axis_num=actual_axis
-                )
-
-                max_point_in_DISP, _, _ = genotype_cs.get_maximal_pair_in_disp_from_pt(
-                    self.background, metameric_axis=actual_axis, output_space=ColorSpaceType.DISP)
-
-                max_distance = np.linalg.norm(max_point_in_DISP - self.background)
+                direction = self._get_axis_direction_in_disp(genotype_cs, actual_axis)
 
                 direction = direction / np.linalg.norm(direction)
+                max_point_in_DISP, _ = np.clip(
+                    FindMaximumIn1DimDirection(
+                        self.background,
+                        direction,
+                        np.eye(genotype_cs.dim)
+                    ),
+                    0,
+                    1
+                )
+                max_distance = np.linalg.norm(max_point_in_DISP - self.background)
 
                 directions.append(direction * max_distance)
                 metadata.append({
                     'genotype': genotype,
                     'metameric_axis': actual_axis,
                     'type': 'cone_shift',
+                    'color_picking_space': self.color_picking_space,
                 })
 
         print(f"Generated {len(directions)} directions from cone shifts")
@@ -546,12 +591,42 @@ class QuestColorGenerator(ColorGenerator):
             'quest_direction_idx': int(direction_idx),
             'quest_proportion': float(proportion),
             'quest_bipolar': bool(self.bipolar),
+            'quest_color_picking_space': self.color_picking_space,
             'quest_background_disp': self.background.tolist(),
+            'quest_adapting_background': (
+                self.adapting_background.tolist()
+                if self.adapting_background is not None
+                else self.background.tolist()
+            ),
+            'quest_adapting_background_space': str(self.adapting_background_space),
             'quest_inside_disp': np.asarray(inside_disp).tolist(),
             'quest_outside_disp': np.asarray(outside_disp).tolist(),
             'quest_genotype': str(metadata.get('genotype')),
             'quest_metameric_axis': metadata.get('metameric_axis'),
         }
+        genotype = metadata.get('genotype')
+        if genotype is not None:
+            genotype_cs = self.genotype_mapping[genotype]
+            raw_delta = genotype_cs.convert(
+                np.asarray(inside_disp).reshape(1, -1),
+                ColorSpaceType.DISP,
+                ColorSpaceType.CONE
+            )[0] - genotype_cs.convert(
+                np.asarray(outside_disp).reshape(1, -1),
+                ColorSpaceType.DISP,
+                ColorSpaceType.CONE
+            )[0]
+            contrast_delta = genotype_cs.cone_contrast_delta(
+                inside_disp,
+                outside_disp,
+                background=self.adapting_background,
+                sample_space=ColorSpaceType.DISP,
+                background_space=self.adapting_background_space,
+            )
+            self._current_trial_metadata.update({
+                'quest_raw_cone_delta': raw_delta.tolist(),
+                'quest_cone_contrast_delta': contrast_delta.tolist(),
+            })
 
     def GetCurrentTrialMetadata(self) -> Dict:
         return self._current_trial_metadata
@@ -588,7 +663,8 @@ class QuestColorGenerator(ColorGenerator):
                 'trials': self.trials_completed[i],
                 'genotype': metadata.get('genotype'),
                 'metameric_axis': metadata.get('metameric_axis'),
-                'type': metadata.get('type')
+                'type': metadata.get('type'),
+                'color_picking_space': metadata.get('color_picking_space', self.color_picking_space),
             }
 
     def get_thresholds(self) -> Dict:

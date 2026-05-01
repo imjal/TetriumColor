@@ -26,7 +26,8 @@ VALIDATION_OBSERVER_DEGREE = 2.0
 def convert_bgyr_to_bgor(
     metamers_config_path: str,
     primaries_path: str,
-    output_path: str = None
+    output_path: str = None,
+    illuminant=None,
 ):
     """
     Convert BGYR metamers to BGOR display values using observer-specific transformations.
@@ -96,7 +97,7 @@ def convert_bgyr_to_bgor(
 
         # Create observer-specific ColorSpace with display primaries
         observer = observer_genotypes.get_observer_for_peaks(
-            genotype, degree=VALIDATION_OBSERVER_DEGREE)
+            genotype, degree=VALIDATION_OBSERVER_DEGREE, illuminant=illuminant)
         metameric_axis = obs_data.get(
             'metameric_axis',
             config['metadata'].get('metameric_axis', 2))
@@ -207,14 +208,13 @@ Example:
         type=str,
         help='Output CSV file path (default: stdout)'
     )
-
     args = parser.parse_args()
 
     # Convert metamers
     convert_bgyr_to_bgor(
         metamers_config_path=args.metamers,
         primaries_path=args.primaries,
-        output_path=args.output
+        output_path=args.output,
     )
 
 

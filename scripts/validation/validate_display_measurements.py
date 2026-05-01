@@ -234,6 +234,10 @@ def validate_measurements(
                 'pair_idx': pair_idx,
                 'genotype': genotype,
                 'scaling_factor': scaling_factor,
+                'background_spectrum': Spectra(
+                    wavelengths=wavelengths,
+                    data=scaling_factor * sum(0.5 * p.data for p in primaries),
+                    normalized=False),
                 'gt_cone_1': cone_1,
                 'gt_cone_2': cone_2,
                 'rgbo_1': rgbo_1,
@@ -246,71 +250,7 @@ def validate_measurements(
                 'measured_2': measured_2,
             })
 
-            # ===== PLOT: 2-panel figure per metamer pair =====
-            fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-
-            # --- Panel 1: Predicted vs Measured Spectra ---
-            ax = axes[0]
-            ax.plot(wavelengths, predicted_1.data, 'b-', lw=2, label='Predicted M1', alpha=0.8)
-            ax.plot(wavelengths, predicted_2.data, 'r-', lw=2, label='Predicted M2', alpha=0.8)
-            if measured_1 is not None:
-                ax.plot(measured_1.wavelengths, measured_1.data, 'b--', lw=2, label='Measured M1', alpha=0.8)
-                ax.plot(measured_2.wavelengths, measured_2.data, 'r--', lw=2, label='Measured M2', alpha=0.8)
-            ax.set_xlabel('Wavelength (nm)', fontsize=14, fontweight='bold')
-            ax.set_ylabel('Power', fontsize=14, fontweight='bold')
-            ax.set_title('Predicted vs Measured Spectra', fontsize=11, fontweight='bold')
-            ax.legend(loc='upper right', fontsize=8)
-            ax.grid(True, alpha=0.3, linestyle='--')
-            ax.spines['top'].set_visible(False)
-            ax.tick_params(axis='y', labelsize=10)
-
-            # --- Panel 2: LMSQ comparison ---
-            ax = axes[1]
-            cone_labels = list(sorted_with_s)
-            cone_labels_str = [f'{wl}nm' for wl in cone_labels]
-            # Mark Q cone
-            cone_labels_str[q_index] = f'{cone_labels[q_index]}nm (Q)'
-
-            x = np.arange(len(sorted_with_s))
-            w = 0.15
-            ax.bar(x - 2.5*w, cone_1, w, label='GT M1', color='forestgreen',
-                   alpha=0.9, edgecolor='black', linewidth=0.5)
-            ax.bar(x - 1.5*w, cone_2, w, label='GT M2', color='darkorange',
-                   alpha=0.9, edgecolor='black', linewidth=0.5)
-            ax.bar(x - 0.5*w, pred_lmsq_1, w, label='Pred M1', color='steelblue',
-                   alpha=0.8, edgecolor='black', linewidth=0.5)
-            ax.bar(x + 0.5*w, pred_lmsq_2, w, label='Pred M2', color='indianred',
-                   alpha=0.8, edgecolor='black', linewidth=0.5)
-            if measured_1 is not None:
-                ax.bar(x + 1.5*w, meas_lmsq_1, w, label='Meas M1', color='steelblue',
-                       alpha=0.4, edgecolor='steelblue', linewidth=1.5)
-                ax.bar(x + 2.5*w, meas_lmsq_2, w, label='Meas M2', color='indianred',
-                       alpha=0.4, edgecolor='indianred', linewidth=1.5)
-            ax.set_xticks(x)
-            ax.set_xticklabels(cone_labels_str, fontsize=8)
-            ax.set_ylabel('Cone Response', fontsize=14, fontweight='bold')
-            _meas_title = (f' meas={meas_lms_rmse:.4f}\nQ diff: pred={pred_q_diff:.4f} meas={meas_q_diff:.4f}'
-                           if measured_1 is not None else '')
-            ax.set_title(
-                f'LMSQ Projection\n'
-                f'LMS RMSE: pred={pred_lms_rmse:.4f}{_meas_title}',
-                fontsize=9, fontweight='bold')
-            ax.legend(fontsize=7)
-            ax.grid(True, alpha=0.3, axis='y', linestyle='--')
-            ax.spines['top'].set_visible(False)
-            ax.tick_params(axis='y', labelsize=10)
-
-            fig.suptitle(
-                f'Observer {obs_idx} (genotype {genotype}) — Metamer Pair {pair_idx}\n'
-                f'RGBO1={rgbo_1}  RGBO2={rgbo_2}',
-                fontsize=12, fontweight='bold', y=1.02)
-            plt.tight_layout()
-            fname = plots_path / f'obs{obs_idx}_pair{pair_idx}.png'
-            # plt.savefig(fname, dpi=150, bbox_inches='tight')
-            plt.close()
-            print(f"    Saved: {fname}")
-
-    # ===== END-OF-VALIDATION: multi-observer and hyperobserver summary plots =====
+    # ===== END-OF-VALIDATION: hyperobserver cone-contrast difference plots =====
     if not all_pair_data:
         return
 
@@ -330,17 +270,9 @@ def validate_measurements(
         wavelengths=wavelengths, degree=VALIDATION_OBSERVER_DEGREE)
 
     for pair_data in all_pair_data:
-        fname_a = _plot_all_observers_bars(pair_data, config_observer_list, plots_path)
-        fname_b = _plot_hyperobserver_bars(pair_data, hyperobs, plots_path)
         fname_c = _plot_hyperobserver_diff(pair_data, hyperobs, plots_path)
-        fname_d = _plot_cone_distance_bars(pair_data, config_observer_list, plots_path)
-        fname_e = _plot_spectral_additive_residual(pair_data, plots_path)
-        print(
-            f"  Saved: {fname_a.name}  |  {fname_b.name}  |  {fname_c.name}  |  "
-            f"{fname_d.name}  |  {fname_e.name}"
-        )
+        print(f"  Saved: {fname_c.name}")
 
-    _generate_rmse_summary(all_pair_data, hyperobs, config_observer_list, plots_path)
     print(f"Summary plots saved to {plots_path}")
 
 
@@ -601,7 +533,7 @@ def _draw_rmse_panel(ax, pred_1, pred_2, pred_1r, pred_2r, meas_1, meas_2, ref_a
            edgecolor='black', linewidth=0.5, label='M2')
     ax.set_xticks(xg)
     ax.set_xticklabels(labels, fontsize=8)
-    ax.set_ylabel('RMSE (hyperobserver)', fontsize=12, fontweight='bold')
+    ax.set_ylabel('RMSE (hyperobserver cone contrast)', fontsize=12, fontweight='bold')
     ax.set_title('Pairwise\nRMSE', fontsize=9, fontweight='bold')
     ax.legend(fontsize=7)
     ax.grid(True, alpha=0.3, axis='y', linestyle='--')
@@ -783,10 +715,10 @@ def _plot_hyperobserver_diff(
     hyperobserver,
     plots_path,
 ):
-    """Difference plot (M1 - M2) in the 12D hyperobserver for predicted and measured.
+    """Cone-contrast difference plot in the 12D hyperobserver.
 
-    Two bars per cone: predicted difference and measured difference.
-    LMS cones should be ~0; the targeted Q cone should be large.
+    Middle-panel bars are |(Q_raw @ (S1 - S2)) / (Q_raw @ S0)|,
+    where S0 is the display midpoint/background spectrum.
     """
     obs_idx = pair_data['obs_idx']
     pair_idx = pair_data['pair_idx']
@@ -797,16 +729,25 @@ def _plot_hyperobserver_diff(
     pred_2_rounded = pair_data['predicted_2_rounded']
     meas_1 = pair_data['measured_1']
     meas_2 = pair_data['measured_2']
+    background = pair_data['background_spectrum']
     rgbo_1 = pair_data.get('rgbo_1')
     rgbo_2 = pair_data.get('rgbo_2')
 
-    hyper_pred_1 = hyperobserver.observe_spectras([pred_1])[0]
-    hyper_pred_2 = hyperobserver.observe_spectras([pred_2])[0]
-    hyper_pred_1_rounded = hyperobserver.observe_spectras([pred_1_rounded])[0]
-    hyper_pred_2_rounded = hyperobserver.observe_spectras([pred_2_rounded])[0]
+    def raw_cone_contrast_response(spectrum):
+        spd = spectrum.interpolate_values(hyperobserver.wavelengths).data
+        bg = background.interpolate_values(hyperobserver.wavelengths).data
+        raw = hyperobserver.sensor_matrix @ spd
+        raw_bg = hyperobserver.sensor_matrix @ bg
+        raw_bg = np.maximum(raw_bg, 1e-30)
+        return (raw - raw_bg) / raw_bg
+
+    hyper_pred_1 = raw_cone_contrast_response(pred_1)
+    hyper_pred_2 = raw_cone_contrast_response(pred_2)
+    hyper_pred_1_rounded = raw_cone_contrast_response(pred_1_rounded)
+    hyper_pred_2_rounded = raw_cone_contrast_response(pred_2_rounded)
     if meas_1 is not None:
-        hyper_meas_1 = hyperobserver.observe_spectras([meas_1])[0]
-        hyper_meas_2 = hyperobserver.observe_spectras([meas_2])[0]
+        hyper_meas_1 = raw_cone_contrast_response(meas_1)
+        hyper_meas_2 = raw_cone_contrast_response(meas_2)
         meas_diff = np.abs(hyper_meas_1 - hyper_meas_2)
     else:
         hyper_meas_1 = hyper_meas_2 = meas_diff = None
@@ -849,14 +790,14 @@ def _plot_hyperobserver_diff(
     ax_spec.spines['top'].set_visible(False)
     ax_spec.tick_params(axis='y', labelsize=10)
 
-    # --- Middle panel: absolute difference bars (Pred, Pred 8-bit, Meas) ---
+    # --- Middle panel: absolute raw cone-contrast difference bars ---
     ax.bar(x - w,     pred_diff,         w, color='steelblue', alpha=0.85,
-           edgecolor='black', linewidth=0.5, label='Pred |M1−M2|')
+           edgecolor='black', linewidth=0.5, label='Pred |Δk|')
     ax.bar(x,         pred_rounded_diff, w, color='steelblue', alpha=0.55,
-           edgecolor='steelblue', linewidth=1.2, linestyle=':', label='Pred 8-bit |M1−M2|')
+           edgecolor='steelblue', linewidth=1.2, linestyle=':', label='Pred 8-bit |Δk|')
     if meas_diff is not None:
         ax.bar(x + w, meas_diff, w, color='steelblue', alpha=0.3,
-               edgecolor='steelblue', linewidth=1.5, label='Meas |M1−M2|')
+               edgecolor='steelblue', linewidth=1.5, label='Meas |Δk|')
         # Dashed horizontal line at the max non-Q designed cone difference (measured)
         non_q_mask = designed_mask & np.array([p != 547 and p != 420 for p in hyper_peaks])
         non_q_max = meas_diff[non_q_mask].max()
@@ -875,9 +816,9 @@ def _plot_hyperobserver_diff(
             tick.set_fontweight('bold')
             tick.set_fontsize(9)
 
-    ax.set_ylabel('Absolute Cone Response Difference |M1 − M2|', fontsize=14, fontweight='bold')
+    ax.set_ylabel('Absolute Cone Contrast Difference |Δk|', fontsize=14, fontweight='bold')
     ax.set_title(
-        f'Hyperobserver |Difference| (M1−M2) — Observer {obs_idx} · Pair {pair_idx}\n'
+        f'Hyperobserver Raw Cone Contrast |Δk| — Observer {obs_idx} · Pair {pair_idx}\n'
         f'Designed for genotype {designed_genotype}\n'
         + (f'RGBO1={rgbo_1}  RGBO2={rgbo_2}' if rgbo_1 is not None else ''),
         fontsize=11, fontweight='bold')
@@ -908,14 +849,15 @@ def _plot_hyperobserver_diff(
             'obs_idx': obs_idx, 'pair_idx': pair_idx,
             'designed_genotype': str(designed_genotype),
             'cone_label': label, 'cone_peak_nm': peak, 'is_designed': bool(is_des),
-            'pred_diff':      float(pred_diff[ci]),
-            'pred_8bit_diff': float(pred_rounded_diff[ci]),
-            'meas_diff':      float(meas_diff[ci]) if meas_diff is not None else None,
+            'pred_cone_contrast_diff':      float(pred_diff[ci]),
+            'pred_8bit_cone_contrast_diff': float(pred_rounded_diff[ci]),
+            'meas_cone_contrast_diff':      float(meas_diff[ci]) if meas_diff is not None else None,
         })
     _write_csv(
         plots_path / f'obs{obs_idx}_pair{pair_idx}_hyperobserver_diff.csv',
         ['obs_idx', 'pair_idx', 'designed_genotype', 'cone_label', 'cone_peak_nm',
-         'is_designed', 'pred_diff', 'pred_8bit_diff', 'meas_diff'],
+         'is_designed', 'pred_cone_contrast_diff',
+         'pred_8bit_cone_contrast_diff', 'meas_cone_contrast_diff'],
         csv_rows)
     return fname
 

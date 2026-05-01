@@ -23,7 +23,8 @@ class ColorGeneratorFactory
         bool bipolar = false,
         float degree = 4.0f,
         int mcs_k = 0, // >0: use MCS with K equally-spaced levels instead of Quest adaptive
-        const std::vector<int>& observer_indices = {}
+        const std::vector<int>& observer_indices = {},
+        const std::string& color_picking_space = "cone_contrast"
     );
 
     // Create an AEPsychThresholdContourGenerator instance
@@ -68,7 +69,8 @@ class ColorGeneratorFactory
     static PyObject* CreateGaussianBlobGenerator(
         PyObject* color_generator,
         int seed = 42,
-        int size = 1024
+        int size = 1024,
+        float blob_size = 1.0f
     );
 
     // Get observer CDF as a vector of cumulative probabilities (one per observer,

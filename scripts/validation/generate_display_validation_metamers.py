@@ -32,6 +32,7 @@ VALIDATION_OBSERVER_DEGREE = 2.0
 def monte_carlo_metamer_robustness(
     peaks, wavelengths, spectrum_1_data, spectrum_2_data,
     n_samples=1000, metameric_axis=2, template='neitz', seed=42,
+    illuminant_data=None,
     mpod_mean=0.908875, mpod_std=0.25, mpod_min=0.0, mpod_max=2.0,
     lens_mean=1.0, lens_half_range_frac=0.25,
     od_lm_mean=0.485, od_lm_half_range=0.1,
@@ -71,8 +72,16 @@ def monte_carlo_metamer_robustness(
     lens_abs = Cone.lens_absorption.interpolate_values(wavelengths).data.copy()
     mac_abs = Cone.macular_absorption.interpolate_values(wavelengths).data.copy()
 
-    # Illuminant for white-point normalization
-    illum_data = Illuminant.get('D65').interpolate_values(wavelengths).data.copy()
+    # Illuminant for white-point normalization. Validation passes the configured
+    # observer illuminant; D65 remains the fallback for old callers. "raw" means
+    # no illuminant weighting and no white-point normalization.
+    raw_illuminant = isinstance(illuminant_data, str) and illuminant_data.lower() == 'raw'
+    if raw_illuminant:
+        illum_data = np.ones_like(wavelengths, dtype=float)
+    elif illuminant_data is None:
+        illum_data = Illuminant.get('D65').interpolate_values(wavelengths).data.copy()
+    else:
+        illum_data = np.asarray(illuminant_data, dtype=float).copy()
 
     # --- Sample physiological parameters (n_samples,) ---
     mpod = rng.normal(mpod_mean, mpod_std, n_samples).clip(mpod_min, mpod_max)
@@ -116,12 +125,15 @@ def monte_carlo_metamer_robustness(
         emax = np.maximum(emax, 1e-30)
         energy = energy / emax
 
-        # Normalize by illuminant white-point response
-        illum_response = energy @ illum_data  # (n_samples,)
-        illum_response = np.maximum(illum_response, 1e-30)
+        if raw_illuminant:
+            sensor_matrices[:, j, :] = energy
+        else:
+            # Normalize by illuminant white-point response
+            illum_response = energy @ illum_data  # (n_samples,)
+            illum_response = np.maximum(illum_response, 1e-30)
 
-        # Weight by illuminant (matching Observer.get_normalized_sensor_matrix)
-        sensor_matrices[:, j, :] = (energy * illum_data[None, :]) / illum_response[:, None]
+            # Weight by illuminant (matching Observer.get_normalized_sensor_matrix)
+            sensor_matrices[:, j, :] = (energy * illum_data[None, :]) / illum_response[:, None]
 
     # --- Compute cone responses ---
     r1 = np.einsum('scw,w->sc', sensor_matrices, spectrum_1_data)  # (n_samples, n_cones)
@@ -194,6 +206,7 @@ def generate_metamers(
     mc_samples: int = 1000,
     use_display_midpoint: bool = True,
     proportion: float = 0.8,
+    illuminant: Spectra | str | None = None,
 ):
     """
     Generate fixed metamer pairs for validation using ColorSampler.
@@ -257,6 +270,12 @@ def generate_metamers(
     from TetriumColor.Measurement.TetriumMeasurementRoutines import load_primaries_from_csv
     print(f"Loading display primaries from: {primaries_path}")
     display_primaries = load_primaries_from_csv(primaries_path, extract_zero=False, primary_order='BGOR')
+    illuminant_data = (
+        illuminant
+        if isinstance(illuminant, str)
+        else None if illuminant is None
+        else illuminant.interpolate_values(display_primaries[0].wavelengths).data
+    )
     print(f"Loaded {len(display_primaries)} primaries (BGOR order)")
     print(f"Generating metamer grid in DISPLAY PRIMARY space (RGBO)")
 
@@ -308,7 +327,7 @@ def generate_metamers(
 
         # Create observer (add S cone at 420nm if not present)
         observer = observer_genotypes.get_observer_for_peaks(
-            genotype, degree=VALIDATION_OBSERVER_DEGREE)
+            genotype, degree=VALIDATION_OBSERVER_DEGREE, illuminant=illuminant)
 
         # Create ColorSpace with display primaries (always use DISP space)
         color_space = ColorSpace(
@@ -398,6 +417,7 @@ def generate_metamers(
                     peaks=genotype, wavelengths=wavelengths,
                     spectrum_1_data=spec_1, spectrum_2_data=spec_2,
                     n_samples=mc_samples, metameric_axis=observer_metameric_axis,
+                    illuminant_data=illuminant_data,
                     template='neitz', seed=seed + i,
                     mpod_mean=nom['mpod'], lens_mean=nom['lens'],
                     od_lm_mean=nom['od_lm'], od_s_mean=nom['od_s'],
@@ -630,7 +650,6 @@ Example:
              'Values < 1.0 keep metamers away from the gamut boundary, making them '
              'robust to day-to-day primaries drift. Only used with --use-display-midpoint.'
     )
-
     args = parser.parse_args()
 
     # Generate metamers

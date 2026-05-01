@@ -20,6 +20,14 @@ def _color_generator_metadata(color_generator: ColorGenerator) -> dict:
     return {}
 
 
+def _quantize_display_image(disp_img: np.ndarray) -> np.ndarray:
+    values = np.clip(disp_img, 0.0, 1.0) * 255.0
+    yy, xx, cc = np.indices(values.shape)
+    noise = np.sin(xx * 12.9898 + yy * 78.233 + cc * 37.719) * 43758.5453
+    dither = noise - np.floor(noise) - 0.5
+    return np.clip(np.rint(values + dither), 0, 255).astype(np.uint8)
+
+
 class TestGenerator(ABC):
     def __init__(self, color_generator: ColorGenerator):
         self.color_generator = color_generator
@@ -463,10 +471,12 @@ class GaussianBlobGenerator(TestGenerator):
 
     BASE_DEGREE = 4.0
 
-    def __init__(self, color_generator: ColorGenerator, seed: int = 42, size: int = 1024):
+    def __init__(self, color_generator: ColorGenerator, seed: int = 42,
+                 size: int = 1024, blob_size: float = 1.0):
         np.random.seed(seed)
         super().__init__(color_generator)
         self.size = size
+        self.blob_size = max(float(blob_size), 0.01)
 
     def _build_cone_image(self, fg_cone, bg_cone, direction: str, degree: float,
                           lum_noise: float, s_cone_noise: float):
@@ -505,7 +515,7 @@ class GaussianBlobGenerator(TestGenerator):
 
         # Gaussian blob at one of 4 cardinal positions
         gap_px = radius * 2.0 * 0.2
-        blob_sigma = max(gap_px / 4.0, 1.0)
+        blob_sigma = max((gap_px / 4.0) * self.blob_size, 1.0)
 
         offset = radius * 0.5
         positions = {
@@ -558,11 +568,11 @@ class GaussianBlobGenerator(TestGenerator):
         disp_img = disp_flat.reshape(h, w, n_disp)
 
         if output_space == ColorSpaceType.DISP_6P:
-            rgb = np.clip(disp_img[:, :, :3] * 255.0, 0, 255).astype(np.uint8)
-            ocv = np.clip(disp_img[:, :, 3:] * 255.0, 0, 255).astype(np.uint8)
+            rgb = _quantize_display_image(disp_img[:, :, :3])
+            ocv = _quantize_display_image(disp_img[:, :, 3:])
             return Image.fromarray(rgb, 'RGB'), Image.fromarray(ocv, 'RGB')
         else:
-            srgb = np.clip(disp_img[:, :, :3] * 255.0, 0, 255).astype(np.uint8)
+            srgb = _quantize_display_image(disp_img[:, :, :3])
             img = Image.fromarray(srgb, 'RGB')
             return img, img
 
@@ -630,6 +640,7 @@ class GaussianBlobGenerator(TestGenerator):
                 'size': self.size,
                 'direction': direction,
                 'degree': degree,
+                'blob_size': self.blob_size,
                 'lum_noise': lum_noise,
                 's_cone_noise': s_cone_noise,
                 **_color_generator_metadata(self.color_generator),

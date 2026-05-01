@@ -52,6 +52,61 @@ def random_expected_tests(N, d, P):
     return P * comb(N, P) / comb(N - d, P - d)
 
 
+def worst_case_tests(P, genotype_probs, ml_peaks):
+    """
+    Worst-case tests for any single observer under the sequential decoy strategy.
+
+    Every round before the trigger costs 1 test (PASS or FAIL-no-trigger).
+    The trigger round costs P tests.  The worst-case observer triggers last:
+
+        worst_case = (K - 1) + P
+
+    where K is the total number of rounds the greedy algorithm uses.
+
+    Also returns uncovered genotypes (if any), for which classification is
+    impossible and worst-case is undefined.
+    """
+    remaining = dict(genotype_probs)
+    ml_slots = P - 2
+    K = 0
+    rounds = []
+
+    while remaining:
+        best_prob = -1
+        best_covered = None
+        best_decoy = None
+        best_ml = None
+
+        for d in ml_peaks:
+            available = [m for m in ml_peaks if m != d]
+            combos = [tuple(available)] if ml_slots >= len(available) else combinations(available, ml_slots)
+            for ml_combo in combos:
+                ml_set = set(ml_combo)
+                covered = set()
+                covered_prob = 0.0
+                for g, p in remaining.items():
+                    if d not in g and set(g).issubset(ml_set):
+                        covered.add(g)
+                        covered_prob += p
+                if covered_prob > best_prob:
+                    best_prob = covered_prob
+                    best_covered = covered
+                    best_decoy = d
+                    best_ml = ml_set
+
+        if not best_covered:
+            break
+
+        K += 1
+        for g in best_covered:
+            remaining.pop(g)
+        rounds.append({'decoy': best_decoy, 'ml_peaks': sorted(best_ml), 'round': K})
+
+    uncovered = set(remaining.keys())
+    worst = (K - 1) + P
+    return worst, K, uncovered, rounds
+
+
 def sequential_decoy_expected_tests(P, genotype_probs, ml_peaks):
     """
     Sequential strategy with |R|=1 decoy per pair.
@@ -134,16 +189,17 @@ def main():
         print(f"  {g}: {p:.4f}")
 
     # Compute for each P
-    print(f"\n{'P':>3}  {'Random':>10}  {'Genetic':>10}  {'Rounds':>6}")
-    print("-" * 36)
+    print(f"\n{'P':>3}  {'Random E':>10}  {'Genetic E':>10}  {'Worst':>7}  {'Rounds':>6}")
+    print("-" * 44)
     rows = []
     all_details = {}
     for P in range(4, 13):
         e_random = random_expected_tests(N, D, P)
         e_seq, K, details = sequential_decoy_expected_tests(P, genotype_probs, ML_PEAKS)
-        rows.append((P, e_random, e_seq, K))
+        wc = comb(N, P)
+        rows.append((P, e_random, e_seq, wc, K))
         all_details[P] = details
-        print(f"{P:>3}  {e_random:>10.1f}  {e_seq:>10.1f}  {K:>6}")
+        print(f"{P:>3}  {e_random:>10.1f}  {e_seq:>10.1f}  {wc:>7}  {K:>6}")
 
     # Print round details for a few interesting P values
     for P in [4, 6, 8]:
@@ -162,18 +218,19 @@ def main():
     print(r"    \begin{tabular}{@{}cccc@{}}")
     print(r"        \toprule")
     print(r"        $P$ & \textbf{Exp.\ Tests (Random)} & "
-          r"\textbf{Exp.\ Tests (Genetic Prior)} & Rounds\\")
+          r"\textbf{Exp.\ Tests (Genetic Prior)} & \textbf{Worst Case} & Rounds\\")
     print(r"        \midrule")
-    for P, e_random, e_seq, K in rows:
+    for P, e_random, e_seq, wc, K in rows:
         r_str = (f"{e_random:.0f}" if e_random == int(e_random)
                  else f"$\\sim$ {e_random:.0f}")
         g_str = f"{e_seq:.1f}"
-        print(f"        {P} & {r_str} & {g_str} & {K} \\\\")
+        print(f"        {P} & {r_str} & {g_str} & {wc} & {K} \\\\")
     print(r"        \bottomrule")
     print(r"    \end{tabular}")
-    print(f"    \\caption{{Expected tests for $N={N}$, $d={D}$ by number of "
-          f"primaries. Genetic prior uses greedy decoy selection with "
-          f"$|R|=1$.}}")
+    print(f"    \\caption{{Expected and worst-case tests for $N={N}$, $d={D}$ by "
+          f"number of primaries. Worst case = $\\binom{{N}}{{P}}$, the number of "
+          f"P-subsets to exhaustively test. Genetic prior uses greedy decoy "
+          f"selection with $|R|=1$.}}")
     print(r"    \label{tab:expected}")
     print(r"\end{table}")
 

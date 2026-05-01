@@ -2,7 +2,7 @@ import numpy as np
 import numpy.typing as npt
 from typing import List, Optional, Tuple
 from enum import Enum
-from scipy.linalg import orth
+from scipy.linalg import null_space, orth
 
 from TetriumColor.Observer import Observer, MaxBasisFactory, GetHeringMatrix
 from TetriumColor.Observer.Spectra import Illuminant, Spectra
@@ -144,6 +144,7 @@ class ColorSpace:
         self._cone_to_xyz = None
         self._cone_to_disp = None
         self._cone_to_bgyr = None
+        self._raw_display_to_cone = None
         self._disp_metadata = None
 
         self.disp_method = disp_method
@@ -388,6 +389,139 @@ class ColorSpace:
         if color_space_type == ColorSpaceType.VSH or color_space_type == ColorSpaceType.VSH_BGYR:
             normalized_direction = direction
             normalized_direction[1] = 1.0  # make saturation 1
+        else:
+            normalized_direction = direction / np.linalg.norm(direction)
+        return normalized_direction
+
+    def get_cone_response_for_background(
+            self,
+            background: Optional[npt.NDArray] = None,
+            background_space: ColorSpaceType = ColorSpaceType.DISP) -> npt.NDArray:
+        """Return raw cone responses for the adapting background.
+
+        Defaults to the measured display midpoint in DISP coordinates.
+        """
+        if isinstance(background_space, str):
+            background_space = ColorSpaceType(background_space.lower())
+        if background is None:
+            if background_space == ColorSpaceType.DISP and self.display_primaries is not None:
+                background = np.ones(len(self.display_primaries)) * 0.5
+            else:
+                background = np.ones(self.dim) * 0.5
+        background = np.asarray(background, dtype=float)
+        if background_space == ColorSpaceType.DISP:
+            expected_shape = (self.get_raw_display_to_cone_matrix().shape[1],)
+            if background.shape != expected_shape:
+                raise ValueError(
+                    f"DISP background must have shape {expected_shape}, got {background.shape}"
+                )
+            c0 = self.get_raw_display_to_cone_matrix() @ background
+        elif background_space == ColorSpaceType.CONE:
+            if background.shape != (self.dim,):
+                raise ValueError(
+                    f"CONE background must have shape ({self.dim},), got {background.shape}"
+                )
+            c0 = background
+        else:
+            raise ValueError(
+                "Raw cone-contrast backgrounds must be provided in DISP or raw CONE coordinates"
+            )
+        if np.any(np.isclose(c0, 0.0)):
+            raise ValueError("Cone-contrast background has zero cone response")
+        return c0
+
+    def get_raw_display_to_cone_matrix(self) -> npt.NDArray:
+        """Return raw cone responses to each display primary as a dim x primaries matrix."""
+        if self._raw_display_to_cone is None:
+            if self.display_primaries is None:
+                raise ValueError(
+                    "Cannot compute raw DISP->CONE matrix without display_primaries."
+                )
+            primary_spds = np.stack([
+                primary.interpolate_values(self.observer.wavelengths).data
+                for primary in self.display_primaries
+            ], axis=1)
+            self._raw_display_to_cone = self.observer.sensor_matrix @ primary_spds
+        return self._raw_display_to_cone
+
+    def cone_contrast_delta(
+            self,
+            a: npt.NDArray,
+            b: npt.NDArray,
+            background: Optional[npt.NDArray] = None,
+            sample_space: ColorSpaceType = ColorSpaceType.DISP,
+            background_space: ColorSpaceType = ColorSpaceType.DISP) -> npt.NDArray:
+        """Compute (Q(a-b)) / (Q S0) for two stimuli."""
+        if isinstance(sample_space, str):
+            sample_space = ColorSpaceType(sample_space.lower())
+        c0 = self.get_cone_response_for_background(background, background_space)
+        if sample_space == ColorSpaceType.DISP:
+            raw_display_to_cone = self.get_raw_display_to_cone_matrix()
+            cone_a = raw_display_to_cone @ np.asarray(a, dtype=float)
+            cone_b = raw_display_to_cone @ np.asarray(b, dtype=float)
+        elif sample_space == ColorSpaceType.CONE:
+            cone_a = np.asarray(a, dtype=float)
+            cone_b = np.asarray(b, dtype=float)
+        else:
+            raise ValueError(
+                "Raw cone-contrast samples must be provided in DISP or raw CONE coordinates"
+            )
+        return (cone_a - cone_b) / c0
+
+    def get_display_to_cone_contrast_matrix(
+            self,
+            background: Optional[npt.NDArray] = None,
+            background_space: ColorSpaceType = ColorSpaceType.DISP) -> npt.NDArray:
+        """Return DQ for display-primary deltas, where D = diag(1 / QS0)."""
+        c0 = self.get_cone_response_for_background(background, background_space)
+        return self.get_raw_display_to_cone_matrix() / c0[:, None]
+
+    def get_cone_contrast_null_direction_in_disp(
+            self,
+            metameric_axis_num: Optional[int] = None,
+            background: Optional[npt.NDArray] = None,
+            background_space: ColorSpaceType = ColorSpaceType.DISP) -> npt.NDArray:
+        """Return a DISP direction that nulls all non-target contrast axes."""
+        if metameric_axis_num is None:
+            metameric_axis_num = self.metameric_axis
+        contrast_matrix = self.get_display_to_cone_contrast_matrix(
+            background,
+            background_space,
+        )
+        nulled = np.delete(contrast_matrix, metameric_axis_num, axis=0)
+        basis = null_space(nulled)
+        if basis.size == 0:
+            raise ValueError("No cone-contrast null direction found")
+        direction = basis[:, 0]
+        if contrast_matrix[metameric_axis_num] @ direction < 0:
+            direction = -direction
+        return direction / np.linalg.norm(direction)
+
+    def get_cone_contrast_axis_in(
+            self,
+            color_space_type: ColorSpaceType,
+            metameric_axis_num: Optional[int] = None,
+            background: Optional[npt.NDArray] = None,
+            background_space: ColorSpaceType = ColorSpaceType.DISP) -> npt.NDArray:
+        """Get a unit cone-contrast axis represented in another color space.
+
+        A unit axis in contrast coordinates corresponds to a raw cone delta of
+        c0 * axis, where c0 = Q S0 for the adapting background S0.
+        """
+        if metameric_axis_num is None:
+            metameric_axis_num = self.metameric_axis
+        c0 = self.get_cone_response_for_background(background, background_space)
+        contrast_axis = np.zeros(self.dim)
+        contrast_axis[metameric_axis_num] = 1
+        cone_delta = c0 * contrast_axis
+
+        if color_space_type == ColorSpaceType.DISP:
+            direction = np.linalg.pinv(self.get_raw_display_to_cone_matrix()) @ cone_delta
+        else:
+            direction = self.convert(cone_delta, ColorSpaceType.CONE, color_space_type)
+        if color_space_type == ColorSpaceType.VSH or color_space_type == ColorSpaceType.VSH_BGYR:
+            normalized_direction = direction
+            normalized_direction[1] = 1.0
         else:
             normalized_direction = direction / np.linalg.norm(direction)
         return normalized_direction
