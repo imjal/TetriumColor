@@ -499,8 +499,12 @@ class Observer:
         cones = []
         for peak in all_peaks:
             cone_od = od * 0.8 if peak == s_peak else od
-            cone = Cone.cone(peak, wavelengths=wavelengths, template=template,
-                             od=cone_od, degree=degree)
+            if peak == 420:
+                cone = Cone.cone(peak, wavelengths=wavelengths, template="neitz",
+                                 od=cone_od, degree=degree)
+            else:
+                cone = Cone.cone(peak, wavelengths=wavelengths, template=template,
+                                 od=cone_od, degree=degree)
             cones.append(cone)
 
         return Observer(cones, illuminant=illuminant)
@@ -515,7 +519,7 @@ class Observer:
     def trichromat(wavelengths=None, illuminant=None, template='stockman', degree: Optional[float] = 2.0):
         l_cone = Cone.l_cone(wavelengths, template=template, degree=degree)
         m_cone = Cone.m_cone(wavelengths, template=template, degree=degree)
-        s_cone = Cone.s_cone(wavelengths, template=template, degree=degree)
+        s_cone = Cone.s_cone(wavelengths, template="neitz", degree=degree)
         return Observer([s_cone, m_cone, l_cone], illuminant=illuminant)
 
     @staticmethod
@@ -630,8 +634,12 @@ class Observer:
 
         cones = []
         for peak in sorted(peaks):
-            cone = Cone.cone(peak, wavelengths=wavelengths, template=template,
-                             macular=macular, lens=lens, degree=degree)
+            if peak == 420:
+                cone = Cone.cone(peak, wavelengths=wavelengths, template="neitz",
+                                 macular=macular, lens=lens, degree=degree)
+            else:
+                cone = Cone.cone(peak, wavelengths=wavelengths, template=template,
+                                 macular=macular, lens=lens, degree=degree)
             cones.append(cone)
         return Observer(cones, illuminant=illuminant, verbose=verbose)
 
@@ -662,13 +670,19 @@ class Observer:
             _type_: Observer of specified paramters and 4 cone types
         """
 
-        l_cone = Cone.cone(l_cone_peak, wavelengths=wavelengths, template=template, macular=macular, lens=lens, degree=degree)
-        l_cone_555 = Cone.cone(555, wavelengths=wavelengths, template=template, macular=macular, lens=lens, degree=degree)
-        l_cone_551 = Cone.cone(551, wavelengths=wavelengths, template=template, macular=macular, lens=lens, degree=degree)
-        l_cone_547 = Cone.cone(547, wavelengths=wavelengths, template=template, macular=macular, lens=lens, degree=degree)
-        q_cone = Cone.cone(q_cone_peak, wavelengths=wavelengths, template=template, macular=macular, lens=lens, degree=degree)
-        m_cone = Cone.cone(m_cone_peak, wavelengths=wavelengths, template=template, macular=macular, lens=lens, degree=degree)
-        s_cone = Cone.cone(s_cone_peak, wavelengths=wavelengths, template=template,
+        l_cone = Cone.cone(l_cone_peak, wavelengths=wavelengths, template=template,
+                           macular=macular, lens=lens, degree=degree)
+        l_cone_555 = Cone.cone(555, wavelengths=wavelengths, template=template,
+                               macular=macular, lens=lens, degree=degree)
+        l_cone_551 = Cone.cone(551, wavelengths=wavelengths, template=template,
+                               macular=macular, lens=lens, degree=degree)
+        l_cone_547 = Cone.cone(547, wavelengths=wavelengths, template=template,
+                               macular=macular, lens=lens, degree=degree)
+        q_cone = Cone.cone(q_cone_peak, wavelengths=wavelengths, template=template,
+                           macular=macular, lens=lens, degree=degree)
+        m_cone = Cone.cone(m_cone_peak, wavelengths=wavelengths, template=template,
+                           macular=macular, lens=lens, degree=degree)
+        s_cone = Cone.cone(s_cone_peak, wavelengths=wavelengths, template="neitz",
                            macular=macular, lens=lens, degree=degree)
         # s_cone = Cone.s_cone(wavelengths=wavelengths)
         if dimension == 3:
