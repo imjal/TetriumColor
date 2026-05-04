@@ -320,7 +320,7 @@ class Cone(Spectra):
         return (~(C_r / denom)).as_energy()
 
     @staticmethod
-    def cone(peak, template="govardovskii", od: float = 0.35, lens: float = 1.0, macular: float = 1.0, degree: Optional[float] = 2.0, wavelengths=None):
+    def cone(peak, template="stockman", od: float = 0.35, lens: float = 1.0, macular: float = 1.0, degree: Optional[float] = 2.0, wavelengths=None):
         # TODO: want to add eccentricity and/or macular, lens control
 
         if not isinstance(peak, (int, float)):
@@ -386,7 +386,7 @@ class Cone(Spectra):
         return Cone.cone(420, template=template, wavelengths=wavelengths, degree=degree)
 
     @staticmethod
-    def q_cone(wavelengths=None, template="neitz", degree: Optional[float] = 2.0):
+    def q_cone(wavelengths=None, template="stockman", degree: Optional[float] = 2.0):
         # 545 per nathan & merbs 92
         return Cone.cone(545, template=template, wavelengths=wavelengths, degree=degree)
 
@@ -465,7 +465,7 @@ class Observer:
         return MultiSpectralDistributions(d)
 
     @staticmethod
-    def hyperobserver(wavelengths=None, template='neitz', od=0.5, illuminant=None, degree=2.0):
+    def hyperobserver(wavelengths=None, template='stockman', od=0.5, illuminant=None, degree=2.0):
         """Create a 12-dimensional observer spanning all known human L/M/S opsin variants.
 
         Covers every unique peak wavelength arising from L and M opsin SNP combinations
@@ -479,7 +479,7 @@ class Observer:
 
         Args:
             wavelengths: Wavelength array (default 400–700 nm, 1 nm steps)
-            template: Cone template to use (default 'neitz')
+            template: Cone template to use (default 'stockman')
             od: Optical density for M/L cones (default 0.5); S cone uses od*0.8
             illuminant: Illuminant (default None → D65)
             degree: Visual angle in degrees (default 4.0)
@@ -512,14 +512,14 @@ class Observer:
         return Observer([s_cone, m_cone], illuminant=illuminant)
 
     @staticmethod
-    def trichromat(wavelengths=None, illuminant=None, template='neitz', degree: Optional[float] = 2.0):
+    def trichromat(wavelengths=None, illuminant=None, template='stockman', degree: Optional[float] = 2.0):
         l_cone = Cone.l_cone(wavelengths, template=template, degree=degree)
         m_cone = Cone.m_cone(wavelengths, template=template, degree=degree)
         s_cone = Cone.s_cone(wavelengths, template=template, degree=degree)
         return Observer([s_cone, m_cone, l_cone], illuminant=illuminant)
 
     @staticmethod
-    def tetrachromat(wavelengths=None, degree: Optional[float] = 2.0, illuminant=None, verbose=False, template='neitz'):
+    def tetrachromat(wavelengths=None, degree: Optional[float] = 2.0, illuminant=None, verbose=False, template='stockman'):
         # This is a "maximally well spaced" tetrachromat
         l_cone = Cone.l_cone(wavelengths, template=template, degree=degree)
         q_cone = Cone.cone(545, wavelengths=wavelengths, template=template, degree=degree)
@@ -610,7 +610,7 @@ class Observer:
     def from_peaks(peaks: List[float],
                    wavelengths: Optional[npt.NDArray] = None,
                    illuminant: Optional[Spectra] = None,
-                   template: str = "neitz",
+                   template: str = "stockman",
                    od: float = 0.5,
                    macular: float = 1,
                    lens: float = 1,
@@ -645,7 +645,7 @@ class Observer:
                         l_cone_peak: float = 559,
                         macular: float = 1,
                         lens: float = 1,
-                        template: str = "neitz",
+                        template: str = "stockman",
                         degree: Optional[float] = 2.0,
                         illuminant: Spectra | None = None,
                         verbose: bool = False, subset: List[int] = [0, 1, 3]):
@@ -656,7 +656,7 @@ class Observer:
             od (float, optional): optical density of photopigment. Defaults to 0.5.
             m_cone_peak (int, optional): peak of the M-cone. Defaults to 530.
             l_cone_peak (int, optional): peak of the L-cone. Defaults to 560.
-            template (str, optional): cone template function. Defaults to "neitz".
+            template (str, optional): cone template function. Defaults to "stockman".
 
         Returns:
             _type_: Observer of specified paramters and 4 cone types
