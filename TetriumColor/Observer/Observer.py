@@ -354,12 +354,12 @@ class Cone(Spectra):
             degree = np.clip(degree, 2.0, 10.0)
             return 0.40 + (0.30 - 0.40) * (degree**2 - 4) / 96
 
-        macular = macular * macular_pigment_factor(degree)
-        if peak <= 450:
-            od = s_photopigment_od(degree)
-        else:
-            od = lm_photopigment_od(degree)
-        print(f"Degree: {degree}, Macular: {macular}, OD: {od}")
+        if degree is not None:
+            macular = macular * macular_pigment_factor(degree)
+            if peak <= 450:
+                od = s_photopigment_od(degree)
+            else:
+                od = lm_photopigment_od(degree)
         return Cone.templates[template](wavelengths, peak).with_preceptoral(od=od, macular=macular, lens=lens)
 
     @staticmethod
@@ -671,29 +671,29 @@ class Observer:
         """
 
         l_cone = Cone.cone(l_cone_peak, wavelengths=wavelengths, template=template,
-                           macular=macular, lens=lens, degree=degree)
+                           od=od, macular=macular, lens=lens, degree=degree)
         l_cone_555 = Cone.cone(555, wavelengths=wavelengths, template=template,
-                               macular=macular, lens=lens, degree=degree)
+                               od=od, macular=macular, lens=lens, degree=degree)
         l_cone_551 = Cone.cone(551, wavelengths=wavelengths, template=template,
-                               macular=macular, lens=lens, degree=degree)
+                               od=od, macular=macular, lens=lens, degree=degree)
         l_cone_547 = Cone.cone(547, wavelengths=wavelengths, template=template,
-                               macular=macular, lens=lens, degree=degree)
+                               od=od, macular=macular, lens=lens, degree=degree)
         q_cone = Cone.cone(q_cone_peak, wavelengths=wavelengths, template=template,
-                           macular=macular, lens=lens, degree=degree)
+                           od=od, macular=macular, lens=lens, degree=degree)
         m_cone = Cone.cone(m_cone_peak, wavelengths=wavelengths, template=template,
-                           macular=macular, lens=lens, degree=degree)
+                           od=od, macular=macular, lens=lens, degree=degree)
         s_cone = Cone.cone(s_cone_peak, wavelengths=wavelengths, template="neitz",
-                           macular=macular, lens=lens, degree=degree)
+                           od=od, macular=macular, lens=lens, degree=degree)
         # s_cone = Cone.s_cone(wavelengths=wavelengths)
         if dimension == 3:
             set_cones = [s_cone, m_cone, q_cone, l_cone]
             return Observer([set_cones[i] for i in subset], verbose=verbose, illuminant=illuminant)
         elif dimension == 2:
-            return Observer([s_cone, m_cone], verbose=verbose)
+            return Observer([s_cone, m_cone], verbose=verbose, illuminant=illuminant)
         elif dimension == 4:
-            return Observer([s_cone, m_cone, q_cone, l_cone], verbose=verbose)
+            return Observer([s_cone, m_cone, q_cone, l_cone], verbose=verbose, illuminant=illuminant)
         elif dimension == 6:
-            return Observer([s_cone, m_cone, l_cone_547, l_cone_551, l_cone_555, l_cone], verbose=verbose)
+            return Observer([s_cone, m_cone, l_cone_547, l_cone_551, l_cone_555, l_cone], verbose=verbose, illuminant=illuminant)
         else:
             raise NotImplementedError
 

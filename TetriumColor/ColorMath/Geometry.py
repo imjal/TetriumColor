@@ -1,4 +1,7 @@
-import open3d as o3d
+try:
+    import open3d as o3d
+except ModuleNotFoundError:
+    o3d = None
 import numpy as np
 import numpy.typing as npt
 import math
@@ -494,6 +497,11 @@ def GenerateGeometryFromVertices(vertices: npt.NDArray) -> tuple[npt.NDArray, np
         if not outward:
             # Swap two vertices to flip the triangle
             simplices[i] = [simplex[0], simplex[2], simplex[1]]
+
+    if o3d is None:
+        raise ModuleNotFoundError(
+            "open3d is required for GenerateGeometryFromVertices but is not installed"
+        )
 
     # Create Open3D TriangleMesh
     mesh = o3d.geometry.TriangleMesh()
