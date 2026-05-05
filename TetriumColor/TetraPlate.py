@@ -28,6 +28,15 @@ def _quantize_display_image(disp_img: np.ndarray) -> np.ndarray:
     return np.clip(np.rint(values + dither), 0, 255).astype(np.uint8)
 
 
+def _color_generator_returns_display(color_generator: ColorGenerator) -> bool:
+    return_space = getattr(color_generator, "return_color_space", None)
+    if return_space is None:
+        return False
+    if isinstance(return_space, ColorSpaceType):
+        return return_space == ColorSpaceType.DISP
+    return str(return_space).lower().endswith("disp") or str(return_space).lower() == "disp"
+
+
 class TestGenerator(ABC):
     def __init__(self, color_generator: ColorGenerator):
         self.color_generator = color_generator
@@ -459,8 +468,8 @@ class GaussianBlobGenerator(TestGenerator):
 
     The hidden_symbol (e.g. "landolt_up") determines which position the blob appears at.
 
-    All compositing and noise are applied in cone space before conversion to display
-    space, so RGB and OCV images share a single consistent noise realisation.
+    The color picker returns display-primary values, and the blob compositor
+    pastes those values directly into the spatial image.
     """
 
     _DIRECTION_MAP = {
@@ -472,24 +481,28 @@ class GaussianBlobGenerator(TestGenerator):
     BASE_DEGREE = 4.0
 
     def __init__(self, color_generator: ColorGenerator, seed: int = 42,
-                 size: int = 1024, blob_size: float = 1.0):
+                 size: int = 1024, blob_size: float = 1.0,
+                 constant_disp_background: bool = False):
         np.random.seed(seed)
         super().__init__(color_generator)
+        if hasattr(self.color_generator, "return_color_space"):
+            self.color_generator.return_color_space = ColorSpaceType.DISP
         self.size = size
         self.blob_size = max(float(blob_size), 0.01)
+        self.constant_disp_background = bool(constant_disp_background)
 
-    def _build_cone_image(self, fg_cone, bg_cone, direction: str, degree: float,
+    def _build_disp_image(self, fg_disp, bg_disp, direction: str, degree: float,
                           lum_noise: float, s_cone_noise: float):
-        """Build the stimulus circle in cone space (H, W, n_cones).
+        """Build the stimulus circle directly in display-primary space.
 
         Pixels outside the circle are left as NaN so the caller can fill them
         with the correct display-space background colour.
 
         Returns:
-            (cone_image, circle_mask)
+            (disp_image, circle_mask)
         """
         size = self.size
-        n_cones = len(bg_cone)
+        n_channels = len(bg_disp)
         center = size / 2.0
         radius = size * 0.475
 
@@ -497,21 +510,22 @@ class GaussianBlobGenerator(TestGenerator):
         dist_sq = (X - center) ** 2 + (Y - center) ** 2
         circle_mask = dist_sq <= radius ** 2
 
-        cone_img = np.full((size, size, n_cones), np.nan, dtype=np.float64)
+        disp_img = np.full((size, size, n_channels), np.nan, dtype=np.float64)
 
-        for c in range(n_cones):
-            cone_img[:, :, c] = np.where(circle_mask, bg_cone[c], np.nan)
+        for c in range(n_channels):
+            disp_img[:, :, c] = np.where(circle_mask, bg_disp[c], np.nan)
 
-        # Per-pixel luminance noise (applied equally to all cone channels)
+        # Per-pixel scalar noise retained for existing callers; in direct-DISP
+        # mode this is applied equally to display primaries.
         if lum_noise > 0:
             lum_noise_map = np.random.normal(0.0, lum_noise, (size, size))
-            for c in range(n_cones):
-                cone_img[:, :, c] += np.where(circle_mask, lum_noise_map, 0.0)
+            for c in range(n_channels):
+                disp_img[:, :, c] += np.where(circle_mask, lum_noise_map, 0.0)
 
-        # Per-pixel S-cone noise (channel 0 only, matching IshiharaPlateGenerator)
+        # Historical name: in direct-DISP mode this jitters display channel 0.
         if s_cone_noise > 0:
             s_noise_map = np.random.normal(0.0, s_cone_noise, (size, size))
-            cone_img[:, :, 0] += np.where(circle_mask, s_noise_map, 0.0)
+            disp_img[:, :, 0] += np.where(circle_mask, s_noise_map, 0.0)
 
         # Gaussian blob at one of 4 cardinal positions
         gap_px = radius * 2.0 * 0.2
@@ -536,42 +550,36 @@ class GaussianBlobGenerator(TestGenerator):
               * np.exp(-xs[None, :] ** 2 / (2 * blob_sigma ** 2))
         alpha *= circle_mask[y0:y1, x0:x1]
 
-        for c in range(n_cones):
-            patch = cone_img[y0:y1, x0:x1, c]
-            cone_img[y0:y1, x0:x1, c] = patch * (1.0 - alpha) + fg_cone[c] * alpha
+        for c in range(n_channels):
+            patch = disp_img[y0:y1, x0:x1, c]
+            disp_img[y0:y1, x0:x1, c] = patch * (1.0 - alpha) + fg_disp[c] * alpha
 
-        np.clip(cone_img, 0, None, out=cone_img)
-        return cone_img, circle_mask
+        np.clip(disp_img, 0.0, 1.0, out=disp_img)
+        return disp_img, circle_mask
 
     @staticmethod
-    def _cone_to_images(cone_img, circle_mask, color_space, output_space,
+    def _disp_to_images(disp_img, circle_mask, color_space, output_space,
                         background_luminance: float):
-        """Convert a (H, W, n_cones) cone image to PIL images.
-
-        Pixels outside *circle_mask* are filled with a neutral gray matching the
-        app background (background_luminance / max_L), identical to how the
-        IshiharaPlateGenerator computes its background colour.
+        """Convert a direct display-primary image to PIL images.
 
         Returns (img_a, img_b): two PIL images (RGB+OCV for DISP_6P, or same for SRGB).
         """
-        h, w, _ = cone_img.shape
-
-        # Only convert circle pixels through the colour-space pipeline
-        flat = cone_img.reshape(-1, cone_img.shape[2])
-        mask_flat = circle_mask.ravel()
-        circle_flat = flat[mask_flat]
-        disp_circle = color_space.convert(circle_flat, ColorSpaceType.CONE, output_space)
-
-        n_disp = disp_circle.shape[1]
-        disp_flat = np.zeros((h * w, n_disp), dtype=np.float64)
-        disp_flat[mask_flat] = disp_circle
-        disp_img = disp_flat.reshape(h, w, n_disp)
+        h, w, n_disp = disp_img.shape
+        disp_img = np.nan_to_num(disp_img, nan=background_luminance)
 
         if output_space == ColorSpaceType.DISP_6P:
+            if n_disp == color_space.dim:
+                flat = disp_img.reshape(-1, n_disp)
+                disp_6p = color_space._map_4d_to_6d(flat)
+                disp_img = disp_6p.reshape(h, w, disp_6p.shape[1])
             rgb = _quantize_display_image(disp_img[:, :, :3])
-            ocv = _quantize_display_image(disp_img[:, :, 3:])
+            ocv = _quantize_display_image(disp_img[:, :, 3:6])
             return Image.fromarray(rgb, 'RGB'), Image.fromarray(ocv, 'RGB')
         else:
+            if output_space != ColorSpaceType.DISP:
+                flat = disp_img.reshape(-1, n_disp)
+                out = color_space.convert(flat, ColorSpaceType.DISP, output_space)
+                disp_img = out.reshape(h, w, out.shape[1])
             srgb = _quantize_display_image(disp_img[:, :, :3])
             img = Image.fromarray(srgb, 'RGB')
             return img, img
@@ -586,8 +594,8 @@ class GaussianBlobGenerator(TestGenerator):
                 output_space: ColorSpaceType = ColorSpaceType.DISP_6P,
                 lum_noise: float = 0, s_cone_noise: float = 0,
                 background_luminance: float = 0.5, degree: float = 4.0, **kwargs):
-        inside_cone, outside_cone, color_space, intensity = self.color_generator.NewColor()
-        return self._generate(inside_cone, outside_cone, color_space, intensity,
+        inside_value, outside_value, color_space, intensity = self.color_generator.NewColor()
+        return self._generate(inside_value, outside_value, color_space, intensity,
                               filename, hidden_symbol, output_space,
                               lum_noise, s_cone_noise, background_luminance, degree)
 
@@ -598,21 +606,39 @@ class GaussianBlobGenerator(TestGenerator):
         result = self.color_generator.GetColor(previous_result)
         if result is None:
             return None
-        inside_cone, outside_cone, color_space, intensity = result
-        return self._generate(inside_cone, outside_cone, color_space, intensity,
+        inside_value, outside_value, color_space, intensity = result
+        return self._generate(inside_value, outside_value, color_space, intensity,
                               filename, hidden_symbol, output_space,
                               lum_noise, s_cone_noise, background_luminance, degree)
 
-    def _generate(self, inside_cone, outside_cone, color_space, intensity,
+    def _generate(self, inside_value, outside_value, color_space, intensity,
                   filename, hidden_symbol, output_space,
                   lum_noise, s_cone_noise, background_luminance, degree):
         direction = self._parse_direction(hidden_symbol)
+        if _color_generator_returns_display(self.color_generator):
+            inside_disp = np.asarray(inside_value, dtype=np.float64)
+            outside_disp = np.asarray(outside_value, dtype=np.float64)
+        else:
+            inside_disp = color_space.convert(
+                np.asarray(inside_value, dtype=np.float64).reshape(1, -1),
+                ColorSpaceType.CONE,
+                ColorSpaceType.DISP
+            )[0]
+            outside_disp = color_space.convert(
+                np.asarray(outside_value, dtype=np.float64).reshape(1, -1),
+                ColorSpaceType.CONE,
+                ColorSpaceType.DISP
+            )[0]
+        background_disp = (
+            np.full_like(outside_disp, background_luminance, dtype=np.float64)
+            if self.constant_disp_background else outside_disp
+        )
 
-        cone_img, circle_mask = self._build_cone_image(
-            inside_cone, outside_cone, direction, degree, lum_noise, s_cone_noise)
+        disp_img, circle_mask = self._build_disp_image(
+            inside_disp, background_disp, direction, degree, lum_noise, s_cone_noise)
 
-        img_a, img_b = self._cone_to_images(
-            cone_img, circle_mask, color_space, output_space, background_luminance)
+        img_a, img_b = self._disp_to_images(
+            disp_img, circle_mask, color_space, output_space, background_luminance)
 
         if output_space == ColorSpaceType.DISP_6P:
             rgb_path = f"{filename}_RGB.png"
@@ -635,12 +661,14 @@ class GaussianBlobGenerator(TestGenerator):
             'hidden_symbol': str(hidden_symbol) if hidden_symbol else f'landolt_{direction}',
             'intensity': intensity,
             'metadata': {
-                'inside_cone': inside_cone.tolist(),
-                'outside_cone': outside_cone.tolist(),
+                'inside_disp': inside_disp.tolist(),
+                'outside_disp': outside_disp.tolist(),
                 'size': self.size,
                 'direction': direction,
                 'degree': degree,
                 'blob_size': self.blob_size,
+                'constant_disp_background': self.constant_disp_background,
+                'display_background': background_luminance,
                 'lum_noise': lum_noise,
                 's_cone_noise': s_cone_noise,
                 **_color_generator_metadata(self.color_generator),

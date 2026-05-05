@@ -117,6 +117,8 @@ PyObject* ColorGeneratorFactory::CreateQuestColorGenerator(
     PyDict_SetItemString(
         pKwargs, "color_picking_space", PyUnicode_FromString(color_picking_space.c_str())
     );
+    PyDict_SetItemString(pKwargs, "template", PyUnicode_FromString("baylor"));
+    PyDict_SetItemString(pKwargs, "illuminant", PyUnicode_FromString("raw"));
 
     PyObject* pArgs = PyTuple_New(2);
     PyTuple_SetItem(pArgs, 0, PyUnicode_FromString(sex.c_str()));
@@ -372,7 +374,8 @@ PyObject* ColorGeneratorFactory::CreateGaussianBlobGenerator(
     PyObject* color_generator,
     int seed,
     int size,
-    float blob_size
+    float blob_size,
+    bool constant_disp_background
 )
 {
     if (!color_generator) {
@@ -394,9 +397,10 @@ PyObject* ColorGeneratorFactory::CreateGaussianBlobGenerator(
     }
 
     PyObject* pKwargs = PyDict_New();
-    PyDict_SetItemString(pKwargs, "seed", PyLong_FromLong(seed));
-    PyDict_SetItemString(pKwargs, "size", PyLong_FromLong(size));
-    PyDict_SetItemString(pKwargs, "blob_size", PyFloat_FromDouble(blob_size));
+    SetDictItem(pKwargs, "seed", PyLong_FromLong(seed));
+    SetDictItem(pKwargs, "size", PyLong_FromLong(size));
+    SetDictItem(pKwargs, "blob_size", PyFloat_FromDouble(blob_size));
+    SetDictItem(pKwargs, "constant_disp_background", PyBool_FromLong(constant_disp_background));
 
     PyObject* pArgs = PyTuple_New(1);
     Py_INCREF(color_generator);

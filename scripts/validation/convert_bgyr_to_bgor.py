@@ -23,11 +23,25 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 VALIDATION_OBSERVER_DEGREE = 2.0
 
 
+def _metamer_to_bgor(metamer: dict, color_space: ColorSpace, suffix: str) -> tuple[np.ndarray, np.ndarray]:
+    """Return BGOR display weights and raw cone catches for one metamer endpoint."""
+    raw_key = f'raw_cone_{suffix}'
+    cone_key = f'cone_{suffix}'
+    if raw_key in metamer:
+        raw_cone = np.asarray(metamer[raw_key], dtype=float)
+        bgor = np.linalg.solve(color_space.get_raw_display_to_cone_matrix(), raw_cone)
+        return bgor, raw_cone
+
+    cone = np.asarray(metamer[cone_key], dtype=float)
+    bgor = color_space.convert(cone.reshape(1, -1), ColorSpaceType.CONE, ColorSpaceType.DISP)[0]
+    return bgor, cone
+
+
 def convert_bgyr_to_bgor(
     metamers_config_path: str,
     primaries_path: str,
     output_path: str = None,
-    illuminant=None,
+    illuminant='raw',
 ):
     """
     Convert BGYR metamers to BGOR display values using observer-specific transformations.
@@ -79,7 +93,8 @@ def convert_bgyr_to_bgor(
     observer_genotypes = ObserverGenotypes(
         wavelengths=wavelengths,
         dimensions=[3],
-        seed=config['metadata'].get('seed', 42)
+        seed=config['metadata'].get('seed', 42),
+        template='baylor',
     )
     print()
 
@@ -97,7 +112,10 @@ def convert_bgyr_to_bgor(
 
         # Create observer-specific ColorSpace with display primaries
         observer = observer_genotypes.get_observer_for_peaks(
-            genotype, degree=VALIDATION_OBSERVER_DEGREE, illuminant=illuminant)
+            genotype,
+            degree=VALIDATION_OBSERVER_DEGREE,
+            illuminant=illuminant,
+            template='baylor')
         metameric_axis = obs_data.get(
             'metameric_axis',
             config['metadata'].get('metameric_axis', 2))
@@ -110,13 +128,11 @@ def convert_bgyr_to_bgor(
             bgyr_1 = np.array(metamer['bgyr_1'])
             bgyr_2 = np.array(metamer['bgyr_2'])
             
-            # Use stored cone excitations directly — CONE → DISP is one stable matrix
-            # multiply. CONE → BGYR → CONE loses precision because inv(L) is
-            # ill-conditioned when M/Q cones are closely spaced (e.g. 530/547nm).
-            cone_1 = np.array(metamer['cone_1'])
-            cone_2 = np.array(metamer['cone_2'])
-            bgor_1 = color_space.convert(cone_1.reshape(1, -1), ColorSpaceType.CONE, ColorSpaceType.DISP)[0]
-            bgor_2 = color_space.convert(cone_2.reshape(1, -1), ColorSpaceType.CONE, ColorSpaceType.DISP)[0]
+            # Prefer raw observer cone catches when present. Tetra picker
+            # cone-contrast configs are generated in raw display-to-cone space;
+            # ColorSpaceType.CONE is an internal display-conversion coordinate.
+            bgor_1, _ = _metamer_to_bgor(metamer, color_space, '1')
+            bgor_2, _ = _metamer_to_bgor(metamer, color_space, '2')
 
             # Clip to [0, 1] for display, then convert to 8-bit
             bgor_1_8bit = np.clip(np.round(bgor_1 * 255), 0, 255).astype(int)

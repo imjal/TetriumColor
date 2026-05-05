@@ -95,7 +95,7 @@ class ObserverGenotypes:
             wavelengths: Optional[np.ndarray] = None,
             dimensions: Optional[List[int]] = [3],
             seed: int = 42,
-            template: str = 'stockman'):
+            template: str = 'baylor'):
         """
         Initialize ObserverGenotypes with a list of peak wavelengths.
 
@@ -388,7 +388,7 @@ class ObserverGenotypes:
                 cone = Cone.cone(peak, wavelengths=self.wavelengths, template=cone_template)
                 cones.append(cone)
 
-            observer = Observer(cones, illuminant=None)
+            observer = Observer(cones, illuminant='raw')
             color_space = ColorSpace(observer)
             color_spaces.append(color_space)
 
@@ -655,7 +655,7 @@ class ObserverGenotypes:
 
     def get_observer_for_peaks(
             self, peaks: Tuple[float, ...], od: float = 0.5,
-            degree: float = 4.0, illuminant=None, template: Optional[str] = None) -> Observer:
+            degree: float = 4.0, illuminant='raw', template: Optional[str] = None) -> Observer:
         """
         Create an Observer object for specific peak wavelengths, with sorted peaks.
 

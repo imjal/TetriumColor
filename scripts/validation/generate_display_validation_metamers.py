@@ -31,8 +31,8 @@ VALIDATION_OBSERVER_DEGREE = 2.0
 
 def monte_carlo_metamer_robustness(
     peaks, wavelengths, spectrum_1_data, spectrum_2_data,
-    n_samples=1000, metameric_axis=2, template='neitz', seed=42,
-    illuminant_data=None,
+    n_samples=1000, metameric_axis=2, template='baylor', seed=42,
+    illuminant_data='raw',
     mpod_mean=0.908875, mpod_std=0.25, mpod_min=0.0, mpod_max=2.0,
     lens_mean=1.0, lens_half_range_frac=0.25,
     od_lm_mean=0.485, od_lm_half_range=0.1,
@@ -65,7 +65,8 @@ def monte_carlo_metamer_robustness(
     # Precompute quantal nomogram templates for each cone
     templates_q = []
     for peak in sorted_peaks:
-        nom = Cone.templates[template](wavelengths, peak).as_quantal()
+        cone_template = 'neitz' if peak == 420 else template
+        nom = Cone.templates[cone_template](wavelengths, peak).as_quantal()
         templates_q.append(nom.data.copy())
 
     # Precompute lens and macular absorption at these wavelengths
@@ -206,7 +207,7 @@ def generate_metamers(
     mc_samples: int = 1000,
     use_display_midpoint: bool = True,
     proportion: float = 0.8,
-    illuminant: Spectra | str | None = None,
+    illuminant: Spectra | str | None = 'raw',
 ):
     """
     Generate fixed metamer pairs for validation using ColorSampler.
@@ -295,7 +296,11 @@ def generate_metamers(
     wavelengths = display_primaries[0].wavelengths
 
     # Initialize ObserverGenotypes for tetrachromats
-    observer_genotypes = ObserverGenotypes(wavelengths=wavelengths, dimensions=[3], seed=seed)
+    observer_genotypes = ObserverGenotypes(
+        wavelengths=wavelengths,
+        dimensions=[3],
+        seed=seed,
+        template='baylor')
 
     # Get top N observers
     genotypes = list[Any](observer_genotypes.get_pdf(sex).keys())[:num_observers]
@@ -327,7 +332,10 @@ def generate_metamers(
 
         # Create observer (add S cone at 420nm if not present)
         observer = observer_genotypes.get_observer_for_peaks(
-            genotype, degree=VALIDATION_OBSERVER_DEGREE, illuminant=illuminant)
+            genotype,
+            degree=VALIDATION_OBSERVER_DEGREE,
+            illuminant=illuminant,
+            template='baylor')
 
         # Create ColorSpace with display primaries (always use DISP space)
         color_space = ColorSpace(
@@ -418,7 +426,7 @@ def generate_metamers(
                     spectrum_1_data=spec_1, spectrum_2_data=spec_2,
                     n_samples=mc_samples, metameric_axis=observer_metameric_axis,
                     illuminant_data=illuminant_data,
-                    template='neitz', seed=seed + i,
+                    template='baylor', seed=seed + i,
                     mpod_mean=nom['mpod'], lens_mean=nom['lens'],
                     od_lm_mean=nom['od_lm'], od_s_mean=nom['od_s'],
                 )
@@ -520,6 +528,8 @@ def generate_metamers(
             ),
             'metameric_peak_nm': 547,
             'observer_degree': VALIDATION_OBSERVER_DEGREE,
+            'observer_template': 'baylor',
+            'observer_illuminant': 'raw' if illuminant == 'raw' else str(illuminant),
             'seed': seed,
             'sampling_space': 'RGBO',
             'storage_space': 'BGYR',

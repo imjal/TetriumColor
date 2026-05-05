@@ -70,7 +70,8 @@ class ColorGeneratorFactory
         PyObject* color_generator,
         int seed = 42,
         int size = 1024,
-        float blob_size = 1.0f
+        float blob_size = 1.0f,
+        bool constant_disp_background = false
     );
 
     // Get observer CDF as a vector of cumulative probabilities (one per observer,

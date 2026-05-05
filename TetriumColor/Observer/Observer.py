@@ -320,7 +320,7 @@ class Cone(Spectra):
         return (~(C_r / denom)).as_energy()
 
     @staticmethod
-    def cone(peak, template="stockman", od: float = 0.35, lens: float = 1.0, macular: float = 1.0, degree: Optional[float] = 2.0, wavelengths=None):
+    def cone(peak, template="baylor", od: float = 0.35, lens: float = 1.0, macular: float = 1.0, degree: Optional[float] = 2.0, wavelengths=None):
         # TODO: want to add eccentricity and/or macular, lens control
 
         if not isinstance(peak, (int, float)):
@@ -386,7 +386,7 @@ class Cone(Spectra):
         return Cone.cone(420, template=template, wavelengths=wavelengths, degree=degree)
 
     @staticmethod
-    def q_cone(wavelengths=None, template="stockman", degree: Optional[float] = 2.0):
+    def q_cone(wavelengths=None, template="baylor", degree: Optional[float] = 2.0):
         # 545 per nathan & merbs 92
         return Cone.cone(545, template=template, wavelengths=wavelengths, degree=degree)
 
@@ -401,7 +401,7 @@ class Cone(Spectra):
 
 class Observer:
     def __init__(self, sensors: List[Cone],
-                 illuminant: Optional[Spectra | str] = Illuminant.get('D65'),
+                 illuminant: Optional[Spectra | str] = 'raw',
                  degree: Optional[float] = 2,
                  verbose: bool = False):
         self.dimension = len(sensors)
@@ -465,7 +465,7 @@ class Observer:
         return MultiSpectralDistributions(d)
 
     @staticmethod
-    def hyperobserver(wavelengths=None, template='stockman', od=0.5, illuminant=None, degree=2.0):
+    def hyperobserver(wavelengths=None, template='baylor', od=0.5, illuminant='raw', degree=2.0):
         """Create a 12-dimensional observer spanning all known human L/M/S opsin variants.
 
         Covers every unique peak wavelength arising from L and M opsin SNP combinations
@@ -479,9 +479,9 @@ class Observer:
 
         Args:
             wavelengths: Wavelength array (default 400–700 nm, 1 nm steps)
-            template: Cone template to use (default 'stockman')
+            template: Cone template to use (default 'baylor')
             od: Optical density for M/L cones (default 0.5); S cone uses od*0.8
-            illuminant: Illuminant (default None → D65)
+            illuminant: Illuminant (default 'raw' → no illuminant weighting)
             degree: Visual angle in degrees (default 4.0)
 
         Returns:
@@ -510,20 +510,20 @@ class Observer:
         return Observer(cones, illuminant=illuminant)
 
     @staticmethod
-    def dichromat(wavelengths=None, illuminant=None):
+    def dichromat(wavelengths=None, illuminant='raw'):
         s_cone = Cone.s_cone(wavelengths)
         m_cone = Cone.m_cone(wavelengths)
         return Observer([s_cone, m_cone], illuminant=illuminant)
 
     @staticmethod
-    def trichromat(wavelengths=None, illuminant=None, template='stockman', degree: Optional[float] = 2.0):
+    def trichromat(wavelengths=None, illuminant='raw', template='baylor', degree: Optional[float] = 2.0):
         l_cone = Cone.l_cone(wavelengths, template=template, degree=degree)
         m_cone = Cone.m_cone(wavelengths, template=template, degree=degree)
         s_cone = Cone.s_cone(wavelengths, template="neitz", degree=degree)
         return Observer([s_cone, m_cone, l_cone], illuminant=illuminant)
 
     @staticmethod
-    def tetrachromat(wavelengths=None, degree: Optional[float] = 2.0, illuminant=None, verbose=False, template='stockman'):
+    def tetrachromat(wavelengths=None, degree: Optional[float] = 2.0, illuminant='raw', verbose=False, template='baylor'):
         # This is a "maximally well spaced" tetrachromat
         l_cone = Cone.l_cone(wavelengths, template=template, degree=degree)
         q_cone = Cone.cone(545, wavelengths=wavelengths, template=template, degree=degree)
@@ -532,7 +532,7 @@ class Observer:
         return Observer([s_cone, m_cone, q_cone, l_cone], illuminant=illuminant, verbose=verbose)
 
     @staticmethod
-    def old_tetrachromat(wavelengths=None, illuminant=None, verbose=False):
+    def old_tetrachromat(wavelengths=None, illuminant='raw', verbose=False):
         # This is a "maximally well spaced" tetrachromat
         # Cone.cone(555, wavelengths=wavelengths, template="neitz", od=0.35)
         l_cone = Cone.l_cone(wavelengths)
@@ -544,7 +544,7 @@ class Observer:
         return Observer([s_cone, m_cone, q_cone, l_cone], illuminant=illuminant, verbose=verbose)
 
     @staticmethod
-    def neitz_tetrachromat(wavelengths=None, illuminant=None, verbose=False, degree: Optional[float] = 2.0):
+    def neitz_tetrachromat(wavelengths=None, illuminant='raw', verbose=False, degree: Optional[float] = 2.0):
         # This is a "maximally well spaced" tetrachromat
         l_cone = Cone.cone(559, wavelengths=wavelengths, template="neitz", degree=degree)
         q_cone = Cone.cone(545, wavelengths=wavelengths, template="neitz", degree=degree)
@@ -553,7 +553,7 @@ class Observer:
         return Observer([s_cone, m_cone, q_cone, l_cone], illuminant=illuminant, verbose=verbose)
 
     @staticmethod
-    def govardovskii_tetrachromat(wavelengths=None, illuminant=None, verbose=False, degree: Optional[float] = 2.0):
+    def govardovskii_tetrachromat(wavelengths=None, illuminant='raw', verbose=False, degree: Optional[float] = 2.0):
         # This is a "maximally well spaced" tetrachromat
         l_cone = Cone.cone(559, wavelengths=wavelengths, template="govardovskii", degree=degree)
         q_cone = Cone.cone(545, wavelengths=wavelengths, template="govardovskii", degree=degree)
@@ -562,7 +562,7 @@ class Observer:
         return Observer([s_cone, m_cone, q_cone, l_cone], illuminant=illuminant, verbose=verbose)
 
     @staticmethod
-    def gaussian_tetrachromat(wavelengths: npt.NDArray, illuminant=None, verbose=False):
+    def gaussian_tetrachromat(wavelengths: npt.NDArray, illuminant='raw', verbose=False):
 
         def gaussian(wavelengths, peak, width=0.1):
             x = wavelengths
@@ -581,25 +581,25 @@ class Observer:
         return Observer([s_cone, m_cone, q_cone, l_cone], illuminant=illuminant, verbose=verbose)
 
     @staticmethod
-    def protanope(wavelengths=None, illuminant=None):
+    def protanope(wavelengths=None, illuminant='raw'):
         m_cone = Cone.m_cone(wavelengths)
         s_cone = Cone.s_cone(wavelengths)
         return Observer([s_cone, m_cone], illuminant=illuminant)
 
     @staticmethod
-    def deuteranope(wavelengths=None, illuminant=None):
+    def deuteranope(wavelengths=None, illuminant='raw'):
         l_cone = Cone.l_cone(wavelengths)
         s_cone = Cone.s_cone(wavelengths)
         return Observer([s_cone, l_cone], illuminant=illuminant)
 
     @staticmethod
-    def tritanope(wavelengths=None, illuminant=None):
+    def tritanope(wavelengths=None, illuminant='raw'):
         m_cone = Cone.m_cone(wavelengths)
         l_cone = Cone.l_cone(wavelengths)
         return Observer([m_cone, l_cone], illuminant=illuminant)
 
     @staticmethod
-    def bird(name, wavelengths=None, illuminant=None, verbose=False):
+    def bird(name, wavelengths=None, illuminant='raw', verbose=False):
         """
         bird: bird types are ['UVS-Average-Bird.csv', 'UVS-bluetit.csv', 'UVS-Starling.csv', 'VS-Average-Bird.csv', 'VS-Peafowl.csv']
         """
@@ -613,8 +613,8 @@ class Observer:
 
     def from_peaks(peaks: List[float],
                    wavelengths: Optional[npt.NDArray] = None,
-                   illuminant: Optional[Spectra] = None,
-                   template: str = "stockman",
+                   illuminant: Optional[Spectra | str] = 'raw',
+                   template: str = "baylor",
                    od: float = 0.5,
                    macular: float = 1,
                    lens: float = 1,
@@ -653,9 +653,9 @@ class Observer:
                         l_cone_peak: float = 559,
                         macular: float = 1,
                         lens: float = 1,
-                        template: str = "stockman",
+                        template: str = "baylor",
                         degree: Optional[float] = 2.0,
-                        illuminant: Spectra | None = None,
+                        illuminant: Spectra | str | None = 'raw',
                         verbose: bool = False, subset: List[int] = [0, 1, 3]):
         """Given specific parameters, return an observer model with Q cone peaked at 547
 
@@ -664,7 +664,7 @@ class Observer:
             od (float, optional): optical density of photopigment. Defaults to 0.5.
             m_cone_peak (int, optional): peak of the M-cone. Defaults to 530.
             l_cone_peak (int, optional): peak of the L-cone. Defaults to 560.
-            template (str, optional): cone template function. Defaults to "stockman".
+            template (str, optional): cone template function. Defaults to "baylor".
 
         Returns:
             _type_: Observer of specified paramters and 4 cone types
