@@ -377,7 +377,7 @@ class Cone(Spectra):
         return Cone.cone(530, template=template, wavelengths=wavelengths, degree=degree)
 
     @staticmethod
-    def s_cone(wavelengths=None, template=None, degree: Optional[float] = 2.0):
+    def s_cone(wavelengths=None, template="neitz", degree: Optional[float] = 2.0):
         if template is None:
             reflectances = Cone.ss_data.iloc[:, [0, 3]].dropna().to_numpy()
             return Cone(reflectances).interpolate_values(wavelengths)
@@ -528,7 +528,7 @@ class Observer:
         l_cone = Cone.l_cone(wavelengths, template=template, degree=degree)
         q_cone = Cone.cone(545, wavelengths=wavelengths, template=template, degree=degree)
         m_cone = Cone.m_cone(wavelengths, template=template, degree=degree)
-        s_cone = Cone.s_cone(wavelengths, template=template, degree=degree)
+        s_cone = Cone.s_cone(wavelengths, template="neitz", degree=degree)
         return Observer([s_cone, m_cone, q_cone, l_cone], illuminant=illuminant, verbose=verbose)
 
     @staticmethod

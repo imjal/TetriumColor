@@ -90,7 +90,12 @@ class ObserverGenotypes:
         (False, False, False): 559
     }
 
-    def __init__(self, wavelengths: Optional[np.ndarray] = None, dimensions: Optional[List[int]] = [3], seed: int = 42):
+    def __init__(
+            self,
+            wavelengths: Optional[np.ndarray] = None,
+            dimensions: Optional[List[int]] = [3],
+            seed: int = 42,
+            template: str = 'stockman'):
         """
         Initialize ObserverGenotypes with a list of peak wavelengths.
 
@@ -100,6 +105,7 @@ class ObserverGenotypes:
                        If None, includes all dimensions.
         """
         self.seed = seed
+        self.template = template
         random.seed(self.seed)
         if wavelengths is None:
             self.wavelengths = np.arange(380, 781, 4)
@@ -378,7 +384,8 @@ class ObserverGenotypes:
             # Create cones for this genotype
             cones = []
             for peak in genotype_peaks:
-                cone = Cone.cone(peak, wavelengths=self.wavelengths, template='neitz')
+                cone_template = 'neitz' if peak == 420 else self.template
+                cone = Cone.cone(peak, wavelengths=self.wavelengths, template=cone_template)
                 cones.append(cone)
 
             observer = Observer(cones, illuminant=None)
@@ -648,7 +655,7 @@ class ObserverGenotypes:
 
     def get_observer_for_peaks(
             self, peaks: Tuple[float, ...], od: float = 0.5,
-            degree: float = 4.0, illuminant=None) -> Observer:
+            degree: float = 4.0, illuminant=None, template: Optional[str] = None) -> Observer:
         """
         Create an Observer object for specific peak wavelengths, with sorted peaks.
 
@@ -665,11 +672,12 @@ class ObserverGenotypes:
             peaks = (420,) + peaks
 
         cones = []
+        cone_template = template or self.template
         for peak in sorted(peaks):
             if peak == 420:
                 cone = Cone.cone(peak, wavelengths=self.wavelengths, template='neitz', od=od * 0.8, degree=degree)
             else:
-                cone = Cone.cone(peak, wavelengths=self.wavelengths, template='neitz', od=od, degree=degree)
+                cone = Cone.cone(peak, wavelengths=self.wavelengths, template=cone_template, od=od, degree=degree)
             cones.append(cone)
 
         return Observer(cones, illuminant=illuminant)
@@ -689,9 +697,10 @@ class ObserverGenotypes:
         degree = kwargs.pop('degree', 4.0)
         od = kwargs.pop('od', 0.5)
         illuminant = kwargs.pop('illuminant', None)
+        template = kwargs.pop('template', None)
 
         observer = self.get_observer_for_peaks(
-            peaks, od=od, degree=degree, illuminant=illuminant)
+            peaks, od=od, degree=degree, illuminant=illuminant, template=template)
         return ColorSpace(observer, **kwargs)
 
     def get_observers_by_probability(self, sex: str = 'male') -> List[Observer]:
