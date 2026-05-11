@@ -41,6 +41,29 @@ COLORS = {
     559: '#b2182b',
 }
 
+# Shared saturated paper palette. The core colors match the fresh blue/yellow/red
+# used by the Quest/MOCS summary figures; use alpha in individual plots when a
+# softer appearance is needed.
+PAPER_BLUE = COLORS[S_PEAK]
+PAPER_YELLOW = COLORS[551]
+PAPER_RED = '#c62828'
+PAPER_NEUTRAL = '#5c5c5c'
+PAPER_LIGHT_GRAY = '#f7f7f7'
+
+PAPER_DIMENSION_COLORS = {
+    0: PAPER_RED,
+    1: COLORS[552],
+    2: COLORS[530],
+    3: PAPER_BLUE,
+    4: '#7b3294',
+}
+
+PAPER_CONE_FAMILY_COLORS = {
+    "S": [PAPER_BLUE],
+    "M": [COLORS[530], COLORS[533], COLORS[536]],
+    "L": [COLORS[547], COLORS[551], COLORS[552], COLORS[553], COLORS[555], COLORS[556], COLORS[556.5], COLORS[559]],
+}
+
 # SIGGRAPH column widths (inches)
 SINGLE_COL = 3.33
 DOUBLE_COL = 7.0
