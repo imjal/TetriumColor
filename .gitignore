@@ -1,7 +1,9 @@
 scripts/paper-viz/*
 output/*
+outputs/*
 # agents
 .agent
+*.zip
 
 scripts/*/debug.ipynb
 scripts/debugging/

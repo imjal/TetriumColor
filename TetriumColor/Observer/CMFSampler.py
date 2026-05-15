@@ -35,7 +35,7 @@ class CMFSampler:
         macular_std: float = 0.25,
         lens_mean: float = 1.0,
         lens_std: float = 0.1,
-        template: str = 'neitz',
+        template: str = 'baylor',
         wavelengths: Optional[np.ndarray] = None,
         seed: int = 42,
         params: Optional[Dict[str, float]] = None,
@@ -50,7 +50,7 @@ class CMFSampler:
             od_s_mean, od_s_std: S cone photopigment OD distribution
             macular_mean, macular_std: Macular pigment density distribution
             lens_mean, lens_std: Lens density distribution
-            template: Cone nomogram template ('neitz', 'stockman', etc.)
+            template: Cone nomogram template ('baylor', 'neitz', etc.)
             wavelengths: Wavelength array; defaults to observer_genotypes.wavelengths
             seed: Random seed
             params: Optional dict of parameter overrides. Allows specifying all or some
@@ -198,14 +198,15 @@ class CMFSampler:
 
             # Create cone via nomogram template + pre-receptoral filtering
             # (bypasses Cone.cone() OD restriction by calling with_preceptoral directly)
-            cone = Cone.templates[self.template](self.wavelengths, peak).with_preceptoral(
+            template = 'neitz' if peak == 420 else self.template
+            cone = Cone.templates[template](self.wavelengths, peak).with_preceptoral(
                 od=od, macular=macular, lens=lens
             )
             # Preserve original peak (with_preceptoral recalculates peak from modified data)
             cone.peak = int(peak)
             cones.append(cone)
 
-        return Observer(cones, illuminant=None)
+        return Observer(cones, illuminant='raw')
 
     def plot_sampled_cmfs(
         self,
