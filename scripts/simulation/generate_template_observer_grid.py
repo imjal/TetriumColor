@@ -30,11 +30,12 @@ from PIL import Image
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
-from TetriumColor.ColorMath.SubSpaceIntersection import FindMaximumIn1DimDirection
 from TetriumColor.ColorSpace import ColorSpace
+from TetriumColor.ColorMath.SubSpaceIntersection import FindMaximumIn1DimDirection
 from TetriumColor.Measurement import load_primaries_from_csv
 from TetriumColor.Observer import Observer
 from TetriumColor.Observer.ObserverGenotypes import ObserverGenotypes
+from TetriumColor.Observer.Spectra import Spectra
 
 
 TEMPLATES = ("stockman", "neitz", "govardovskii", "baylor", "lamb")
@@ -84,6 +85,36 @@ def make_pair_cell(
     return rgo, bgo
 
 
+def make_single_blob_cell_srgb(
+    fg_srgb: np.ndarray,
+    bg_srgb: np.ndarray,
+    cell_size: int,
+    sigma_frac: float,
+    position: str,
+    exposure: float,
+) -> np.ndarray:
+    """Return an sRGB cell with one Gaussian blob on a metamer background."""
+    h = cell_size
+    w = cell_size
+    fg = np.clip(np.asarray(fg_srgb, dtype=float) * exposure, 0.0, 1.0)
+    bg = np.clip(np.asarray(bg_srgb, dtype=float) * exposure, 0.0, 1.0)
+
+    yy, xx = np.mgrid[0:h, 0:w]
+    sigma = max(float(sigma_frac) * cell_size, 1.0)
+    centers = {
+        "center": (0.50 * (w - 1), 0.50 * (h - 1)),
+        "left": (0.32 * (w - 1), 0.50 * (h - 1)),
+        "right": (0.68 * (w - 1), 0.50 * (h - 1)),
+        "up": (0.50 * (w - 1), 0.32 * (h - 1)),
+        "down": (0.50 * (w - 1), 0.68 * (h - 1)),
+    }
+    cx, cy = centers[position]
+    alpha = np.exp(-((xx - cx) ** 2 + (yy - cy) ** 2) / (2.0 * sigma ** 2))
+
+    srgb = bg[None, None, :] + alpha[:, :, None] * (fg - bg)[None, None, :]
+    return np.clip(np.round(srgb[:, :, :3] * 255.0), 0, 255).astype(np.uint8)
+
+
 def place_cell(canvas: np.ndarray, cell: np.ndarray, row: int, col: int, cell_size: int, gap: int) -> None:
     y = row * (cell_size + gap)
     x = col * (cell_size + gap)
@@ -124,7 +155,7 @@ def solve_bgor_pair(
     primaries,
     proportion: float,
     metameric_axis: int = 2,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, float]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, float, np.ndarray]:
     """Return quantized BGOR codes, normalized BGOR points, spectra, and display scale."""
     cs = ColorSpace(observer, display_primaries=primaries, metameric_axis=metameric_axis)
     scale = cs._disp_metadata.get("scaling_factor", 1.0)
@@ -151,7 +182,8 @@ def solve_bgor_pair(
         p.interpolate_values(observer.wavelengths).data for p in primaries
     ])
     spectra = scale * (quantized @ primary_matrix)
-    return codes, quantized, spectra, scale
+    midpoint_spectrum = scale * (background @ primary_matrix)
+    return codes, quantized, spectra, scale, midpoint_spectrum
 
 
 def hyperobserver_diffs(
@@ -293,6 +325,18 @@ def main() -> None:
     parser.add_argument("--cell_size", type=int, default=96)
     parser.add_argument("--cell_gap", type=int, default=6)
     parser.add_argument(
+        "--single_blob_position",
+        choices=("left", "right", "up", "down"),
+        default="right",
+        help="Cardinal position for the additional one-blob sRGB grid.",
+    )
+    parser.add_argument(
+        "--srgb_exposure",
+        type=float,
+        default=1.0,
+        help="Display exposure multiplier for spectra-to-sRGB single-blob cells.",
+    )
+    parser.add_argument(
         "--blob_sigma_frac",
         type=float,
         default=0.16,
@@ -329,6 +373,7 @@ def main() -> None:
     w = cols * args.cell_size + (cols - 1) * args.cell_gap
     rgo_grid = np.zeros((h, w, 3), dtype=np.uint8)
     bgo_grid = np.zeros((h, w, 3), dtype=np.uint8)
+    srgb_blob_grid = np.zeros((h, w, 3), dtype=np.uint8)
 
     metadata_rows = []
     all_diffs: dict[tuple[int, int], dict[str, np.ndarray]] = {}
@@ -343,17 +388,31 @@ def main() -> None:
                 macular=args.macular,
                 lens=args.lens,
             )
-            codes, bgor, spectra, scale = solve_bgor_pair(observer, primaries, args.proportion)
+            codes, bgor, spectra, scale, midpoint_spectrum = solve_bgor_pair(observer, primaries, args.proportion)
             diffs = hyperobserver_diffs(spectra, hyperobservers)
             all_diffs[(row, col)] = diffs
+            endpoint_srgb = np.array([
+                Spectra(wavelengths=wavelengths, data=spectra[0], normalized=False).to_rgb(),
+                Spectra(wavelengths=wavelengths, data=midpoint_spectrum, normalized=False).to_rgb(),
+            ])
 
             rgo_cell, bgo_cell = make_pair_cell(codes[0], codes[1], args.cell_size, args.blob_sigma_frac)
+            srgb_blob_cell = make_single_blob_cell_srgb(
+                endpoint_srgb[0],
+                endpoint_srgb[1],
+                args.cell_size,
+                args.blob_sigma_frac,
+                args.single_blob_position,
+                args.srgb_exposure,
+            )
             place_cell(rgo_grid, rgo_cell, row, col, args.cell_size, args.cell_gap)
             place_cell(bgo_grid, bgo_cell, row, col, args.cell_size, args.cell_gap)
+            place_cell(srgb_blob_grid, srgb_blob_cell, row, col, args.cell_size, args.cell_gap)
 
             prefix = f"row{row:02d}_{template}_obs{col:02d}"
             Image.fromarray(rgo_cell).save(cells_dir / f"{prefix}_RGO.png")
             Image.fromarray(bgo_cell).save(cells_dir / f"{prefix}_BGO.png")
+            Image.fromarray(srgb_blob_cell).save(cells_dir / f"{prefix}_SRGB_single_blob.png")
 
             title = (
                 f"{template} observer row {row + 1}, observer {col + 1}: genotype {genotype}\n"
@@ -388,6 +447,7 @@ def main() -> None:
 
     Image.fromarray(rgo_grid).save(output_dir / "metamer_grid_RGO.png")
     Image.fromarray(bgo_grid).save(output_dir / "metamer_grid_BGO.png")
+    Image.fromarray(srgb_blob_grid).save(output_dir / "metamer_grid_SRGB_single_blob.png")
     save_hyperobserver_contact_sheet(output_dir / "hyperobserver_grid.png", all_diffs, genotypes)
     for hyper_template in TEMPLATES:
         save_fixed_hyperobserver_contact_sheet(
@@ -407,6 +467,7 @@ def main() -> None:
 
     print(f"Wrote {output_dir / 'metamer_grid_RGO.png'}")
     print(f"Wrote {output_dir / 'metamer_grid_BGO.png'}")
+    print(f"Wrote {output_dir / 'metamer_grid_SRGB_single_blob.png'}")
     print(f"Wrote {output_dir / 'hyperobserver_grid.png'}")
     for hyper_template in TEMPLATES:
         print(f"Wrote {output_dir / f'hyperobserver_grid_{hyper_template}.png'}")

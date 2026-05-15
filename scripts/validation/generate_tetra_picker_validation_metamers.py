@@ -6,7 +6,7 @@ This is intentionally different from generate_display_validation_metamers.py:
 the DISP values are not reconstructed analytically here. They are read from the
 trial metadata recorded by QuestColorGenerator, so the JSON captures the exact
 stimuli that the picker would hand to plate generation when color_picking_space
-is cone_contrast.
+is raw_cone_excitation.
 """
 
 from __future__ import annotations
@@ -115,7 +115,7 @@ def generate_picker_metamers(
         degree=degree,
         mcs_k=mcs_k,
         observer_indices=observer_indices,
-        color_picking_space="cone_contrast",
+        color_picking_space="raw_cone_excitation",
         adapting_background=background,
         adapting_background_space=adapting_background_space,
         display_primaries=display_primaries,
@@ -154,8 +154,6 @@ def generate_picker_metamers(
         raw_cone_1 = raw_display_to_cone @ inside_disp
         raw_cone_2 = raw_display_to_cone @ outside_disp
         raw_cone_delta = raw_cone_1 - raw_cone_2
-        cone_contrast_delta = raw_cone_delta
-
         avg = np.maximum((raw_cone_1 + raw_cone_2) / 2.0, 1e-10)
         delta = raw_cone_delta / avg
         lms_idx = [i for i in range(len(raw_cone_1)) if i != observer_metameric_axis]
@@ -218,8 +216,8 @@ def generate_picker_metamers(
                 "quest_proportion": float(proportion),
                 "quest_bipolar": bool(trial_metadata["quest_bipolar"]),
                 "quest_color_picking_space": trial_metadata["quest_color_picking_space"],
-                "quest_cone_contrast_delta": cone_contrast_delta.tolist(),
                 "quest_raw_cone_delta": raw_cone_delta.tolist(),
+                "quest_cone_contrast_delta": raw_cone_delta.tolist(),
             }
         )
 
@@ -268,10 +266,16 @@ def generate_picker_metamers(
             "seed": seed,
             "sampling_space": "RGBO",
             "storage_space": "BGYR",
-            "color_picking_space": "cone_contrast",
+            "color_picking_space": "raw_cone_excitation",
+            "raw_cone_excitation_background": background.tolist(),
+            "raw_cone_excitation_background_space": _format_space(adapting_background_space),
+            "raw_cone_excitation_basis": "QuestColorGenerator raw display-to-cone null directions",
             "cone_contrast_background": background.tolist(),
             "cone_contrast_background_space": _format_space(adapting_background_space),
-            "cone_contrast_basis": "QuestColorGenerator via ColorSpace.get_cone_contrast_null_direction_in_disp",
+            "cone_contrast_basis": (
+                "Deprecated compatibility metadata. Stored quest_cone_contrast_delta "
+                "values are raw cone deltas, not true cone contrast."
+            ),
             "used_display_primaries": True,
             "primaries_path": str(primaries_path),
             "primaries_order": "RGBO",
@@ -279,7 +283,7 @@ def generate_picker_metamers(
             "total_metamer_pairs": sum(len(obs["metamers"]) for obs in observers_data),
             "description": (
                 "Validation stimuli captured from TetraColorPicker.QuestColorGenerator "
-                "with color_picking_space=cone_contrast. rgbo_1/rgbo_2 are the exact "
+                "with color_picking_space=raw_cone_excitation. rgbo_1/rgbo_2 are the exact "
                 "DISP values recorded in Quest trial metadata."
             ),
             "method": (
@@ -314,7 +318,7 @@ def generate_picker_metamers(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Generate validation JSON from TetraColorPicker Quest cone_contrast DISP values"
+        description="Generate validation JSON from TetraColorPicker Quest raw_cone_excitation DISP values"
     )
     parser.add_argument("--output", default="config/display_validation_metamers_tetra_picker.json")
     parser.add_argument("--primaries-path", required=True)

@@ -444,6 +444,10 @@ class ColorSpace:
             self._raw_display_to_cone = self.observer.sensor_matrix @ primary_spds
         return self._raw_display_to_cone
 
+    def display_to_raw_cone_matrix(self) -> npt.NDArray:
+        """Return raw cone responses to each display primary as a dim x primaries matrix."""
+        return self.get_raw_display_to_cone_matrix()
+
     def cone_contrast_delta(
             self,
             a: npt.NDArray,

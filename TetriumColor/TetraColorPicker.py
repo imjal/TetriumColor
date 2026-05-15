@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 import csv
 import pickle
+import warnings
 from typing import Tuple, Optional, List, Dict
 
 import numpy as np
@@ -16,6 +17,24 @@ from TetriumColor.ColorMath.SubSpaceIntersection import FindMaximumIn1DimDirecti
 
 def _coerce_color_space_type(value: str | ColorSpaceType) -> ColorSpaceType:
     return ColorSpaceType(value.lower()) if isinstance(value, str) else value
+
+
+def _coerce_color_picking_space(value: str) -> str:
+    value = value.lower()
+    if value == 'cone_contrast':
+        warnings.warn(
+            "color_picking_space='cone_contrast' is deprecated for this "
+            "generator path because it computes raw cone excitation axes. "
+            "Use color_picking_space='raw_cone_excitation'.",
+            DeprecationWarning,
+            stacklevel=3,
+        )
+        return 'raw_cone_excitation'
+    if value not in {'raw_cone_excitation', 'cone'}:
+        raise ValueError(
+            "color_picking_space must be 'raw_cone_excitation' or 'cone'"
+        )
+    return value
 
 
 class ColorGenerator(ABC):
@@ -79,7 +98,7 @@ class QuestColorGenerator(ColorGenerator):
                  degree: float = 4.0,
                  mcs_k: int = 0,
                  observer_indices: Optional[List[int]] = None,
-                 color_picking_space: str = 'cone_contrast',
+                 color_picking_space: str = 'raw_cone_excitation',
                  adapting_background: Optional[npt.NDArray] = None,
                  adapting_background_space: ColorSpaceType = ColorSpaceType.DISP,
                  return_color_space: ColorSpaceType = ColorSpaceType.CONE,
@@ -105,8 +124,10 @@ class QuestColorGenerator(ColorGenerator):
             observer_indices: Optional zero-based indices into the population-sorted genotype list.
                    If provided, tests exactly those genotypes instead of all genotypes up to
                    percentage_screened.
-            color_picking_space: 'cone_contrast' computes directions as raw cone-excitation
-                   axes in display space. 'cone' preserves the previous raw cone-axis behavior.
+            color_picking_space: 'raw_cone_excitation' computes directions as raw
+                   cone-excitation axes in display space. 'cone' preserves the
+                   previous normalized CONE-axis behavior. 'cone_contrast' is a
+                   deprecated alias for 'raw_cone_excitation' on this path.
             adapting_background: Background point used for stimulus generation and metadata.
             adapting_background_space: Color space for adapting_background.
             return_color_space: Space for returned stimulus values. Gaussian blob
@@ -124,11 +145,7 @@ class QuestColorGenerator(ColorGenerator):
         self.bipolar = bipolar
         self.degree = degree
         self.mcs_k = mcs_k
-        self.color_picking_space = color_picking_space.lower()
-        if self.color_picking_space not in {'cone_contrast', 'cone'}:
-            raise ValueError(
-                "color_picking_space must be 'cone_contrast' or 'cone'"
-            )
+        self.color_picking_space = _coerce_color_picking_space(color_picking_space)
         self.adapting_background_space = (
             ColorSpaceType(adapting_background_space.lower())
             if isinstance(adapting_background_space, str)
@@ -251,7 +268,7 @@ class QuestColorGenerator(ColorGenerator):
             self,
             color_space: ColorSpace,
             metameric_axis: int) -> npt.NDArray:
-        """Return the requested raw-cone or cone-excitation axis in DISP space."""
+        """Return the requested normalized CONE or raw cone-excitation axis in DISP space."""
         if self.color_picking_space == 'cone':
             return color_space.get_metameric_axis_in(
                 ColorSpaceType.DISP,
@@ -647,6 +664,8 @@ class QuestColorGenerator(ColorGenerator):
             )
             self._current_trial_metadata.update({
                 'quest_raw_cone_delta': raw_delta.tolist(),
+                # Deprecated compatibility alias. This value is a raw cone
+                # excitation delta unless a true contrast background is used.
                 'quest_cone_contrast_delta': raw_delta.tolist(),
             })
 

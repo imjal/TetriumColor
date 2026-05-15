@@ -43,7 +43,7 @@ DATA_DIR = (
 )
 
 CHANCE = 1 / 4
-CRITERION = 0.50
+DEFAULT_CRITERION = 0.625
 MOCS_COLOR = COLORS[420]
 QUEST_COLOR = COLORS[551]
 NEUTRAL_COLOR = "#5c5c5c"
@@ -201,7 +201,7 @@ def wilson_ci(n_correct: float, n_total: float, z: float = 1.96) -> tuple[float,
     return max(0.0, center - half_width), min(1.0, center + half_width)
 
 
-def fit_weibull(intensities, corrects, criterion: float = CRITERION):
+def fit_weibull(intensities, corrects, criterion: float = DEFAULT_CRITERION):
     """Return alpha, beta, threshold at criterion, or None."""
     intensities = np.asarray(intensities, dtype=float)
     corrects = np.asarray(corrects, dtype=float)
@@ -256,6 +256,7 @@ def summarize_trials(
     method: str,
     source_file: str,
     intensity: float | None = None,
+    criterion: float = DEFAULT_CRITERION,
 ) -> pd.DataFrame:
     if intensity is not None:
         if "intensity" not in df.columns:
@@ -300,11 +301,16 @@ def summarize_trials(
             "threshold": np.nan,
             "threshold_ci_low": np.nan,
             "threshold_ci_high": np.nan,
+            "threshold_criterion": criterion,
             "threshold_source": "unavailable",
             "source_file": source_file,
         }
         if "intensity" in group.columns:
-            fit = fit_weibull(group["intensity"].to_numpy(), group["correct"].to_numpy())
+            fit = fit_weibull(
+                group["intensity"].to_numpy(),
+                group["correct"].to_numpy(),
+                criterion=criterion,
+            )
             if fit is not None:
                 _alpha, _beta, threshold, threshold_se = fit
                 record["threshold_raw"] = threshold
@@ -319,6 +325,12 @@ def summarize_trials(
                     record["threshold_ci_low"] = max(0.0, record["threshold"] - 1.96 * threshold_se)
                     record["threshold_ci_high"] = min(GAMUT_MAX, record["threshold"] + 1.96 * threshold_se)
                 record["threshold_source"] = "trial_weibull"
+            elif method == "Quest":
+                record["threshold_raw"] = np.nan
+                record["threshold_censored"] = True
+                record["threshold"] = GAMUT_MAX
+                record["threshold_report"] = f"threshold not estimable; censored at gamut max ({GAMUT_MAX:g})"
+                record["threshold_source"] = "trial_weibull_unavailable"
         records.append(record)
 
     return pd.DataFrame.from_records(records)
@@ -372,6 +384,7 @@ def load_quest_thresholds(path: Path, subject: str) -> pd.DataFrame:
     )
     out["threshold_ci_low"] = np.nan
     out["threshold_ci_high"] = np.nan
+    out["threshold_criterion"] = np.nan
     out["threshold_source"] = threshold_col
     out["source_file"] = path.name
     return out[
@@ -397,6 +410,7 @@ def load_quest_thresholds(path: Path, subject: str) -> pd.DataFrame:
             "threshold",
             "threshold_ci_low",
             "threshold_ci_high",
+            "threshold_criterion",
             "threshold_source",
             "source_file",
         ]
@@ -486,6 +500,7 @@ def compile_summary(
     subjects: list[str],
     all_files: dict[str, dict[str, Path]],
     intensity: float | None = None,
+    criterion: float = DEFAULT_CRITERION,
 ) -> tuple[pd.DataFrame, list[str]]:
     records = []
     missing = []
@@ -506,20 +521,12 @@ def compile_summary(
                     "MOCS",
                     methods["Genetic"].name,
                     intensity=intensity,
+                    criterion=criterion,
                 )
             )
             found_any = True
 
-        if "QuestThresholds" in methods:
-            quest_thresholds = load_quest_thresholds(methods["QuestThresholds"], subject)
-            if "Quest" in methods:
-                quest_thresholds = attach_quest_trial_ci(
-                    quest_thresholds,
-                    load_trials(methods["Quest"]),
-                )
-            records.append(quest_thresholds)
-            found_any = True
-        elif "Quest" in methods:
+        if "Quest" in methods:
             quest_df = load_trials(methods["Quest"])
             records.append(
                 summarize_trials(
@@ -528,8 +535,13 @@ def compile_summary(
                     "Quest",
                     methods["Quest"].name,
                     intensity=None,
+                    criterion=criterion,
                 )
             )
+            found_any = True
+        elif "QuestThresholds" in methods:
+            quest_thresholds = load_quest_thresholds(methods["QuestThresholds"], subject)
+            records.append(quest_thresholds)
             found_any = True
 
         if not found_any:
@@ -569,6 +581,7 @@ def compile_summary(
             "threshold",
             "threshold_ci_low",
             "threshold_ci_high",
+            "threshold_criterion",
             "censor_support_accuracy",
             "censor_support_ci_low",
             "censor_support_ci_high",
@@ -634,6 +647,7 @@ def plot_compare_panel(
     n_quest_bins: int = 5,
     show_x_label: bool = False,
     show_y_label: bool = False,
+    criterion: float = DEFAULT_CRITERION,
 ) -> None:
     """Compact version of compare_mocs_quest.plot_panel using 6pt labels."""
     x_range = np.linspace(0, 1.05, 300)
@@ -674,7 +688,7 @@ def plot_compare_panel(
             zorder=3,
         )
 
-        fit = fit_weibull(intens, correct)
+        fit = fit_weibull(intens, correct, criterion=criterion)
         if fit is not None:
             alpha, beta, thresh, _alpha_se = fit
             ax.plot(x_range, weibull(x_range, alpha, beta), color=QUEST_COLOR, lw=0.8, zorder=4)
@@ -724,7 +738,7 @@ def plot_compare_panel(
                 color=MOCS_COLOR,
             )
 
-    add_accuracy_reference_lines(ax)
+    add_accuracy_reference_lines(ax, criterion=criterion)
     ax.set_xlim(-0.02, 1.08)
     ax.set_ylim(-0.12, 1.18)
     ax.grid(True, alpha=0.18, linewidth=0.35)
@@ -742,7 +756,11 @@ def plot_compare_panel(
         ax.set_ylabel("")
 
 
-def compare_legend_handles(include_mocs: bool, include_quest: bool) -> list:
+def compare_legend_handles(
+    include_mocs: bool,
+    include_quest: bool,
+    criterion: float = DEFAULT_CRITERION,
+) -> list:
     handles = []
     if include_mocs:
         handles.extend([
@@ -758,7 +776,7 @@ def compare_legend_handles(include_mocs: bool, include_quest: bool) -> list:
         ])
     handles.extend([
         Line2D([0], [0], color=NEUTRAL_COLOR, linestyle=":", lw=0.55, alpha=0.7, label=f"Chance ({CHANCE:.2f})"),
-        Line2D([0], [0], color=NEUTRAL_COLOR, linestyle="-.", lw=0.45, alpha=0.6, label=f"Criterion ({CRITERION:.2f})"),
+        Line2D([0], [0], color=NEUTRAL_COLOR, linestyle="-.", lw=0.45, alpha=0.6, label=f"Criterion ({criterion:.3g})"),
     ])
     return handles
 
@@ -771,9 +789,9 @@ def anonymized_subject_label(subject: str, subjects: list[str]) -> str:
     return f"Subject {subject_number_map(subjects)[subject]}"
 
 
-def add_accuracy_reference_lines(ax) -> None:
+def add_accuracy_reference_lines(ax, criterion: float = DEFAULT_CRITERION) -> None:
     ax.axhline(CHANCE, color=NEUTRAL_COLOR, ls=":", lw=0.55, alpha=0.7, zorder=1)
-    ax.axhline(CRITERION, color=NEUTRAL_COLOR, ls="-.", lw=0.45, alpha=0.6, zorder=1)
+    ax.axhline(criterion, color=NEUTRAL_COLOR, ls="-.", lw=0.45, alpha=0.6, zorder=1)
 
 
 def capped_figure_height(preferred_height: float, max_height: float) -> float:
@@ -795,6 +813,7 @@ def plot_threshold_lines(
     output_dir: Path,
     output_prefix: str,
     max_figure_height: float = MAX_FULL_PAGE_FIG_HEIGHT,
+    criterion: float = DEFAULT_CRITERION,
 ) -> tuple[Path, Path]:
     """Readable Quest threshold plot: one row per anonymized subject."""
     plot_df = summary[
@@ -828,7 +847,7 @@ def plot_threshold_lines(
 
     for row_idx, subject in enumerate(plotted_subjects):
         ax = axes[row_idx]
-        add_accuracy_reference_lines(ax)
+        add_accuracy_reference_lines(ax, criterion=criterion)
         subject_df = plot_df[plot_df["subject"] == subject]
         values = []
         ci_low = []
@@ -1021,9 +1040,9 @@ def plot_threshold_lines(
     axes[-1].set_xticklabels(x_labels, rotation=0, ha="center", fontsize=X_TICK_FONT_SIZE)
     fig.supylabel("Threshold (Yellow) / Proportion Correct (Blue)", x=0.012, fontsize=AXIS_LABEL_FONT_SIZE)
     handles = [
-        Line2D([0], [0], color=QUEST_COLOR, marker="o", lw=0.85, markersize=3, label="Quest criterion for 50\% correct"),
+        Line2D([0], [0], color=QUEST_COLOR, marker="o", lw=0.85, markersize=3, label=f"Quest criterion for {100 * criterion:.1f}\\% correct"),
         Line2D([0], [0], color=QUEST_COLOR, lw=0.45, alpha=0.45, linestyle=":", label="95\% CI"),
-        Line2D([0], [0], color=NEUTRAL_COLOR, linestyle="-.", lw=0.45, alpha=0.6, label=f"Criterion ({CRITERION:.2f})"),
+        Line2D([0], [0], color=NEUTRAL_COLOR, linestyle="-.", lw=0.45, alpha=0.6, label=f"Criterion ({criterion:.3g})"),
         Line2D([0], [0], color=NEUTRAL_COLOR, linestyle=":", lw=0.55, alpha=0.7, label=f"Chance ({CHANCE:.2f})"),
     ]
     if plot_df["threshold_censored"].astype(bool).any():
@@ -1069,6 +1088,7 @@ def plot_compare_grid(
     output_prefix: str,
     plot_mode: str,
     max_figure_height: float = MAX_FULL_PAGE_FIG_HEIGHT,
+    criterion: float = DEFAULT_CRITERION,
 ) -> tuple[Path, Path]:
     panel_keys = panel_keys_for_subject_data(subject_data, plot_mode)
     plotted_subjects = [subject for subject in subjects if subject in subject_data]
@@ -1127,6 +1147,7 @@ def plot_compare_grid(
                     quest_group if has_quest else None,
                     show_x_label=row_idx == n_rows - 1,
                     show_y_label=col_idx == 0,
+                    criterion=criterion,
                 )
             else:
                 ax.set_xlim(-0.02, 1.08)
@@ -1155,10 +1176,10 @@ def plot_compare_grid(
     include_mocs = plot_mode in ("mocs", "both")
     include_quest = plot_mode in ("quest", "both")
     fig.legend(
-        handles=compare_legend_handles(include_mocs, include_quest),
+        handles=compare_legend_handles(include_mocs, include_quest, criterion=criterion),
         loc="upper center",
         bbox_to_anchor=(0.5, 0.996),
-        ncol=min(7, len(compare_legend_handles(include_mocs, include_quest))),
+        ncol=min(7, len(compare_legend_handles(include_mocs, include_quest, criterion=criterion))),
         frameon=False,
         fontsize=LEGEND_FONT_SIZE,
     )
@@ -1245,6 +1266,7 @@ def plot_threshold_matrix(
     output_prefix: str,
     plot_mode: str,
     max_figure_height: float = MAX_FULL_PAGE_FIG_HEIGHT,
+    criterion: float = DEFAULT_CRITERION,
 ) -> tuple[Path, Path]:
     plot_df = filter_plot_mode(summary, plot_mode)
     plot_df = add_plot_values(plot_df)
@@ -1283,7 +1305,7 @@ def plot_threshold_matrix(
 
     for row_idx, key in enumerate(observer_keys):
         ax = axes[row_idx]
-        add_accuracy_reference_lines(ax)
+        add_accuracy_reference_lines(ax, criterion=criterion)
         genotype_key, axis = key
         row_df = plot_df[
             (plot_df["genotype_key"] == genotype_key)
@@ -1379,7 +1401,7 @@ def plot_threshold_matrix(
     if plot_mode in ("quest", "both"):
         handles.append(Line2D([0], [0], color=QUEST_COLOR, marker="s", linestyle="None", label="Quest"))
     handles.extend([
-        Line2D([0], [0], color=NEUTRAL_COLOR, linestyle="-.", lw=0.45, alpha=0.6, label=f"Criterion ({CRITERION:.2f})"),
+        Line2D([0], [0], color=NEUTRAL_COLOR, linestyle="-.", lw=0.45, alpha=0.6, label=f"Criterion ({criterion:.3g})"),
         Line2D([0], [0], color=NEUTRAL_COLOR, linestyle=":", lw=0.55, alpha=0.7, label=f"Chance ({CHANCE:.2f})"),
     ])
     fig.legend(handles=handles, loc="upper right", frameon=False, fontsize=LEGEND_FONT_SIZE)
@@ -1431,6 +1453,12 @@ def main() -> None:
     )
     parser.add_argument("--intensity", type=float, default=None, help="Optional MOCS intensity filter")
     parser.add_argument(
+        "--criterion",
+        type=float,
+        default=DEFAULT_CRITERION,
+        help=f"Weibull threshold criterion as proportion correct (default: {DEFAULT_CRITERION}).",
+    )
+    parser.add_argument(
         "--max-figure-height",
         type=float,
         default=MAX_FULL_PAGE_FIG_HEIGHT,
@@ -1446,6 +1474,8 @@ def main() -> None:
         help="Genotype conclusion rule for each subject/method",
     )
     args = parser.parse_args()
+    if not (CHANCE < args.criterion < 1.0):
+        parser.error(f"--criterion must be greater than chance ({CHANCE:g}) and less than 1.")
 
     data_dir = Path(args.data_dir)
     output_dir = Path(args.output_dir) if args.output_dir else data_dir.parent / "quest_mocs_subject_summary"
@@ -1473,7 +1503,12 @@ def main() -> None:
     if not subjects:
         parser.error("Provide --subjects, --subjects-file, --all, or use --list.")
 
-    summary, missing = compile_summary(subjects, all_files, intensity=args.intensity)
+    summary, missing = compile_summary(
+        subjects,
+        all_files,
+        intensity=args.intensity,
+        criterion=args.criterion,
+    )
     if missing:
         print("Subjects without latest Quest or MOCS files:")
         for subject in missing:
@@ -1499,6 +1534,7 @@ def main() -> None:
                 output_dir,
                 args.output_prefix,
                 max_figure_height=args.max_figure_height,
+                criterion=args.criterion,
             )
         elif args.plot_type == "compare-grid":
             subject_data = load_subject_trial_data(
@@ -1513,6 +1549,7 @@ def main() -> None:
                 args.output_prefix,
                 args.plot_mode,
                 max_figure_height=args.max_figure_height,
+                criterion=args.criterion,
             )
         else:
             png_path, pdf_path = plot_threshold_matrix(
@@ -1522,6 +1559,7 @@ def main() -> None:
                 args.output_prefix,
                 args.plot_mode,
                 max_figure_height=args.max_figure_height,
+                criterion=args.criterion,
             )
     except ValueError as exc:
         print(f"Skipped plot: {exc}")

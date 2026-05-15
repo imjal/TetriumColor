@@ -16,12 +16,21 @@ from matplotlib.patches import Patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from TetriumColor.Plotting.PlotStyle import apply_style, SINGLE_COL, DOUBLE_COL
+from TetriumColor.Plotting.PlotStyle import apply_style, DOUBLE_COL, PAPER_DIMENSION_COLORS
 from TetriumColor.Observer.ObserverGenotypes import ObserverGenotypes
 
 apply_style()
+plt.rcParams.update({
+    'font.size': 6,
+    'axes.labelsize': 6,
+    'axes.titlesize': 6,
+    'xtick.labelsize': 6,
+    'ytick.labelsize': 6,
+    'legend.fontsize': 6,
+})
 
 TOP_N = 10
+FIG_WIDTH = DOUBLE_COL / 3
 OUTPUT_DIR = Path('output/observer_distributions')
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -33,13 +42,7 @@ DIM_LABELS = {
     3: 'Tetrachromat (4)',
     4: 'Pentachromat (5)',
 }
-DIM_COLORS = {
-    0: '#d62728',
-    1: '#ff7f0e',
-    2: '#2ca02c',
-    3: '#1f77b4',
-    4: '#9467bd',
-}
+DIM_COLORS = PAPER_DIMENSION_COLORS
 
 og = ObserverGenotypes(dimensions=[1, 2, 3, 4, 5])
 
@@ -48,7 +51,7 @@ og = ObserverGenotypes(dimensions=[1, 2, 3, 4, 5])
 # Plot 1: CDF of all observers (male, female, both)
 # ============================================================
 def plot_cdf_all(log_scale=False):
-    fig, ax = plt.subplots(figsize=(SINGLE_COL, SINGLE_COL * 0.75))
+    fig, ax = plt.subplots(figsize=(FIG_WIDTH, FIG_WIDTH * 0.75))
 
     pdf = og.get_pdf('both')
     genotypes = list(pdf.keys())[:TOP_N]
@@ -61,7 +64,7 @@ def plot_cdf_all(log_scale=False):
               for g in genotypes]
 
     x = np.arange(len(labels))
-    ax.bar(x, probs, color=colors, edgecolor='black', linewidth=0.3)
+    ax.bar(x, probs, color=colors, edgecolor='black', linewidth=0.3, alpha=0.65)
 
     if log_scale:
         ax.set_yscale('log')
@@ -77,19 +80,27 @@ def plot_cdf_all(log_scale=False):
     # 95% reference line
     ax_cdf.axhline(y=0.95, color='black', linestyle=':', linewidth=1, alpha=0.7)
     ax_cdf.text(len(labels) - 0.5, 0.95, '95%', ha='right', va='bottom',
-                fontsize=5, alpha=0.7)
+                fontsize=6, alpha=0.7)
 
     ax.set_xticks(x)
-    ax.set_xticklabels(labels, rotation=45, ha='right', fontsize=8)
+    ax.set_xticklabels(labels, rotation=45, ha='right', fontsize=6)
     ax.set_xlabel(r'M/L cone peaks (nm)')
     ax.set_ylabel(r'Probability')
 
     # Legend
     present_dims = sorted(set(dims))
     legend_elements = [Patch(facecolor=DIM_COLORS[d], edgecolor='black',
-                             linewidth=0.3, label=DIM_LABELS[d])
+                             linewidth=0.3, alpha=0.65, label=DIM_LABELS[d])
                        for d in present_dims]
-    ax.legend(handles=legend_elements, fontsize=5, loc='center right')
+    ax.legend(
+        handles=legend_elements,
+        fontsize=6,
+        loc='center right',
+        bbox_to_anchor=(1.0, 0.43),
+        ncol=1,
+        frameon=False,
+        handlelength=1.2,
+    )
 
     suffix_tag = '_log' if log_scale else ''
     fig.tight_layout()
@@ -104,7 +115,7 @@ def plot_cdf_all(log_scale=False):
 # Plot 2: Trichromat PDF (both sexes)
 # ============================================================
 def plot_trichromat_pdf(log_scale=False):
-    fig, ax = plt.subplots(figsize=(SINGLE_COL, SINGLE_COL * 0.75))
+    fig, ax = plt.subplots(figsize=(FIG_WIDTH, FIG_WIDTH * 0.75))
 
     both_pdf = og.get_pdf('both')
     trichromat_data = [(g, both_pdf[g]) for g in both_pdf if len(g) == 2]
@@ -119,7 +130,7 @@ def plot_trichromat_pdf(log_scale=False):
               for g in genotypes]
 
     x = np.arange(len(labels))
-    ax.bar(x, probs, color=DIM_COLORS[2], edgecolor='black', linewidth=0.3)
+    ax.bar(x, probs, color=DIM_COLORS[2], edgecolor='black', linewidth=0.3, alpha=0.65)
 
     if log_scale:
         ax.set_yscale('log')
@@ -136,10 +147,10 @@ def plot_trichromat_pdf(log_scale=False):
     # 95% reference line
     ax_cdf.axhline(y=0.95, color='black', linestyle=':', linewidth=1, alpha=0.7)
     ax_cdf.text(len(labels) - 0.5, 0.95, '95%', ha='right', va='bottom',
-                fontsize=5, alpha=0.7)
+                fontsize=6, alpha=0.7)
 
     ax.set_xticks(x)
-    ax.set_xticklabels(labels, rotation=45, ha='right', fontsize=5)
+    ax.set_xticklabels(labels, rotation=45, ha='right', fontsize=6)
     ax.set_xlabel(r'M/L cone peaks (nm)')
     ax.set_ylabel(r'Probability')
 
